@@ -4,15 +4,22 @@
 // How it holds together:
 // - `base` is the backend's data as last known: the last load plus the saved
 //   result of every write since.
-// - `ops` are changes not yet confirmed (sending, queued without signal, or
-//   refused). state.expenses/payments/people are `base` with `ops` laid over
-//   it in order, each touched item flagged `pending` or `failed`.
+// - `ops` are changes not yet confirmed (sending, queued without signal,
+//   refused, or an undo on its way). state.expenses/payments/people are
+//   `base` with `ops` laid over it in order, each touched item flagged
+//   `pending` or `failed`.
 // - Writes to the same item go out one at a time, in the order they were
 //   made (a per-item chain), so an edit waits for its add and an undo waits
-//   for the write it undoes.
-// - Only adds of expenses are kept in mat.queue (from the moment they are
-//   made until the backend has them) and resent later; any other write that
-//   cannot reach the backend is rolled back.
+//   for the write it undoes. A write whose item has nothing in flight starts
+//   at once.
+// - Adds of expenses are kept in mat.queue from the moment they are made
+//   until the backend has them, and resent on the next contact. Any other
+//   write that cannot reach the backend is rolled back.
+// - An add (or stamp) that is undone after its request left the phone may
+//   or may not be on the backend. It is kept in mat.queue as an undo to
+//   finish, until the backend confirms it: resend the add (the backend
+//   returns the first one, with its log id) and then undo that. A line that
+//   provably never left the phone is simply forgotten.
 //
 // Everything outside comes in through createStore's arguments.
 
@@ -28,9 +35,14 @@ const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "paym
 const LIST = { expense: "expenses", payment: "payments", person: "people" };
 const KEY_FIELD = { expense: "id", payment: "id", person: "name" };
 const FLAG = { expense: "deleted", payment: "removed" };
+const ADD_API = { expense: "addExpense", payment: "addPayment" };
 
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const defaultWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const codeOf = (err) => (err && err.code) || "server";
+// Worth trying again on the next contact: the backend may not have seen it.
+const transient = (err) => codeOf(err) === "network" || codeOf(err) === "busy";
+const refusedAsStale = (err) => codeOf(err) === "stale" || codeOf(err) === "not_found";
 
 function bare(item) {
   if (!item) return item;
@@ -82,13 +94,16 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   let base = null;
   let myName = null;
   let ops = []; // unconfirmed changes, in the order they were made
+  let resolving = []; // undone adds/stamps whose backend side is not settled yet
   const writes = new Map(); // token -> write op, for undo(token)
   const chains = new Map(); // "kind:id" -> tail promise of that item's writes (never rejects)
+  const background = new Set(); // flushes and probes started on their own
   let settled = []; // { seq, kind, item } confirmed by a write, newest last
   let writeSeq = 0;
   let loadCount = 0;
   let appliedLoad = 0;
   let flushing = null;
+  let historyLoaded = false;
 
   // ---- deriving and telling ----
 
@@ -129,6 +144,12 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return state[LIST[kind]].find((x) => x[KEY_FIELD[kind]] === id) || null;
   }
 
+  function track(promise) {
+    background.add(promise);
+    promise.finally(() => background.delete(promise));
+    return promise;
+  }
+
   // ---- persistence ----
 
   function saveCache() {
@@ -136,13 +157,22 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     setItem("mat.cache", JSON.stringify({ data: base, rev: state.rev, loadedAt: state.loadedAt }));
   }
 
-  function isQueuedAdd(op) {
-    return op.kind === "expense" && op.action === "add" && !op.undone && ops.includes(op);
-  }
+  const isAdd = (op) => op.api === ADD_API[op.kind];
+  const isLiveQueuedAdd = (op) => op.api === "addExpense" && !op.undone && ops.includes(op);
+  // The request may have reached the backend.
+  const mayHaveLanded = (op) => op.inFlight || op.lost || op.logId !== null;
 
   function saveQueue() {
-    const queue = ops.filter(isQueuedAdd).map((op) => ({ expense: op.args.expense, failed: op.status === "failed" }));
-    setItem("mat.queue", JSON.stringify(queue));
+    const live = ops.filter(isLiveQueuedAdd).map((op) => ({
+      expense: op.args.expense,
+      addedAt: op.after.addedAt,
+      rate: op.after.rate,
+      addedBy: op.after.addedBy,
+      failed: op.status === "failed",
+      sent: op.inFlight || op.lost,
+    }));
+    const undos = resolving.map((op) => ({ undo: true, kind: op.kind, args: op.args, logId: op.logId }));
+    setItem("mat.queue", JSON.stringify(live.concat(undos)));
   }
 
   // ---- talking to the backend ----
@@ -172,10 +202,16 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     if (typeof rev === "number" && typeof state.rev === "number" && rev === state.rev + 1) state.rev = rev;
   }
 
+  // Runs fn after everything already queued for this item; at once (in the
+  // same tick) when nothing is.
   function enqueue(key, fn) {
-    const prev = chains.get(key) || Promise.resolve();
-    const run = prev.then(fn);
-    chains.set(key, run.catch(() => {}));
+    const prev = chains.get(key);
+    const run = prev ? prev.then(fn) : (async () => fn())();
+    const tail = run.catch(() => {});
+    chains.set(key, tail);
+    tail.then(() => {
+      if (chains.get(key) === tail) chains.delete(key);
+    });
     return run;
   }
 
@@ -205,6 +241,12 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   // ---- reading ----
 
+  // Proof of contact: send anything that is waiting.
+  function afterContact() {
+    const waiting = resolving.length > 0 || ops.some((op) => isLiveQueuedAdd(op) && op.status === "queued");
+    if (waiting) track(flush());
+  }
+
   async function refresh() {
     const startSeq = writeSeq;
     const mine = ++loadCount;
@@ -227,6 +269,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     state.status = "ready";
     saveCache();
     changed();
+    afterContact();
     return true;
   }
 
@@ -238,8 +281,54 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       changed();
       return;
     }
-    if (r.rev !== state.rev) await refresh();
-    else changed();
+    if (r.rev !== state.rev) {
+      await refresh();
+      return;
+    }
+    changed();
+    afterContact();
+  }
+
+  // After the backend refused an undo as stale or gone: say so and show what
+  // the backend has now.
+  async function showBackendAfterRefusedUndo(err) {
+    state.notice = (err && err.message) || STALE;
+    changed();
+    await refresh();
+    if (historyLoaded) await loadHistory();
+  }
+
+  function restoreQueue() {
+    const queue = getJson("mat.queue");
+    if (!Array.isArray(queue)) return;
+    for (const q of queue) {
+      if (!q || typeof q !== "object") continue;
+      if (q.undo === true) {
+        const kind = q.kind;
+        const item = q.args && typeof q.args === "object" ? q.args[kind] : null;
+        if (!ADD_API[kind] || !item || typeof item.id !== "string") continue;
+        if (resolving.some((o) => o.kind === kind && o.id === item.id)) continue;
+        const op = {
+          token: newId(), kind, id: item.id, action: kind === "expense" ? "add" : "stamp", api: ADD_API[kind],
+          args: copy(q.args), before: null, after: copy(item), view: () => null,
+          status: "queued", undone: true, inFlight: false, lost: true,
+          logId: typeof q.logId === "number" ? q.logId : null,
+        };
+        startResolving(op);
+        continue;
+      }
+      if (!q.expense || typeof q.expense.id !== "string") continue;
+      if (ops.some((o) => o.kind === "expense" && o.id === q.expense.id)) continue;
+      const op = addOp(q.expense, {
+        addedBy: typeof q.addedBy === "string" ? q.addedBy : myName,
+        addedAt: typeof q.addedAt === "string" ? q.addedAt : undefined,
+        rate: typeof q.rate === "number" ? q.rate : undefined,
+      });
+      op.status = q.failed ? "failed" : "queued";
+      op.lost = q.sent !== false;
+      writes.set(op.token, op);
+      ops.push(op);
+    }
   }
 
   async function boot() {
@@ -259,36 +348,28 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       state.loadedAt = typeof cache.loadedAt === "number" ? cache.loadedAt : null;
       state.status = "ready";
     }
-    const queue = getJson("mat.queue");
-    if (Array.isArray(queue)) {
-      for (const q of queue) {
-        if (!q || typeof q !== "object" || !q.expense || typeof q.expense.id !== "string") continue;
-        if (ops.some((o) => o.kind === "expense" && o.id === q.expense.id)) continue;
-        const op = addOp(q.expense, q.expense.addedBy || myName);
-        op.status = q.failed ? "failed" : "queued";
-        ops.push(op);
-      }
-    }
+    restoreQueue();
     changed();
     if (await refresh()) await flush();
   }
 
   // ---- writes ----
 
-  // op: { token, kind, id, action, api, args, before, after, view, status, undone, logId }
-  function addOp(expense, addedBy) {
+  // op: { token, kind, id, action, api, args, before, after, view, status,
+  //       undone, logId, inFlight, lost, resolving, uop }
+  function addOp(expense, { addedBy, addedAt, rate } = {}) {
     const after = {
       ...copy(expense),
-      rate: base ? base.rateToday : state.rateToday,
+      rate: rate !== undefined ? rate : base ? base.rateToday : state.rateToday,
       addedBy: addedBy || null,
-      addedAt: new Date(now()).toISOString(),
+      addedAt: addedAt || new Date(now()).toISOString(),
       deleted: false,
     };
     return {
       token: newId(), kind: "expense", id: expense.id, action: "add", api: "addExpense",
       args: { expense: copy(expense) }, before: null, after,
       view: (cur) => ({ ...(cur || {}), ...after }),
-      status: "sending", undone: false, logId: null,
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false,
     };
   }
 
@@ -297,7 +378,16 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     ops.push(op);
     state.lastChange = { token: op.token, action: op.action, kind: op.kind, item: bare(op.after), canUndo: true };
     if (op.action === "edit") state.lastChange.before = bare(op.before);
-    if (isQueuedAdd(op)) saveQueue();
+    if (op.api === "addExpense" && !state.online) {
+      // Known to be without signal: keep it on the phone (so it provably never
+      // left) and check for signal; the next contact sends it.
+      op.status = "queued";
+      saveQueue();
+      changed();
+      track(checkRev());
+      return op.token;
+    }
+    if (op.api === "addExpense") saveQueue();
     changed();
     send(op);
     return op.token;
@@ -308,28 +398,36 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   }
 
   async function runWrite(op) {
-    if (op.undone && op.status === "queued") return; // undone before it was sent: never send it
+    // An undone add is only ever sent by finishUndo.
+    if (op.undone && isAdd(op)) return;
     op.status = "sending";
+    op.inFlight = true;
+    if (op.api === "addExpense") saveQueue();
     try {
       const r = await call(op.api, op.args);
+      op.inFlight = false;
       const item = r.data[op.kind];
       op.logId = r.data.logId === undefined ? null : r.data.logId;
+      op.status = "done";
       removeOp(op);
       confirm(op.kind, item);
       if (op.logId !== null) stepRev(r.rev);
       const lc = state.lastChange;
       if (lc && lc.token === op.token) state.lastChange = { ...lc, item: copy(item) };
     } catch (err) {
-      op.logId = null;
-      const code = err && err.code;
-      if (op.action === "add" && op.kind === "expense" && !op.undone) {
+      op.inFlight = false;
+      const code = codeOf(err);
+      if (code === "network") op.lost = true;
+      if (op.undone) {
+        // finishUndo decides what still has to happen
+      } else if (op.api === "addExpense") {
         op.status = code === "network" ? "queued" : "failed";
       } else {
         removeOp(op);
-        if (!op.undone) state.notice = code === "network" ? NO_SIGNAL : (err && err.message) || NO_SIGNAL;
+        state.notice = code === "network" ? NO_SIGNAL : (err && err.message) || NO_SIGNAL;
       }
     }
-    if (op.kind === "expense" && op.action === "add") saveQueue();
+    saveQueue();
     saveCache();
     changed();
   }
@@ -343,13 +441,13 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       token: newId(), kind, id, action, api: apiAction, args,
       before: bare(before), after,
       view: (cur) => (cur ? { ...cur, ...patch } : null),
-      status: "sending", undone: false, logId: null,
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false,
     });
   }
 
   function addExpense(draft) {
     const expense = { id: newId(), ...copy(draft) };
-    return begin(addOp(expense, myName));
+    return begin(addOp(expense, { addedBy: myName }));
   }
 
   function addPayment({ from, to, cad }) {
@@ -366,7 +464,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       token: newId(), kind: "payment", id: payment.id, action: "stamp", api: "addPayment",
       args: { payment }, before: null, after,
       view: (cur) => ({ ...(cur || {}), ...after }),
-      status: "sending", undone: false, logId: null,
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false,
     });
   }
 
@@ -376,19 +474,100 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return { ...(cur || {}), ...op.before };
   }
 
+  // ---- undoing an add or a stamp ----
+
+  // Remember (in mat.queue too) that this add must end up undone on the
+  // backend, and show it gone meanwhile.
+  function startResolving(op) {
+    op.resolving = true;
+    op.uop = { kind: op.kind, id: op.id, status: "sending", view: (cur) => (cur ? { ...cur, [FLAG[op.kind]]: true } : null) };
+    ops.push(op.uop);
+    resolving.push(op);
+    saveQueue();
+  }
+
+  function stopResolving(op) {
+    op.resolving = false;
+    resolving = resolving.filter((o) => o !== op);
+    removeOp(op.uop);
+    saveQueue();
+  }
+
+  // Makes the backend agree that `op` is undone. Returns "done", "wait" (the
+  // add's fate is unknown and there is no proof of signal yet) or "offline".
+  async function finishUndo(op, contact) {
+    if (!op.resolving) return "done";
+    try {
+      if (op.logId === null) {
+        if (!op.lost) {
+          // refused outright, never on the backend
+          stopResolving(op);
+          return "done";
+        }
+        if (!contact) return "wait";
+        let r;
+        try {
+          r = await call(op.api, op.args); // same id: the backend returns the first one
+        } catch (err) {
+          if (transient(err)) return "offline";
+          stopResolving(op); // refused: it is not on the backend
+          return "done";
+        }
+        op.logId = r.data.logId === undefined ? null : r.data.logId;
+        confirm(op.kind, r.data[op.kind]);
+        saveQueue();
+        if (op.logId === null) {
+          stopResolving(op);
+          return "done";
+        }
+      }
+      let r;
+      try {
+        r = await call("undo", { logId: op.logId });
+      } catch (err) {
+        if (transient(err)) return "offline";
+        stopResolving(op);
+        if (refusedAsStale(err)) {
+          // Already undone (an earlier undo whose reply was lost) is fine;
+          // anything else is told.
+          changed();
+          await refresh();
+          const item = find(op.kind, op.id);
+          if (!(item && item[FLAG[op.kind]])) state.notice = (err && err.message) || STALE;
+          if (historyLoaded) await loadHistory();
+        } else {
+          state.notice = UNDO_FAILED;
+          await refresh();
+        }
+        return "done";
+      }
+      confirm(op.kind, r.data[op.kind]);
+      stepRev(r.rev);
+      stopResolving(op);
+      return "done";
+    } finally {
+      saveCache();
+      changed();
+    }
+  }
+
   function undo(token) {
     const op = writes.get(token);
     if (!op || op.undone) return Promise.resolve();
     op.undone = true;
     state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(undoneView(op, bare(find(op.kind, op.id)))), canUndo: false };
-    if (op.status === "queued" || op.status === "failed") {
-      // never reached the backend: forget it
+    if (isAdd(op)) {
       removeOp(op);
-      saveQueue();
+      if (!mayHaveLanded(op)) {
+        // never left the phone, or refused outright: forget it
+        saveQueue();
+        changed();
+        return Promise.resolve();
+      }
+      startResolving(op);
       changed();
-      return Promise.resolve();
+      return enqueue(chainKey(op.kind, op.id), () => finishUndo(op, false));
     }
-    if (op.kind === "expense" && op.action === "add") saveQueue();
     const uop = { kind: op.kind, id: op.id, status: "sending", view: (cur) => undoneView(op, cur) };
     ops.push(uop);
     changed();
@@ -408,15 +587,18 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       } catch (err) {
         removeOp(uop);
         op.undone = false;
-        const code = err && err.code;
-        state.notice = code === "stale" || code === "not_found" ? err.message || STALE : UNDO_FAILED;
+        if (refusedAsStale(err)) {
+          await showBackendAfterRefusedUndo(err);
+          return;
+        }
+        state.notice = UNDO_FAILED;
       }
       changed();
     });
   }
 
   function retry(id) {
-    const op = ops.find((o) => o.kind === "expense" && o.action === "add" && o.id === id && o.status === "failed");
+    const op = ops.find((o) => o.api === "addExpense" && o.id === id && o.status === "failed" && !o.undone);
     if (!op) return Promise.resolve();
     op.status = "sending";
     saveQueue();
@@ -424,13 +606,20 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return send(op);
   }
 
+  // Sends queued lines, then finishes undos left open. One pass at a time.
   function flush() {
     if (flushing) return flushing;
     flushing = (async () => {
       for (const op of ops.slice()) {
-        if (!(op.kind === "expense" && op.action === "add" && op.status === "queued" && !op.undone)) continue;
+        if (op.api !== "addExpense" || op.status !== "queued") continue;
+        if (op.undone || !ops.includes(op)) continue; // undone since the pass began
         await send(op);
-        if (op.status === "queued") break; // still no signal
+        if (op.status === "queued" && !op.undone) return; // still no signal
+      }
+      for (const op of resolving.slice()) {
+        if (!op.resolving) continue;
+        const result = await enqueue(chainKey(op.kind, op.id), () => finishUndo(op, true));
+        if (result === "offline") return;
       }
     })().finally(() => {
       flushing = null;
@@ -472,6 +661,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     try {
       const r = await call("history", args);
       state.history = { entries: older ? h.entries.concat(r.data.entries) : r.data.entries, more: !!r.data.more, loading: false };
+      historyLoaded = true;
     } catch {
       state.history = { ...state.history, loading: false };
     }
@@ -495,8 +685,11 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       try {
         r = await call("undo", { logId });
       } catch (err) {
-        const code = err && err.code;
-        state.notice = code === "stale" || code === "not_found" ? err.message || STALE : UNDO_FAILED;
+        if (refusedAsStale(err)) {
+          await showBackendAfterRefusedUndo(err);
+          return false;
+        }
+        state.notice = UNDO_FAILED;
         changed();
         return false;
       }
@@ -542,12 +735,14 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     emit();
   }
 
-  // Resolves once every write and undo started so far has settled.
+  // Resolves once every write, undo, flush and probe started so far has settled.
   async function idle() {
+    const live = () => [...chains.values(), flushing, ...background].filter(Boolean);
     for (;;) {
-      const pending = [...chains.values(), flushing].filter(Boolean);
+      const pending = live();
+      if (!pending.length) return;
       await Promise.all(pending);
-      const after = [...chains.values(), flushing].filter(Boolean);
+      const after = live();
       if (after.length === pending.length && after.every((p, i) => p === pending[i])) return;
     }
   }
