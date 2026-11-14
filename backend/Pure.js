@@ -14,7 +14,7 @@ var TABS = {
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
 
-var ID_RE_ = /^[A-Za-z0-9_-]{8,40}$/;
+var ID_RE_ = /^[A-Za-z0-9][A-Za-z0-9_-]{7,39}$/;
 var DAY_RE_ = /^\d{4}-\d{2}-\d{2}$/;
 
 function sanitizeCell(v) {

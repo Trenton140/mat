@@ -25,7 +25,7 @@ test("bad expenses are refused with a message", () => {
   for (const bad of [
     { title: "" }, { title: "x".repeat(81) }, { amount: 0 }, { amount: -5 }, { amount: 10000001 },
     { amount: NaN }, { currency: "USD" }, { paidBy: "Nobody" }, { split: [] }, { split: ["Mo", "Nobody"] },
-    { split: ["Mo", "Mo"] }, { day: "tomorrow" }, { id: "short" }, { id: "has spaces in it" },
+    { split: ["Mo", "Mo"] }, { day: "tomorrow" }, { id: "short" }, { id: "has spaces in it" }, { id: "-abc12345" }, { id: "_abc12345" },
     { note: "x".repeat(201) }, { kind: "misc" }, { splitMode: "percent" },
     { splitMode: "parts", splitVals: [2, 3] }, { splitMode: "parts", splitVals: [2, 0, 3] },
     { splitMode: "parts", splitVals: [2, 1.5, 3] }, { splitMode: "parts", splitVals: [2, 100, 3] },
@@ -74,7 +74,7 @@ test("a payment carries seed and rot, and refuses missing or odd ones", () => {
   assert.deepEqual(P.validatePayment(pay, NAMES).value, { id: "p1p2p3p4p5", from: "Ajen", to: "Mo", cad: 250.3, seed: 7, rot: -4.2 });
   const { seed, ...noSeed } = pay;
   const { rot, ...noRot } = pay;
-  for (const bad of [noSeed, noRot, { ...pay, seed: 0 }, { ...pay, seed: 1.5 }, { ...pay, seed: "7" }, { ...pay, rot: NaN }, { ...pay, rot: Infinity }, { ...pay, rot: "1" }, null, "x", { ...pay, id: "short" }, { ...pay, from: "Nobody" }]) {
+  for (const bad of [noSeed, noRot, { ...pay, seed: 0 }, { ...pay, seed: 1.5 }, { ...pay, seed: "7" }, { ...pay, rot: NaN }, { ...pay, rot: Infinity }, { ...pay, rot: "1" }, null, "x", { ...pay, id: "short" }, { ...pay, id: "-abc12345" }, { ...pay, id: "_abc12345" }, { ...pay, from: "Nobody" }]) {
     const r = P.validatePayment(bad, NAMES);
     assert.equal(r.ok, false, JSON.stringify(bad));
     assert.equal(typeof r.message, "string");
