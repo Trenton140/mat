@@ -22,9 +22,18 @@ function readTable_(tab) {
   });
 }
 
+// Writes one row below the last, formatting it first (text columns "@", the
+// rest "General") so it never relies on setup() having formatted enough rows.
+// Callers hold the write lock, so getLastRow() + 1 is free.
 function appendObj_(tab, obj) {
   var sh = sheet_(tab);
-  sh.appendRow(objToRow(headersOf_(sh), obj));
+  var headers = headersOf_(sh);
+  var rowNum = sh.getLastRow() + 1;
+  // Unlike appendRow, getRange cannot reach past the sheet's last row: grow it first.
+  if (rowNum > sh.getMaxRows()) sh.insertRowsAfter(sh.getMaxRows(), 100);
+  var range = sh.getRange(rowNum, 1, 1, headers.length);
+  range.setNumberFormats([headers.map(function (h) { return isTextColumn(tab, h) ? "@" : "General"; })]);
+  range.setValues([objToRow(headers, obj)]);
 }
 
 // Writes only the patched columns of the first row whose `column` equals
@@ -40,7 +49,7 @@ function updateWhere_(tab, column, value, patch) {
   if (col === -1) return null;
   var cells = sh.getRange(2, col + 1, last - 1, 1).getValues();
   for (var i = 0; i < cells.length; i++) {
-    if (String(cells[i][0]) !== String(value)) continue;
+    if (String(unsanitizeCell(cells[i][0])) !== String(value)) continue;
     var rowNum = i + 2;
     Object.keys(patch).forEach(function (key) {
       var c = headers.indexOf(key);

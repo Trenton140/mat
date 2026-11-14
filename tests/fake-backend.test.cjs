@@ -242,15 +242,56 @@ test("undo the undo brings the line back", async () => {
   assert.equal((await call("load")).data.expenses[0].deleted, false);
 });
 
-test("undo an edit puts the amount back", async () => {
-  const call = client({ expenses: [ramen()] });
-  const ed = await call("updateExpense", { id: "exp0000001", patch: { amount: 4500 } });
+test("undo an edit puts the amount back and keeps the rate, adder and time it was added", async () => {
+  const added = { rate: 98, addedBy: "Trenton", addedAt: "2026-12-09T01:00:00.000Z" };
+  const call = client({ expenses: [ramen(added)] }, { clock: () => "2026-12-10T05:00:00.000Z" });
+  const ed = await call("updateExpense", { id: "exp0000001", patch: { amount: 4500 } }, { actor: "Ajen" });
   assert.equal(ed.data.expense.amount, 4500);
-  const u = await call("undo", { logId: ed.data.logId });
+  const u = await call("undo", { logId: ed.data.logId }, { actor: "Ajen" });
   assert.equal(u.ok, true);
-  assert.equal(u.data.expense.amount, 4200);
-  assert.equal(u.data.expense.rate, 111);
-  assert.equal((await call("load")).data.expenses[0].amount, 4200);
+  for (const e of [u.data.expense, (await call("load")).data.expenses[0]]) {
+    assert.equal(e.amount, 4200);
+    assert.equal(e.rate, 98);
+    assert.equal(e.addedBy, "Trenton");
+    assert.equal(e.addedAt, "2026-12-09T01:00:00.000Z");
+  }
+});
+
+test("a repeat add with the same id but different content returns the first line and records nothing", async () => {
+  const call = client();
+  const first = await call("addExpense", { expense: ramen() });
+  const logLen = call.fake.tables.Log.length;
+  const again = await call("addExpense", { expense: ramen({ title: "Different", amount: 999, paidBy: "Ajen" }) }, { actor: "Trenton" });
+  assert.equal(again.ok, true);
+  assert.deepEqual(again.data.expense, first.data.expense);
+  assert.equal(again.data.expense.title, "Ramen");
+  assert.equal(again.data.expense.addedBy, "Mo");
+  assert.equal(again.data.logId, first.data.logId);
+  assert.equal(again.rev, first.rev);
+  assert.equal(call.fake.tables.Log.length, logLen);
+  assert.equal(call.fake.tables.Expenses.length, 1);
+});
+
+test("undoing an edit to an exact split restores the equal split and payer, and undoing that brings the exact split back", async () => {
+  const call = client({ expenses: [ramen()] });
+  const ed = await call("updateExpense", { id: "exp0000001", patch: { splitMode: "exact", splitVals: [2000, 1200, 1000], paidBy: "Ajen" } });
+  assert.equal(ed.ok, true);
+  assert.equal(ed.data.expense.splitMode, "exact");
+  const u1 = await call("undo", { logId: ed.data.logId });
+  assert.equal(u1.ok, true);
+  for (const e of [u1.data.expense, (await call("load")).data.expenses[0]]) {
+    assert.equal(e.splitMode, "equal");
+    assert.deepEqual(e.splitVals, []);
+    assert.equal(e.paidBy, "Mo");
+    assert.deepEqual(e.split, ALL);
+  }
+  const u2 = await call("undo", { logId: u1.data.logId });
+  assert.equal(u2.ok, true);
+  for (const e of [u2.data.expense, (await call("load")).data.expenses[0]]) {
+    assert.equal(e.splitMode, "exact");
+    assert.deepEqual(e.splitVals, [2000, 1200, 1000]);
+    assert.equal(e.paidBy, "Ajen");
+  }
 });
 
 test("undo a stamp removes the payment", async () => {
@@ -471,16 +512,38 @@ test("undo of a Log row with no before and no after is stale, never a crash", as
   assert.equal((await call("load")).data.expenses[0].deleted, false);
 });
 
-test("cells that look like formulas are stored escaped and read back as typed", async () => {
-  const call = client();
-  const r = await call("addExpense", { expense: ramen({ title: "=SUM(A1)", note: "+81 3 1234" }) });
-  assert.equal(r.data.expense.title, "=SUM(A1)");
-  assert.equal(call.fake.tables.Expenses[0].title, "'=SUM(A1)");
-  assert.equal(call.fake.tables.Expenses[0].note, "'+81 3 1234");
-  const e = (await call("load")).data.expenses[0];
-  assert.equal(e.title, "=SUM(A1)");
-  assert.equal(e.note, "+81 3 1234");
-});
+for (const keepsApostrophe of [false, true]) {
+  test(`formula-looking text comes back as typed from load, history and undo (Sheets ${keepsApostrophe ? "keeps" : "drops"} the apostrophe)`, async () => {
+    const call = client(undefined, { keepsApostrophe });
+    const titles = ["=probe", "-5% off", "+81 3", "@home"];
+    const adds = [];
+    for (let i = 0; i < titles.length; i++) {
+      const r = await call("addExpense", { expense: ramen({ id: "fx00000" + i, title: titles[i], note: titles[(i + 1) % titles.length] }) });
+      assert.equal(r.data.expense.title, titles[i]);
+      adds.push(r);
+    }
+    assert.equal(call.fake.tables.Expenses[0].title, "'=probe");
+    assert.equal(call.fake.tables.Expenses[1].note, "'+81 3");
+    const load = (await call("load")).data.expenses;
+    assert.deepEqual(load.map((e) => e.title), titles);
+    assert.deepEqual(load.map((e) => e.note), ["-5% off", "+81 3", "@home", "=probe"]);
+    const hist = await historyAll(call);
+    assert.deepEqual(hist.map((e) => e.summary).reverse(), titles.map((t) => "rang up " + t + " ¥4,200"));
+
+    const ed = await call("updateExpense", { id: "fx000000", patch: { title: "-renamed" } });
+    assert.equal(ed.data.expense.title, "-renamed");
+    const u = await call("undo", { logId: ed.data.logId });
+    assert.equal(u.data.expense.title, "=probe");
+    assert.equal(u.data.expense.note, "-5% off");
+    assert.equal(u.data.entry.summary, "undid: renamed =probe to -renamed");
+    const ua = await call("undo", { logId: adds[3].data.logId });
+    assert.equal(ua.data.expense.title, "@home");
+    assert.equal(ua.data.expense.deleted, true);
+    const after = (await call("load")).data.expenses;
+    assert.deepEqual(after.map((e) => e.title), titles);
+    assert.equal((await historyAll(call))[0].summary, "undid: rang up @home ¥4,200");
+  });
+}
 
 test("the fake keeps every request, and requests and answers are copies", async () => {
   const fake = createFakeBackend();

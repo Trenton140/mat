@@ -202,3 +202,35 @@ test("rows read back from text columns still give numbers where the API wants th
   assert.equal(e.note, "3-4");
   assert.equal(P.parseLogRow({ id: 7, undoes: 3, undone_by: "" }).undoes, 3);
 });
+
+test("unsanitizeCell drops only the escape apostrophe that sanitizeCell adds", () => {
+  for (const typed of ["=probe", "-5% off", "+81 3", "@home", "\tx", "\rx"]) {
+    assert.equal(P.unsanitizeCell(P.sanitizeCell(typed)), typed, JSON.stringify(typed));
+    assert.equal(P.unsanitizeCell(typed), typed);
+  }
+  for (const v of ["'hello", "''", "'", "it's", "Ramen", "", 42, true, null]) assert.equal(P.unsanitizeCell(v), v, JSON.stringify(v));
+  assert.equal(P.unsanitizeCell("''=x"), "''=x");
+});
+
+test("rowToObj reads escaped cells back as typed", () => {
+  const h = ["id", "title", "note", "amount"];
+  assert.deepEqual(P.rowToObj(h, ["a1", "'=probe", "'-probe", 5]), { id: "a1", title: "=probe", note: "-probe", amount: 5 });
+  assert.deepEqual(P.rowToObj(h, P.objToRow(h, { id: "a1", title: "@home", note: "+81 3", amount: 5 })), { id: "a1", title: "@home", note: "+81 3", amount: 5 });
+  assert.equal(P.rowToObj(h, ["a1", "'plain"]).title, "'plain");
+});
+
+test("the rate is fetched only when today's is missing and no failure in the last hour", () => {
+  const now = "2026-12-10T12:00:00.000Z";
+  assert.equal(P.shouldFetchRate(null, null, now), true);
+  assert.equal(P.shouldFetchRate("", "", now), true);
+  assert.equal(P.shouldFetchRate("108.4", null, now), false);
+  assert.equal(P.shouldFetchRate("108.4", "2026-12-10T11:59:00.000Z", now), false);
+  assert.equal(P.shouldFetchRate(null, "2026-12-10T11:30:00.000Z", now), false);
+  assert.equal(P.shouldFetchRate(null, "2026-12-10T11:00:00.001Z", now), false);
+  assert.equal(P.shouldFetchRate(null, "2026-12-10T11:00:00.000Z", now), true);
+  assert.equal(P.shouldFetchRate(null, "2026-12-09T12:00:00.000Z", now), true);
+  assert.equal(P.shouldFetchRate("0", null, now), true);
+  assert.equal(P.shouldFetchRate("junk", null, now), true);
+  assert.equal(P.shouldFetchRate(null, "junk", now), true);
+  assert.equal(P.shouldFetchRate(null, "2026-12-10T13:00:00.000Z", now), true);
+});

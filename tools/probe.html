@@ -19,6 +19,7 @@
 <button id="again">same addExpense again</button>
 <button id="history">history</button>
 <button id="undo">undo the probe's add</button>
+<button id="escape">add "=probe" (note "-probe"), then show it from load</button>
 <pre id="out">working...</pre>
 <script type="module">
 import { API_URL } from "../js/config.js";
@@ -68,6 +69,18 @@ if (!API_URL) {
   document.getElementById("add").onclick = add;
   document.getElementById("again").onclick = add;
   document.getElementById("history").onclick = () => send("history");
+  // Formula-looking text must come back exactly as typed from the real Sheet.
+  document.getElementById("escape").onclick = async () => {
+    const line = { ...expense, id: "probeesc" + Date.now().toString(36), title: "=probe", note: "-probe" };
+    const added = await send("addExpense", { expense: line });
+    if (!added || !added.ok) return;
+    const loaded = await send("load");
+    if (!loaded || !loaded.ok) return;
+    const found = loaded.data.expenses.find((e) => e.id === line.id) || null;
+    const same = !!found && found.title === "=probe" && found.note === "-probe";
+    out.textContent = (same ? "Round-trip OK: title and note came back as typed.\n" : "MISMATCH: load did not return the line as typed.\n")
+      + JSON.stringify({ sent: { title: line.title, note: line.note }, added: added.data.expense, fromLoad: found }, null, 2);
+  };
   document.getElementById("undo").onclick = () => {
     if (probeLogId === null) { out.textContent = "Add the probe line first."; return; }
     send("undo", { logId: probeLogId });

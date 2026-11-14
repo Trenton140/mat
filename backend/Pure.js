@@ -34,9 +34,16 @@ function sanitizeCell(v) {
   return v;
 }
 
+// Undoes sanitizeCell on read, whether or not Sheets kept the apostrophe in a
+// plain-text cell: "'" followed by = + - @ tab or CR loses that one apostrophe.
+function unsanitizeCell(v) {
+  if (typeof v === "string" && /^'[=+\-@\t\r]/.test(v)) return v.slice(1);
+  return v;
+}
+
 function rowToObj(headers, row) {
   var o = {};
-  for (var i = 0; i < headers.length; i++) o[headers[i]] = i < row.length ? row[i] : "";
+  for (var i = 0; i < headers.length; i++) o[headers[i]] = i < row.length ? unsanitizeCell(row[i]) : "";
   return o;
 }
 
@@ -294,6 +301,19 @@ function setupSeedRows() {
   };
 }
 
+// ---- exchange rate ----
+
+// Whether to fetch today's rate: only when today's is not stored yet and the
+// last failed fetch (failAtIso) was not within the past hour.
+function shouldFetchRate(todayKeyValue, failAtIso, nowIso) {
+  if (Number(todayKeyValue) > 0) return false;
+  var failAt = failAtIso ? Date.parse(failAtIso) : NaN;
+  var now = Date.parse(nowIso);
+  if (isNaN(failAt) || isNaN(now)) return true;
+  var since = now - failAt;
+  return !(since >= 0 && since < 60 * 60 * 1000);
+}
+
 // ---- history and undo ----
 
 function money_(n, currency) {
@@ -394,5 +414,5 @@ function entryFromRow(o, allRows) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate };
 }

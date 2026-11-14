@@ -7,7 +7,8 @@
 //
 // seed = { expenses?, payments?, people?, days? } (see constraints R6).
 // The returned function takes a request body and resolves to the envelope.
-// Options: clock (() => ISO string), lockFails (test-only, () => boolean).
+// Options: clock (() => ISO string); test-only: lockFails (() => boolean),
+// keepsApostrophe (Sheets hands back a text cell's leading ' verbatim).
 // Test handles: fake.tables (live rows per tab), fake.requests (every body
 // received), fake.primitives (the in-memory helpers), fake.props (Script
 // Properties).
@@ -28,13 +29,16 @@ const SHEET_URL = "https://example.test/sheet";
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
 // What Sheets hands back for a stored cell under setup()'s formatting (see
-// isTextColumn in Pure.js). A leading apostrophe is the "treat as text" marker
-// and is not part of the value. A plain-text column gives back a string even
-// when a number or boolean was written; any other column turns a string that
-// looks like a number or TRUE/FALSE into a number or boolean.
-function readCell(text, v) {
+// isTextColumn in Pure.js). Which way Sheets treats a leading apostrophe in a
+// plain-text cell is not yet verified, so both are modelled: by default it is
+// the "treat as text" marker and is dropped; with keepsApostrophe a text cell
+// hands it back verbatim. (rowToObj then undoes the escape either way.)
+// A plain-text column gives back a string even when a number or boolean was
+// written; any other column turns a string that looks like a number or
+// TRUE/FALSE into a number or boolean.
+function readCell(text, v, keepsApostrophe) {
   if (v === undefined || v === null) return "";
-  if (typeof v === "string" && v.charAt(0) === "'") return v.slice(1);
+  if (typeof v === "string" && v.charAt(0) === "'") return text && keepsApostrophe ? v : v.slice(1);
   if (text) {
     if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
     return String(v);
@@ -47,7 +51,7 @@ function readCell(text, v) {
   return v;
 }
 
-function createFakeBackend(seed, { clock, lockFails } = {}) {
+function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } = {}) {
   const now = clock || (() => new Date().toISOString());
   const world = vm.createContext({});
   PURE.runInContext(world);
@@ -64,10 +68,11 @@ function createFakeBackend(seed, { clock, lockFails } = {}) {
     if (!h) throw new Error("Missing tab: " + tab + ". Run setup().");
     return h;
   };
+  const cellOut = (tab, h, v) => readCell(P.isTextColumn(tab, h), v, keepsApostrophe);
+  // Same path as the real readTable_: cells as Sheets hands them back, then rowToObj.
   const readRow = (tab, stored) => {
-    const o = {};
-    for (const h of headers(tab)) o[h] = readCell(P.isTextColumn(tab, h), stored[h]);
-    return o;
+    const h = headers(tab);
+    return P.rowToObj(h, h.map((col) => cellOut(tab, col, stored[col])));
   };
 
   const primitives = {
@@ -77,14 +82,17 @@ function createFakeBackend(seed, { clock, lockFails } = {}) {
     },
     appendObj_(tab, obj) {
       const h = headers(tab);
-      tables[tab].push(P.rowToObj(h, P.objToRow(h, obj)));
+      const cells = P.objToRow(h, obj);
+      const stored = {};
+      h.forEach((col, i) => { stored[col] = cells[i]; });
+      tables[tab].push(stored);
     },
     updateWhere_(tab, column, value, patch) {
       if (value === "" || value === null || value === undefined) return null;
       const h = headers(tab);
       if (h.indexOf(column) === -1) return null;
       for (const stored of tables[tab]) {
-        if (String(readCell(P.isTextColumn(tab, column), stored[column])) !== String(value)) continue;
+        if (String(P.unsanitizeCell(cellOut(tab, column, stored[column]))) !== String(value)) continue;
         for (const key of Object.keys(patch)) {
           if (h.indexOf(key) === -1 || patch[key] === undefined) continue;
           stored[key] = patch[key] === null ? "" : P.sanitizeCell(patch[key]);
