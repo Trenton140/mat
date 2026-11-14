@@ -43,6 +43,31 @@ test("bad expenses are refused with a message", () => {
   assert.equal(P.validateExpense({ ...good, kind: "food", note: "ref 8841" }, NAMES).value.kind, "food");
 });
 
+test("exact splits are rounded, each at least one unit, and must sum exactly", () => {
+  const cad = { ...good, currency: "CAD", splitMode: "exact" };
+  assert.equal(P.validateExpense({ ...cad, amount: 0.01, splitVals: [0.004, 0.004, 0.01] }, NAMES).ok, false);
+  assert.equal(P.validateExpense({ ...cad, amount: 100, splitVals: [33.334, 33.333, 33.333] }, NAMES).ok, false);
+  const r = P.validateExpense({ ...cad, amount: 100, splitVals: [33.334, 33.336, 33.33] }, NAMES);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.value.splitVals, [33.33, 33.34, 33.33]);
+  const y = P.validateExpense({ ...good, amount: 100, splitMode: "exact", splitVals: [50.4, 49.6, 0.4] }, NAMES);
+  assert.equal(y.ok, false);
+  const y2 = P.validateExpense({ ...good, amount: 100, splitMode: "exact", splitVals: [50.4, 49.6, 0.6] }, NAMES);
+  assert.equal(y2.ok, false);
+  const y3 = P.validateExpense({ ...good, amount: 100, splitMode: "exact", splitVals: [50.4, 48.6, 1.2] }, NAMES);
+  assert.equal(y3.ok, true);
+  assert.deepEqual(y3.value.splitVals, [50, 49, 1]);
+});
+
+test("a day must be a real calendar date", () => {
+  for (const day of ["2026-13-45", "2026-02-30", "2026-00-10", "2026-04-31", "2026-12-00", "2027-02-29"]) {
+    assert.equal(P.validateExpense({ ...good, day }, NAMES).ok, false, day);
+  }
+  for (const day of ["2026-12-31", "2028-02-29", "pre"]) {
+    assert.equal(P.validateExpense({ ...good, day }, NAMES).ok, true, day);
+  }
+});
+
 test("an expense value carries exactly the client-settable fields, trimmed", () => {
   const r = P.validateExpense({ ...good, title: "  Ramen ", note: " n ", rate: 99, addedBy: "Ajen", addedAt: "t", deleted: true }, NAMES);
   assert.equal(r.ok, true);

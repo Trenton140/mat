@@ -49,11 +49,19 @@ function round2_(n) {
 
 function cents_(n) { return Math.round(Number(String(round2_(n)) + "e2")); }
 
+function realDay_(s) {
+  var y = Number(s.slice(0, 4)), m = Number(s.slice(5, 7)), d = Number(s.slice(8, 10));
+  if (m < 1 || m > 12 || d < 1) return false;
+  var leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+  var dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  return d <= dim[m - 1];
+}
+
 function validateExpense(input, peopleNames) {
   if (!isObj_(input)) return fail_("That didn't come through properly.");
   var id = input.id, day = input.day, title = input.title, amount = input.amount;
   if (typeof id !== "string" || !ID_RE_.test(id)) return fail_("That line has a bad id.");
-  if (typeof day !== "string" || (day !== "pre" && !DAY_RE_.test(day))) return fail_("Pick a day.");
+  if (typeof day !== "string" || (day !== "pre" && (!DAY_RE_.test(day) || !realDay_(day)))) return fail_("Pick a day.");
   if (typeof title !== "string") return fail_("Say what it was for.");
   title = title.trim();
   if (!title) return fail_("Say what it was for.");
@@ -90,18 +98,18 @@ function validateExpense(input, peopleNames) {
   } else if (mode === "exact") {
     if (vals.length !== split.length) return fail_("Give every person an amount.");
     var sum = 0;
+    var rounded = [];
     for (var x = 0; x < vals.length; x++) {
       var v = vals[x];
       if (typeof v !== "number" || !isFinite(v) || !(v > 0)) return fail_("Every amount has to be more than zero.");
-      if (currency === "JPY") {
-        if (v % 1 !== 0) return fail_("Yen amounts must be whole numbers.");
-        sum += v;
-      } else {
-        sum += cents_(v);
-      }
+      var units = currency === "JPY" ? Math.round(v) : cents_(v);
+      if (units < 1) return fail_("Every amount has to be at least " + (currency === "JPY" ? "one yen." : "one cent."));
+      sum += units;
+      rounded.push(currency === "JPY" ? units : units / 100);
     }
     var total = currency === "JPY" ? amount : cents_(amount);
     if (sum !== total) return fail_("The amounts don't add up to the total.");
+    vals = rounded;
   } else {
     return fail_("That way of splitting isn't one we know.");
   }
@@ -219,6 +227,105 @@ function personFromRow(o) {
   return { name: cellText_(o.name), initials: cellText_(o.initials), etransfer: cellText_(o.etransfer), simplify: !off };
 }
 
+// ---- history and undo ----
+
+function money_(n, currency) {
+  var neg = n < 0;
+  var s = currency === "JPY" ? String(Math.round(Math.abs(n))) : Math.abs(n).toFixed(2);
+  var parts = s.split(".");
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+  return (neg ? "-" : "") + (currency === "JPY" ? "\u00a5" : "$") + parts.join(".");
+}
+
+function same_(a, b) { return JSON.stringify(a) === JSON.stringify(b); }
+
+function expenseDiff_(before, after) {
+  if (before.amount !== after.amount || before.currency !== after.currency) {
+    return "changed " + after.title + " " + money_(before.amount, before.currency) + " \u2192 " + money_(after.amount, after.currency);
+  }
+  if (before.title !== after.title) return "renamed " + before.title + " to " + after.title;
+  var changed = [];
+  if (before.paidBy !== after.paidBy) changed.push("payer");
+  if (!same_(before.split, after.split) || before.splitMode !== after.splitMode || !same_(before.splitVals, after.splitVals)) changed.push("split");
+  if (before.day !== after.day) changed.push("day");
+  if (before.note !== after.note) changed.push("note");
+  return "changed " + after.title + (changed.length ? ": " + changed.join(", ") : "");
+}
+
+function summarize(action, kind, before, after) {
+  if (kind === "payment") {
+    var pay = after || before;
+    var what = pay.from + " \u2192 " + pay.to + " " + money_(pay.cad, "CAD");
+    if (action === "stamp") return "stamped " + what;
+    if (action === "unstamp") return "removed the stamp " + what;
+    if (action === "restamp") return "put back the stamp " + what;
+    return "changed the stamp " + what;
+  }
+  var item = after || before;
+  var tag = item.title + " " + money_(item.amount, item.currency);
+  if (action === "add") return "rang up " + tag;
+  if (action === "delete") return "deleted " + tag;
+  if (action === "restore") return "brought back " + tag;
+  if (action === "edit" && before && after) return expenseDiff_(before, after);
+  return "changed " + item.title;
+}
+
+function undoTarget(entry) {
+  if (entry.before) return JSON.parse(JSON.stringify(entry.before));
+  var t = JSON.parse(JSON.stringify(entry.after));
+  if (entry.kind === "payment") t.removed = true;
+  else t.deleted = true;
+  return t;
+}
+
+function canUndo(entry, allEntries) {
+  if (entry.undoneBy !== null && entry.undoneBy !== undefined && entry.undoneBy !== "") return false;
+  for (var i = 0; i < allEntries.length; i++) {
+    var o = allEntries[i];
+    if (Number(o.id) > Number(entry.id) && o.kind === entry.kind && String(o.ref) === String(entry.ref)) return false;
+  }
+  return true;
+}
+
+function cellId_(v) {
+  if (v === "" || v === undefined || v === null) return null;
+  var n = Number(v);
+  return isFinite(n) ? n : null;
+}
+
+function cellJson_(v) {
+  if (v === "" || v === undefined || v === null) return null;
+  try { return JSON.parse(String(v)); } catch (e) { return null; }
+}
+
+function logShape_(o) {
+  return {
+    id: Number(o.id),
+    at: cellStamp_(o.at),
+    who: cellText_(o.who),
+    via: o.via === "claude" ? "claude" : "app",
+    action: cellText_(o.action),
+    kind: cellText_(o.kind),
+    ref: cellText_(o.ref),
+    summary: cellText_(o.summary),
+    undoes: cellId_(o.undoes),
+    undoneBy: cellId_(o.undone_by),
+  };
+}
+
+function parseLogRow(o) {
+  var e = logShape_(o);
+  e.before = cellJson_(o.before);
+  e.after = cellJson_(o.after);
+  return e;
+}
+
+function entryFromRow(o, allRows) {
+  var e = logShape_(o);
+  e.canUndo = canUndo(e, allRows.map(logShape_));
+  return e;
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_ };
+  module.exports = { TABS, KINDS, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow };
 }
