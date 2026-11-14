@@ -27,7 +27,11 @@ function appendObj_(tab, obj) {
   sh.appendRow(objToRow(headersOf_(sh), obj));
 }
 
+// Writes only the patched columns of the first row whose `column` equals
+// `value`, and returns that row as read back. A blank lookup value never
+// matches (it would hit an empty row); a patch value of undefined is skipped.
 function updateWhere_(tab, column, value, patch) {
+  if (value === "" || value === null || value === undefined) return null;
   var sh = sheet_(tab);
   var last = sh.getLastRow();
   if (last < 2) return null;
@@ -40,7 +44,8 @@ function updateWhere_(tab, column, value, patch) {
     var rowNum = i + 2;
     Object.keys(patch).forEach(function (key) {
       var c = headers.indexOf(key);
-      if (c !== -1) sh.getRange(rowNum, c + 1).setValue(sanitizeCell(patch[key]));
+      if (c === -1 || patch[key] === undefined) return;
+      sh.getRange(rowNum, c + 1).setValue(patch[key] === null ? "" : sanitizeCell(patch[key]));
     });
     return rowToObj(headers, sh.getRange(rowNum, 1, 1, headers.length).getValues()[0]);
   }

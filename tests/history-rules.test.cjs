@@ -104,3 +104,12 @@ test("parseLogRow adds parsed snapshots, null when the cell is empty", () => {
   assert.equal(P.parseLogRow({ ...row, before: "", after: JSON.stringify(taxi) }).before, null);
   assert.deepEqual(P.undoTarget(P.parseLogRow({ ...row, before: "", after: JSON.stringify(taxi) })), { ...taxi, deleted: true });
 });
+
+test("log ids compare as numbers even when the sheet hands them back as text", () => {
+  const log = [
+    { id: "9", kind: "expense", ref: "e1", undoneBy: null },
+    { id: "10", kind: "expense", ref: "e1", undoneBy: null },
+  ];
+  assert.equal(P.canUndo(log[0], log), false);
+  assert.equal(P.canUndo(log[1], log), true);
+});

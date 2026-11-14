@@ -227,6 +227,61 @@ function personFromRow(o) {
   return { name: cellText_(o.name), initials: cellText_(o.initials), etransfer: cellText_(o.etransfer), simplify: !off };
 }
 
+// ---- API shape -> sheet row ----
+// Timestamps (added_at, deleted_at, stamped_at, removed_at) are left to the
+// action that writes the row. Optional fields that are absent are left out, so
+// the result can also be used as a patch.
+
+function put_(o, key, v) { if (v !== undefined) o[key] = v; }
+
+function expenseToRow(e) {
+  var o = {};
+  put_(o, "id", e.id);
+  put_(o, "day", e.day);
+  put_(o, "title", e.title);
+  put_(o, "amount", e.amount);
+  put_(o, "currency", e.currency);
+  put_(o, "rate", e.rate);
+  put_(o, "paid_by", e.paidBy);
+  put_(o, "split", Array.isArray(e.split) ? e.split.join(",") : undefined);
+  put_(o, "split_mode", e.splitMode);
+  put_(o, "split_vals", Array.isArray(e.splitVals) ? e.splitVals.join(",") : undefined);
+  put_(o, "note", e.note);
+  put_(o, "kind", e.kind);
+  put_(o, "added_by", e.addedBy);
+  return o;
+}
+
+function paymentToRow(p) {
+  var o = {};
+  put_(o, "id", p.id);
+  put_(o, "from", p.from);
+  put_(o, "to", p.to);
+  put_(o, "cad", p.cad);
+  put_(o, "stamped_by", p.stampedBy);
+  put_(o, "seed", p.seed);
+  put_(o, "rot", p.rot);
+  return o;
+}
+
+// The rows setup() writes into an empty Sheet (also used by the test backend).
+function setupSeedRows() {
+  var days = [];
+  for (var d = 10; d <= 20; d++) days.push({ date: "2026-12-" + d });
+  return {
+    Trip: [
+      { key: "name", value: "Japan 2026" }, { key: "start", value: "2026-12-10" }, { key: "end", value: "2026-12-20" },
+      { key: "home", value: "CAD" }, { key: "currency", value: "JPY" }, { key: "tz", value: "Asia/Tokyo" },
+    ],
+    People: [
+      { name: "Mo", initials: "MO", order: 1, etransfer: "", simplify: true, email: "" },
+      { name: "Ajen", initials: "AJ", order: 2, etransfer: "", simplify: true, email: "" },
+      { name: "Trenton", initials: "TR", order: 3, etransfer: "", simplify: true, email: "" },
+    ],
+    Days: days,
+  };
+}
+
 // ---- history and undo ----
 
 function money_(n, currency) {
@@ -327,5 +382,5 @@ function entryFromRow(o, allRows) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow };
+  module.exports = { TABS, KINDS, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows };
 }

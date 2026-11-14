@@ -24,18 +24,10 @@ function setup() {
     });
   });
 
-  seedIfEmpty_("Trip", [
-    { key: "name", value: "Japan 2026" }, { key: "start", value: "2026-12-10" }, { key: "end", value: "2026-12-20" },
-    { key: "home", value: "CAD" }, { key: "currency", value: "JPY" }, { key: "tz", value: "Asia/Tokyo" },
-  ]);
-  seedIfEmpty_("People", [
-    { name: "Mo", initials: "MO", order: 1, etransfer: "", simplify: true, email: "" },
-    { name: "Ajen", initials: "AJ", order: 2, etransfer: "", simplify: true, email: "" },
-    { name: "Trenton", initials: "TR", order: 3, etransfer: "", simplify: true, email: "" },
-  ]);
-  var days = [];
-  for (var d = 10; d <= 20; d++) days.push({ date: "2026-12-" + d });
-  seedIfEmpty_("Days", days);
+  var seed = setupSeedRows();
+  seedIfEmpty_("Trip", seed.Trip);
+  seedIfEmpty_("People", seed.People);
+  seedIfEmpty_("Days", seed.Days);
 
   var plain = ss.getSheetByName("Sheet1");
   if (plain && plain.getLastRow() === 0 && plain.getLastColumn() === 0 && ss.getSheets().length > 1) ss.deleteSheet(plain);

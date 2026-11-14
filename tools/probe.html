@@ -4,25 +4,74 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MAT probe</title>
+<style>
+  body { font: 16px/1.4 system-ui, sans-serif; margin: 16px; }
+  label, button { display: block; margin: 8px 0; }
+  input { font: inherit; width: 100%; max-width: 360px; }
+  button { font: inherit; padding: 8px 12px; }
+  pre { white-space: pre-wrap; word-break: break-word; background: #f3f0e8; padding: 8px; }
+</style>
 </head>
 <body>
+<label>Trip key <input id="key" type="password" autocomplete="off"></label>
+<button id="load">load</button>
+<button id="add">addExpense "probe"</button>
+<button id="again">same addExpense again</button>
+<button id="history">history</button>
+<button id="undo">undo the probe's add</button>
 <pre id="out">working...</pre>
 <script type="module">
 import { API_URL } from "../js/config.js";
+
+// Dev-only page. The key lives in sessionStorage only: never in a file or a log.
 const out = document.getElementById("out");
-if (!API_URL) {
-  out.textContent = "API_URL is not set yet";
-} else {
+const keyInput = document.getElementById("key");
+const buttons = [...document.querySelectorAll("button")];
+try { keyInput.value = sessionStorage.getItem("probe.key") || ""; } catch {}
+keyInput.addEventListener("input", () => {
+  try { sessionStorage.setItem("probe.key", keyInput.value); } catch {}
+});
+
+// One sample line per page load, so "again" repeats the exact same add.
+const probeId = "probe" + Date.now().toString(36);
+const expense = { id: probeId, day: "2026-12-10", title: "probe", amount: 100, currency: "JPY", paidBy: "Mo", split: ["Mo", "Ajen", "Trenton"] };
+let probeLogId = null;
+
+async function send(action, args = {}) {
+  out.textContent = "working...";
   try {
     const res = await fetch(API_URL, {
       method: "POST",
       headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify({ action: "ping" }),
+      body: JSON.stringify({ key: keyInput.value, actor: "Mo", via: "app", action, args }),
     });
-    out.textContent = JSON.stringify(await res.json());
+    const env = await res.json();
+    out.textContent = JSON.stringify(env, null, 2);
+    return env;
   } catch (err) {
     out.textContent = "Error: " + err;
+    return null;
   }
+}
+
+async function add() {
+  const env = await send("addExpense", { expense });
+  if (env && env.ok) probeLogId = env.data.logId;
+}
+
+if (!API_URL) {
+  out.textContent = "API_URL is not set yet";
+  buttons.forEach((b) => { b.disabled = true; });
+} else {
+  out.textContent = "ready";
+  document.getElementById("load").onclick = () => send("load");
+  document.getElementById("add").onclick = add;
+  document.getElementById("again").onclick = add;
+  document.getElementById("history").onclick = () => send("history");
+  document.getElementById("undo").onclick = () => {
+    if (probeLogId === null) { out.textContent = "Add the probe line first."; return; }
+    send("undo", { logId: probeLogId });
+  };
 }
 </script>
 </body>

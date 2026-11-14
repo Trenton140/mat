@@ -145,3 +145,36 @@ test("rows coped with as Sheets really hands them back", () => {
   assert.deepEqual(p, { id: "p", from: "Ajen", to: "Mo", cad: 250.3, stampedBy: "Ajen", stampedAt: "2026-12-13T00:00:00.000Z", seed: 7, rot: -4.2, removed: false });
   assert.equal(P.paymentFromRow({ id: "q", removed_at: "2026-12-14T00:00:00.000Z" }).removed, true);
 });
+
+test("expense and payment rows round-trip from the API shape", () => {
+  const x = { id: "a1b2c3d4e5", day: "2026-12-11", title: "Taxi", amount: 3600, currency: "JPY", rate: 111, paidBy: "Ajen", split: ["Ajen", "Trenton"], splitMode: "parts", splitVals: [1, 2], note: "late", kind: "transport", addedBy: "Ajen", addedAt: "2026-12-11T01:00:00.000Z", deleted: true };
+  const row = P.expenseToRow(x);
+  assert.equal(row.paid_by, "Ajen");
+  assert.equal(row.split, "Ajen,Trenton");
+  assert.equal(row.split_vals, "1,2");
+  for (const k of ["added_at", "deleted_at", "deleted", "paidBy"]) assert.equal(k in row, false, k);
+  const back = P.expenseFromRow(row);
+  for (const k of Object.keys(x)) if (k !== "addedAt" && k !== "deleted") assert.deepEqual(back[k], x[k], k);
+  assert.equal(P.expenseToRow({ ...x, splitMode: "equal", splitVals: [] }).split_vals, "");
+  assert.deepEqual(P.expenseFromRow(P.expenseToRow({ ...x, currency: "CAD", amount: 100, splitMode: "exact", splitVals: [33.34, 66.66] })).splitVals, [33.34, 66.66]);
+  const noExtras = P.expenseToRow({ id: "a1b2c3d4e5", day: "pre", title: "T", amount: 1, currency: "JPY", paidBy: "Mo", split: ["Mo"], splitMode: "equal", splitVals: [], note: "", kind: "" });
+  assert.equal("rate" in noExtras, false);
+  assert.equal("added_by" in noExtras, false);
+
+  const pay = { id: "p1p2p3p4p5", from: "Ajen", to: "Mo", cad: 250.3, stampedBy: "Ajen", stampedAt: "2026-12-13T00:00:00.000Z", seed: 7, rot: -4.2, removed: true };
+  const prow = P.paymentToRow(pay);
+  assert.equal(prow.stamped_by, "Ajen");
+  for (const k of ["stamped_at", "removed_at", "removed"]) assert.equal(k in prow, false, k);
+  const pback = P.paymentFromRow(prow);
+  for (const k of Object.keys(pay)) if (k !== "stampedAt" && k !== "removed") assert.deepEqual(pback[k], pay[k], k);
+});
+
+test("the setup seed rows are the trip, three people and one day per date", () => {
+  const s = P.setupSeedRows();
+  assert.deepEqual(s.Trip.map((r) => r.key), ["name", "start", "end", "home", "currency", "tz"]);
+  assert.deepEqual(s.People.map((r) => [r.name, r.initials, r.order, r.simplify]), [["Mo", "MO", 1, true], ["Ajen", "AJ", 2, true], ["Trenton", "TR", 3, true]]);
+  assert.equal(s.Days.length, 11);
+  assert.equal(s.Days[0].date, "2026-12-10");
+  assert.equal(s.Days[10].date, "2026-12-20");
+  assert.notEqual(P.setupSeedRows().People[0], s.People[0]);
+});
