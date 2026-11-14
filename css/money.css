@@ -1,0 +1,98 @@
+/* Money: the sentence, the settlement slip, the till receipt and the bottom bar.
+   Ported from the mockup; .rc-note, .rc-city, .rc-cad, .is-new, #histN, #fresh,
+   pending and failed lines are drawn here in the same materials. */
+
+.say{padding:18px var(--gr) 16px var(--gl)}
+.say h1{margin:0;font-size:30px;font-weight:900;line-height:1.15;text-wrap:balance}
+.say p{margin:7px 0 0;color:var(--dim);font-size:13px}
+.dg{display:inline-block}
+.dg.roll{animation:roll .28s cubic-bezier(.2,.8,.2,1)}
+@keyframes roll{from{transform:translateY(.55em);opacity:0}}
+
+.hist-btn{margin-top:12px;height:38px;padding:0 15px;border:1.5px solid var(--key-hi);border-radius:19px;background:none;color:var(--text);
+  font-weight:700;font-size:14px;display:inline-flex;align-items:center;gap:8px;transition:transform .15s ease-out}
+.hist-btn:active{transform:scale(.97)}
+.hist-n{min-width:20px;height:20px;padding:0 6px;border-radius:10px;background:var(--shu);color:#fff;
+  font-weight:900;font-size:12px;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
+
+/* ---------- the settlement slip ---------- */
+.slip{position:relative;margin:0 var(--gr) 0 var(--gl);padding:15px 14px 11px;background:var(--paper);color:var(--print);border-radius:3px}
+.slip.shake{animation:shake .2s ease-out}
+@keyframes shake{0%{transform:translate(0,4px) rotate(.4deg)}45%{transform:translate(-2px,-1px)}75%{transform:translate(1px,1px)}}
+.slip-t{text-align:center;padding-bottom:9px;border-bottom:3px double var(--print)}
+.slip-t b{display:block;font-size:19px;font-weight:900;letter-spacing:.34em;margin-right:-.34em}
+.slip-t span{font-size:12px;font-weight:700}
+.s-row{display:grid;grid-template-columns:minmax(0,1fr) 84px;align-items:center;min-height:98px;border-bottom:1px solid rgba(21,18,15,.2)}
+.s-row:last-child{border-bottom:0}
+.s-none{min-height:64px}
+.s-who{font-size:15.5px;font-weight:900}
+.s-amt{font-size:33px;line-height:1.12;font-weight:900;letter-spacing:-.01em;margin:1px 0 2px;font-variant-numeric:tabular-nums}
+.s-sub{font-size:13px;font-weight:500}
+.pt{font-variant-numeric:normal}
+.spot{position:relative;width:78px;height:78px;justify-self:end;border:0;background:none;padding:0;display:grid;place-items:center}
+.ghost{width:66px;height:66px;border-radius:50%;border:2px dashed rgba(214,60,30,.55);display:grid;place-items:center;
+  font-family:var(--seal);font-size:32px;color:rgba(214,60,30,.32);transition:transform .15s ease-out,border-color .2s,color .2s}
+.spot:active .ghost{transform:scale(.95)}
+.spot.is-armed .ghost{border-style:solid;border-color:var(--shu);color:rgba(214,60,30,.6)}
+.stamp{position:absolute;inset:0;transform:rotate(var(--rot));mix-blend-mode:multiply}
+.stamp.hit{animation:hit .22s both}
+@keyframes hit{
+  0%{transform:rotate(var(--rot)) scale(2.5);opacity:0;animation-timing-function:cubic-bezier(.7,0,1,.7)}
+  62%{transform:rotate(var(--rot)) scale(.92);opacity:1}
+  100%{transform:rotate(var(--rot)) scale(1);opacity:1}}
+.slip-f{padding-top:10px;font-size:13px;font-weight:500}
+
+/* ---------- the till receipt ---------- */
+.rc{position:relative;margin:26px var(--gr) 10px var(--gl);padding:16px 14px 14px;background:var(--paper);color:var(--print);
+  font-weight:700;font-size:15.5px;line-height:1.3}
+.rc:empty{display:none}
+.rc::before,.rc::after{content:"";position:absolute;left:0;right:0;height:8px}
+.rc::before{bottom:100%;background:linear-gradient(45deg,var(--paper) 4px,transparent 0) 0 100%/8px 8px repeat-x,linear-gradient(-45deg,var(--paper) 4px,transparent 0) 0 100%/8px 8px repeat-x}
+.rc::after{top:100%;background:linear-gradient(135deg,var(--paper) 4px,transparent 0) 0 0/8px 8px repeat-x,linear-gradient(-135deg,var(--paper) 4px,transparent 0) 0 0/8px 8px repeat-x}
+.rc-h{text-align:center;font-size:14px}
+.rc-no{font-family:var(--dot);font-weight:400;font-size:14px;opacity:.75;margin-top:2px}
+.rc-h b{display:block;font-family:var(--f);font-weight:900;font-size:24px;letter-spacing:.3em;margin-right:-.3em;line-height:1.3}
+.rc-fresh{margin:6px auto 0;display:block;border:0;background:none;color:var(--print);padding:6px 10px;min-height:32px;
+  font-weight:700;font-size:13px;text-decoration:underline dotted;text-underline-offset:3px;font-variant-numeric:tabular-nums}
+.rc-fresh:active{transform:scale(.97)}
+.rule{border-top:1.5px dashed rgba(21,18,15,.6);margin:11px 0}
+.rc-day{display:flex;align-items:baseline;gap:8px;font-weight:900;font-size:16px;padding-bottom:3px}
+.rc-day i{font-weight:500;font-size:12.5px;opacity:.62}
+.rc-city{margin-left:auto;font-weight:700;font-size:13px;white-space:nowrap}
+.rc-row{display:grid;grid-template-columns:30px minmax(0,1fr) auto;column-gap:9px;align-items:center;min-height:40px;padding:4px 0;
+  border-bottom:1px solid rgba(21,18,15,.1);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.rc-row:active{background:rgba(21,18,15,.07)}
+.rc-t{min-width:0;overflow-wrap:anywhere}
+.rc-amt{font-weight:900;font-size:17px;white-space:nowrap;font-variant-numeric:tabular-nums}
+.rc-row small{display:block;font-size:12.5px;font-weight:500;line-height:1.3;opacity:.7}
+.rc-row .rc-note{opacity:.85}
+.rc-row.print{overflow:hidden;animation:print .4s steps(5,end) both}
+@keyframes print{from{max-height:0;min-height:0;padding:0}to{max-height:64px}}
+.rc-row.is-pending{opacity:.55}
+.rc-row.is-failed small.rc-fail{color:var(--shu);opacity:1;font-weight:700}
+.rc-row.is-new .rc-amt::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--shu);margin-right:7px;vertical-align:.18em}
+.mini{width:30px;height:30px;border-radius:50%;border:1.7px solid var(--shu);color:var(--shu);display:grid;place-items:center;
+  font-weight:900;font-size:11px;letter-spacing:0}
+.rc-sub{display:flex;justify-content:flex-end;align-items:baseline;gap:12px;padding-top:7px;font-size:13px;font-weight:500}
+.rc-sub b{font-weight:900;font-size:17px;font-variant-numeric:tabular-nums}
+.rc-sub .rc-cad{font-size:13.5px;opacity:.7}
+.rc-empty{display:flex;justify-content:space-between;align-items:center;font-weight:500;font-size:14.5px;min-height:40px}
+.rc-empty button{border:1.5px solid var(--print);background:none;color:var(--print);padding:0 13px;height:34px;border-radius:3px;font-weight:900;font-size:14px}
+.rc-empty button:active{transform:scale(.97)}
+.rc-tot{display:flex;justify-content:space-between;align-items:baseline;font-size:17px;font-weight:900}
+.rc-tot b{font-size:32px;line-height:1.15;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
+.rc-f{text-align:center;font-size:13.5px}
+.rc-f i{display:block;font-family:var(--dot);font-weight:400;font-size:14px;opacity:.75}
+.bars{width:178px;height:34px;margin:12px auto 2px;background:repeating-linear-gradient(90deg,var(--print) 0 2px,transparent 2px 3px,var(--print) 3px 4px,transparent 4px 7px,var(--print) 7px 10px,transparent 10px 12px,var(--print) 12px 13px,transparent 13px 16px,var(--print) 16px 18px,transparent 18px 19px)}
+
+/* ---------- the bottom bar ---------- */
+.nav{position:absolute;left:0;right:0;bottom:0;z-index:6;height:calc(74px + env(safe-area-inset-bottom, 0px));display:flex;justify-content:flex-start;gap:14px;align-items:center;
+  padding:0 var(--gr) env(safe-area-inset-bottom, 0px) calc(var(--gl) - 6px);
+  background:linear-gradient(to top,var(--ground) 68%,transparent);transition:opacity .16s}
+.nav button{border:0;background:none;color:var(--dim);display:grid;justify-items:center;font-weight:900;font-size:17px;line-height:1.2;padding:6px 10px}
+.nav button small{font-size:11px;font-weight:700}
+.nav button.is-active{color:var(--text)}
+.nav .ring{margin-left:auto;display:block;height:48px;padding:0 20px;border-radius:24px;background:var(--paper);color:var(--print);font-size:15.5px;transition:transform .15s ease-out}
+.nav .ring:active{transform:scale(.97)}
+.nav .ring[hidden]{display:none}
+.phone.reg-open .nav{opacity:0;pointer-events:none}

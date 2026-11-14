@@ -1,0 +1,180 @@
+// The shell, first open and the receipt (Task 7).
+
+const assert = require("node:assert/strict");
+const { ORIGIN, SEED, NOON12, open, until, text, expectText, visible } = require("./helpers.cjs");
+
+const NAMES = ["Mo", "Ajen", "Trenton"];
+const lib = async () => ({ ...(await import("../../js/money.js")), ...(await import("../../js/format.js")) });
+const live = (seed) => seed.expenses.filter((e) => !e.deleted);
+const rowCount = (page) => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length);
+const waitRows = (page, n) => until(async () => (await rowCount(page)) === n, "expected " + n + " receipt rows");
+
+function withExtras(extra = {}) {
+  const seed = JSON.parse(JSON.stringify(SEED));
+  if (extra.expenses) seed.expenses.push(...extra.expenses);
+  if (extra.days) seed.days = extra.days;
+  if (extra.patch) for (const [id, p] of Object.entries(extra.patch)) Object.assign(seed.expenses.find((e) => e.id === id), p);
+  return seed;
+}
+
+const BOARD = {
+  id: "seedexp010", day: "pre", title: "Board rental", amount: 730, currency: "CAD", rate: 111,
+  paidBy: "Ajen", split: ["Mo", "Ajen", "Trenton"], splitMode: "equal", splitVals: [], note: "", kind: "", addedBy: "Ajen", deleted: false,
+};
+
+module.exports = [
+  {
+    name: "sentence, summary and receipt from the standard seed",
+    async run({ page }) {
+      const { balances, owedList, standing, sentence, jpyOf, cadCents, yen, dollars } = await lib();
+      await open(page, { seed: SEED, nowMs: NOON12 });
+      await waitRows(page, 8);
+
+      const exps = live(SEED);
+      const bal = balances(NAMES, exps, []);
+      await expectText(page, "#say", sentence(standing("Mo", owedList(NAMES, exps, [], true), bal)));
+      const cents = exps.reduce((a, e) => a + cadCents(e), 0);
+      await expectText(page, "#sayP", "The trip so far is ¥438,340, about " + dollars(cents) + ", across 8 receipts.");
+      assert.equal(dollars(cents), "$3,949.01");
+
+      const heads = await page.$$eval("#rc .rc-day", (els) => els.map((e) => e.textContent));
+      assert.equal(heads.length, 4, "four day headings");
+      assert.match(heads[0], /出発前/);
+      assert.match(heads[1], /Dec 10/);
+      assert.match(heads[2], /Dec 11/);
+      assert.match(heads[3], /Dec 12/);
+
+      const rows = await page.$$eval("#rc .rc-row[data-id]", (els) => els.map((e) => e.textContent));
+      assert.equal(rows.length, 8);
+      assert.ok(!rows.some((t) => t.includes("Konbini snacks")), "deleted line is not shown");
+
+      assert.equal(await page.locator('.rc-group[data-day="2026-12-12"] .rc-empty').count(), 1, "Dec 12 is empty");
+      assert.equal(await page.locator('.rc-group[data-day="2026-12-12"] [data-addday="2026-12-12"]').count(), 1);
+
+      // Every day's subtotal: 小計, the day's yen and its dollars.
+      for (const day of ["pre", "2026-12-10", "2026-12-11"]) {
+        const list = exps.filter((e) => e.day === day);
+        const sub = await text(page, '.rc-group[data-day="' + day + '"] .rc-sub');
+        assert.ok(sub.includes("小計"), day + " subtotal says 小計");
+        assert.ok(sub.includes(yen(list.reduce((a, e) => a + jpyOf(e), 0))), day + " subtotal yen: " + sub);
+        assert.ok(sub.includes(dollars(list.reduce((a, e) => a + cadCents(e), 0))), day + " subtotal dollars: " + sub);
+      }
+      assert.ok((await text(page, '.rc-group[data-day="2026-12-11"] .rc-sub')).includes("¥27,400"));
+
+      assert.ok((await text(page, '.rc-row[data-id="seedexp008"]')).includes("Ajen + Trenton only"));
+      await expectText(page, '.rc-row[data-id="seedexp001"] .rc-note', "ref NK-4471");
+      assert.equal(await page.locator("#rc .rc-note").count(), 1, "only the line with a note has .rc-note");
+
+      const tot = await text(page, "#rc .rc-tot");
+      assert.ok(tot.includes("合計") && tot.includes("¥438,340"), "total: " + tot);
+      assert.ok((await text(page, "#rc .rc-f")).includes("毎度ありがとうございます"));
+
+      assert.ok(await visible(page, "#nav #youBtn"));
+      assert.ok(await visible(page, "#nav #ring"));
+      assert.ok(await visible(page, "#histBtn"));
+      assert.equal(await visible(page, "#histN"), false, "no new lines, no count");
+      assert.equal(await visible(page, "#first"), false);
+      assert.equal(await visible(page, "#how"), false);
+
+      const { sw, cw } = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
+      assert.equal(sw, cw, "no sideways scroll");
+    },
+  },
+  {
+    name: "day cities, and a dollar line shows dollars",
+    async run({ page }) {
+      const seed = withExtras({ expenses: [BOARD], days: { "2026-12-11": { city: "Tokyo" } } });
+      await open(page, { seed, nowMs: NOON12 });
+      await waitRows(page, 9);
+      await expectText(page, '.rc-group[data-day="2026-12-11"] .rc-day .rc-city', "Tokyo");
+      assert.equal(await page.locator('.rc-group[data-day="2026-12-10"] .rc-city').count(), 0, "no city, none shown");
+      await expectText(page, '.rc-row[data-id="seedexp010"] .rc-amt', "$730.00");
+      assert.ok((await text(page, '.rc-group[data-day="pre"] .rc-sub')).includes("¥480,030"));
+    },
+  },
+  {
+    name: "the last-updated time, and tapping it refreshes",
+    async run({ page }) {
+      const backend = await open(page, { seed: SEED, nowMs: NOON12 });
+      await expectText(page, "#fresh", "Up to date 13:20");
+      const loads = () => backend.requests.filter((r) => r.action === "load").length;
+      await until(() => loads() === 1, "one load at boot");
+      await page.click("#fresh");
+      await until(() => loads() === 2, "tapping #fresh loads again");
+    },
+  },
+  {
+    name: "lines added by someone else since you looked are marked new",
+    async run({ page }) {
+      const half = new Date(NOON12 - 30 * 60 * 1000).toISOString();
+      const seed = withExtras({ patch: { seedexp007: { addedAt: half }, seedexp009: { addedAt: half } } });
+      // The store keeps mat.seen as milliseconds (String(Date.now())).
+      await open(page, { seed, nowMs: NOON12, storage: { "mat.seen": String(NOON12 - 60 * 60 * 1000) } });
+      await waitRows(page, 8);
+      await until(() => page.evaluate(() => document.querySelector('.rc-row[data-id="seedexp007"]').classList.contains("is-new")), "Shibuya Sky is new");
+      assert.equal(await page.locator('.rc-row[data-id="seedexp009"].is-new').count(), 0, "Mo's own Coffee is not new");
+      assert.equal(await page.locator("#rc .rc-row.is-new").count(), 1);
+      await expectText(page, "#histN", "1");
+      assert.ok(await visible(page, "#histN"));
+
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+        Object.defineProperty(document, "hidden", { value: true, configurable: true });
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await until(() => page.evaluate(() => Number(localStorage.getItem("mat.seen")) >= Date.now()), "hiding the page stores mat.seen");
+      await page.reload();
+      await waitRows(page, 8);
+      assert.equal(await page.locator("#rc .rc-row.is-new").count(), 0, "nothing new after looking");
+      assert.equal(await visible(page, "#histN"), false);
+    },
+  },
+  {
+    name: "no key: says so and loads nothing",
+    async run({ page }) {
+      const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null });
+      await expectText(page, "#gate", "This link is missing its key. Ask Mo to send you the trip link again.");
+      assert.ok(await visible(page, "#gate"));
+      assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0, "#rc is empty");
+      assert.equal(backend.requests.length, 0, "no calls without a key");
+    },
+  },
+  {
+    name: "not connected: says so and calls nothing",
+    async run({ page }) {
+      await page.goto(ORIGIN + "/");
+      await expectText(page, "#gate", "This app isn't connected yet.");
+      assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0);
+    },
+  },
+  {
+    name: "first open: which one are you, then how this works",
+    async run({ page }) {
+      await open(page, { seed: SEED, nowMs: NOON12, key: null, me: null, hash: "#k=test-key" });
+      await until(() => visible(page, "#first"), "#first shows");
+      assert.equal(await page.locator("#first [data-me]").count(), 3, "three seals");
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), "test-key");
+      assert.equal(await visible(page, "#how"), false);
+
+      await page.click('#first [data-me="Ajen"]');
+      await until(() => page.evaluate(() => localStorage.getItem("mat.me") === "Ajen"), "mat.me stored");
+      assert.equal(await page.evaluate(() => location.hash), "");
+      assert.ok(!(await page.evaluate(() => location.href)).includes("k="), "key gone from the address");
+      await until(() => visible(page, "#how"), "#how shows");
+      assert.equal(await visible(page, "#first"), false);
+      const lines = await page.$$eval("#how .how-l", (els) => els.map((e) => e.textContent.trim()));
+      assert.deepEqual(lines, ["Ring up what you paid.", "The slip says who pays whom.", "Stamp it the moment you send."]);
+
+      await page.click("#howOk");
+      await until(() => page.evaluate(() => localStorage.getItem("mat.how") === "1"), "mat.how stored");
+      await until(async () => !(await visible(page, "#how")), "#how closes");
+      await waitRows(page, 8);
+      assert.ok(await visible(page, "#rc"));
+
+      await page.reload();
+      await waitRows(page, 8);
+      assert.equal(await visible(page, "#first"), false, "no identity sheet on the next load");
+      assert.equal(await visible(page, "#how"), false, "no how-this-works on the next load");
+    },
+  },
+];

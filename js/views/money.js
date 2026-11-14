@@ -1,0 +1,211 @@
+// The Money screen: where you stand, the settlement slip and the till receipt.
+// mountMoney(root, store, { onRing(day), onLine(id), onHistory() }) draws into
+// root and redraws on every store change. Every figure comes from money.js and
+// format.js; text from people or the Sheet goes in with textContent only.
+
+import { balances, owedList, standing, jpyOf, cadCents, shares } from "../money.js";
+import { tripDay } from "../time.js";
+import { yen, dollars, typed, dayHead, issuer, pt, clock, sentence, tripSpan } from "../format.js";
+
+const NO_SIGNAL = "Couldn't reach the trip sheet.";
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+// An element whose content is a figure: pt() escapes it before adding spans.
+function fig(tag, cls, str) {
+  const n = el(tag, cls);
+  n.innerHTML = pt(str);
+  return n;
+}
+
+const sum = (list, f) => list.reduce((a, x) => a + f(x), 0);
+const after = (iso, ms) => ms !== null && typeof iso === "string" && Date.parse(iso) > ms;
+
+// Added by someone else since the viewer last looked.
+export function isNewLine(e, me, seenAt) {
+  return !!e.addedBy && e.addedBy !== me && after(e.addedAt, seenAt);
+}
+
+function isNewStamp(p, me, seenAt) {
+  return !p.removed && !!p.stampedBy && p.stampedBy !== me && after(p.stampedAt, seenAt);
+}
+
+// "pre", then each trip day up to today (all of them after the trip), and any
+// later day that already has a line; oldest first.
+function receiptDays(s, live, nowMs) {
+  const today = tripDay(s.trip, nowMs);
+  const dates = new Set();
+  for (const d of s.days) {
+    if (d.date && (today === "post" || (today !== "pre" && d.date <= today))) dates.add(d.date);
+  }
+  for (const e of live) if (e.day !== "pre") dates.add(e.day);
+  return ["pre", ...[...dates].sort()];
+}
+
+// The slip, as a plain list of what is owed now. Task 10 replaces this with
+// js/views/slip.js (stamping, Simplify, the working).
+function drawSlip(slip, list, me) {
+  const who = (name, cap) => (name === me ? (cap ? "You" : "you") : name);
+  const head = el("div", "slip-t");
+  head.append(el("b", "", "旅費精算書"), el("span", "", "Trip settlement"));
+  const rows = list.map((t) => {
+    const row = el("div", "s-row");
+    const left = el("div");
+    left.append(el("div", "s-who", who(t.from, true) + " → " + who(t.to)), fig("div", "s-amt", dollars(t.cents)));
+    const spot = el("span", "spot");
+    spot.append(el("span", "ghost", "済"));
+    row.append(left, spot);
+    return row;
+  });
+  if (!rows.length) rows.push(el("div", "s-row s-none", "Nobody owes anybody."));
+  slip.replaceChildren(head, ...rows);
+}
+
+function drawLine(e, ctx) {
+  const row = el("div", "rc-row");
+  row.dataset.id = e.id;
+  row.setAttribute("role", "button");
+  row.tabIndex = 0;
+  if (e.pending) row.classList.add("is-pending");
+  if (e.failed) row.classList.add("is-failed");
+  if (isNewLine(e, ctx.me, ctx.seenAt)) row.classList.add("is-new");
+
+  const payer = ctx.people.find((p) => p.name === e.paidBy);
+  const t = el("span", "rc-t", e.title);
+  if (e.note) t.append(el("small", "rc-note", e.note));
+  const notes = [];
+  if (!ctx.names.every((n) => e.split.includes(n))) notes.push(e.split.join(" + ") + " only");
+  if (e.splitMode && e.splitMode !== "equal") notes.push("uneven");
+  if (notes.length) t.append(el("small", "", notes.join(" · ")));
+  if (e.failed) t.append(el("small", "rc-fail", "not saved, tap to retry"));
+  row.append(el("span", "mini", (payer && payer.initials) || String(e.paidBy).slice(0, 2).toUpperCase()), t, fig("span", "rc-amt", typed(e)));
+  return row;
+}
+
+function drawDay(day, lines, ctx) {
+  const group = el("section", "rc-group");
+  group.dataset.day = day;
+  const h = dayHead(day, ctx.days);
+  const head = el("div", "rc-day");
+  head.append(el("span", "", h.en), el("i", "", h.jp));
+  if (h.city) head.append(el("span", "rc-city", h.city));
+  group.append(head);
+  if (!lines.length) {
+    const empty = el("div", "rc-empty");
+    const add = el("button", "", "Ring up");
+    add.type = "button";
+    add.dataset.addday = day;
+    empty.append(el("span", "", "Nothing rung up yet"), add);
+    group.append(empty);
+  } else {
+    for (const e of lines) group.append(drawLine(e, ctx));
+    const sub = el("div", "rc-sub");
+    sub.append(el("span", "", "小計 subtotal"), fig("b", "rc-cad", dollars(sum(lines, cadCents))), fig("b", "", yen(sum(lines, jpyOf))));
+    group.append(sub);
+  }
+  group.append(el("div", "rule"));
+  return group;
+}
+
+function drawReceipt(rc, s, live, ctx) {
+  const head = el("div", "rc-h");
+  head.append(el("b", "", issuer(s.people)), document.createTextNode([s.trip.name, tripSpan(s.trip)].filter(Boolean).join(", ")));
+  head.append(el("div", "rc-no", "レシート No." + String(live.length).padStart(4, "0")));
+  if (s.loadedAt !== null) {
+    const fresh = el("button", "rc-fresh", "Up to date " + clock(s.loadedAt));
+    fresh.type = "button";
+    fresh.id = "fresh";
+    head.append(fresh);
+  }
+
+  // Lines in the order they were added (the sort is stable).
+  const byAdded = live.slice().sort((a, b) => ((a.addedAt || "") < (b.addedAt || "") ? -1 : (a.addedAt || "") > (b.addedAt || "") ? 1 : 0));
+  const days = receiptDays(s, live, ctx.nowMs).map((day) => drawDay(day, byAdded.filter((e) => e.day === day), ctx));
+
+  const totalYen = sum(live, jpyOf);
+  const tot = el("div", "rc-tot");
+  tot.append(el("span", "", "合計 Total"), fig("b", "", yen(totalYen)));
+  const inDollars = el("div", "rc-sub");
+  inDollars.append(el("span", "", "in dollars"), fig("b", "", dollars(sum(live, cadCents))));
+  const each = el("div", "rc-sub");
+  each.append(el("span", "", "1人あたり each, about"), fig("b", "", yen(shares(totalYen, ctx.names)[ctx.names[0]])));
+  const foot = el("div", "rc-f");
+  foot.append(el("i", "", "毎度ありがとうございます"), document.createTextNode("Thank you, come again."), el("div", "bars"));
+
+  rc.replaceChildren(head, el("div", "rule"), ...days, tot, inDollars, each, el("div", "rule"), foot);
+}
+
+export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, onHistory = () => {}, now = () => Date.now() } = {}) {
+  const say = el("h1");
+  say.id = "say";
+  const sayP = el("p");
+  sayP.id = "sayP";
+  const histBtn = el("button", "hist-btn", "履歴 History");
+  histBtn.type = "button";
+  histBtn.id = "histBtn";
+  const histN = el("span", "hist-n");
+  histN.id = "histN";
+  histN.hidden = true;
+  histBtn.append(histN);
+  const top = el("div", "say");
+  top.append(say, sayP, histBtn);
+  const slip = el("div", "slip");
+  slip.id = "slip";
+  const rc = el("div", "rc");
+  rc.id = "rc";
+  root.replaceChildren(top, slip, rc);
+
+  histBtn.addEventListener("click", () => onHistory());
+  const act = (target) => {
+    if (target.closest("#fresh")) return store.refresh();
+    const add = target.closest("[data-addday]");
+    if (add) return onRing(add.dataset.addday);
+    const row = target.closest(".rc-row[data-id]");
+    if (!row) return;
+    if (row.classList.contains("is-failed")) return store.retry(row.dataset.id);
+    onLine(row.dataset.id);
+  };
+  rc.addEventListener("click", (ev) => act(ev.target));
+  rc.addEventListener("keydown", (ev) => {
+    if ((ev.key === "Enter" || ev.key === " ") && ev.target.matches(".rc-row[data-id]")) {
+      ev.preventDefault();
+      act(ev.target);
+    }
+  });
+
+  function render(s) {
+    const names = s.people.map((p) => p.name);
+    if (!s.trip || !s.trip.start || !names.length) {
+      say.textContent = "";
+      sayP.textContent = s.status === "error" ? NO_SIGNAL : "";
+      histBtn.hidden = true;
+      slip.hidden = true;
+      rc.replaceChildren();
+      return;
+    }
+    histBtn.hidden = false;
+    slip.hidden = false;
+    const live = s.expenses.filter((e) => !e.deleted);
+    const mine = s.people.find((p) => p.name === s.me);
+    const list = owedList(names, live, s.payments, mine ? mine.simplify !== false : true);
+    say.textContent = s.me ? sentence(standing(s.me, list, balances(names, live, s.payments))) : "";
+    sayP.textContent = "The trip so far is " + yen(sum(live, jpyOf)) + ", about " + dollars(sum(live, cadCents)) +
+      ", across " + live.length + (live.length === 1 ? " receipt." : " receipts.");
+
+    const ctx = { me: s.me, seenAt: s.seenAt, people: s.people, names, days: s.days, nowMs: now() };
+    const fresh = live.filter((e) => isNewLine(e, s.me, s.seenAt)).length + s.payments.filter((p) => isNewStamp(p, s.me, s.seenAt)).length;
+    histN.textContent = String(fresh);
+    histN.hidden = fresh === 0;
+
+    drawSlip(slip, list, s.me);
+    drawReceipt(rc, s, live, ctx);
+  }
+
+  render(store.state);
+  store.subscribe(render);
+}
