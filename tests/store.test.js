@@ -1,0 +1,838 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import { createApi } from "../js/api.js";
+import { createStore } from "../js/store.js";
+
+const require = createRequire(import.meta.url);
+const { createFakeBackend } = require("./fake-backend.cjs");
+const SEED = require("./fixtures/seed.json");
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const KEY = "test-key";
+const URL = "https://example.test/exec";
+const NOW = Date.UTC(2026, 11, 11, 3);
+const ALL = ["Mo", "Ajen", "Trenton"];
+const UNDO_FAILED = "Couldn't undo that. Try again from History.";
+const STALE = "That was changed again since. Undo the newer change first.";
+
+// ---------- helpers ----------
+
+function memStorage(init = {}) {
+  const map = new Map(Object.entries(init));
+  return {
+    map,
+    getItem: (k) => (map.has(k) ? map.get(k) : null),
+    setItem: (k, v) => { map.set(k, String(v)); },
+  };
+}
+
+// One phone: a store on its own (or a shared) storage, talking to a fake
+// backend through createApi with a controllable network.
+//   net.offline        every request fails like a dropped connection
+//   net.failing        actions that fail like a dropped connection
+//   net.override(body) return an envelope to answer instead of the backend
+//   net.hold(action)   the next response for that action waits for release()
+function phone({ seed, fake, storage, me = "Mo" } = {}) {
+  fake = fake || createFakeBackend(seed);
+  storage = storage || memStorage({ "mat.key": KEY, "mat.me": me });
+  const net = { offline: false, failing: new Set(), override: null, holds: [], sent: [] };
+  net.hold = (action) => {
+    let release;
+    const promise = new Promise((r) => { release = r; });
+    net.holds.push({ action, promise, used: false });
+    return release;
+  };
+  const fetchImpl = async (url, init) => {
+    const body = JSON.parse(init.body);
+    net.sent.push(body);
+    if (net.offline || net.failing.has(body.action)) throw new TypeError("Failed to fetch");
+    let env = net.override ? net.override(body) : null;
+    if (!env) env = await fake(body);
+    const hold = net.holds.find((h) => h.action === body.action && !h.used);
+    if (hold) {
+      hold.used = true;
+      await hold.promise;
+    }
+    return { ok: true, status: 200, text: async () => JSON.stringify(env) };
+  };
+  const api = createApi({ url: URL, getKey: () => storage.getItem("mat.key"), getActor: () => storage.getItem("mat.me"), fetchImpl });
+  const waits = [];
+  const store = createStore({ api, storage, now: () => NOW, wait: async (ms) => { waits.push(ms); } });
+  return { fake, storage, net, api, store, waits };
+}
+
+// Straight to the backend, as another phone would.
+async function backend(fake, action = "load", args = {}, actor = "Ajen") {
+  const r = await fake({ key: KEY, actor, action, args });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  return r.data;
+}
+
+const sent = (fake, action) => fake.requests.filter((r) => r.action === action).length;
+const queueOf = (storage) => JSON.parse(storage.getItem("mat.queue") || "[]");
+const byId = (list, id) => list.find((x) => x.id === id);
+
+function draft(over = {}) {
+  return { day: "2026-12-11", title: "Dinner", amount: 14500, currency: "JPY", paidBy: "Mo", split: ALL.slice(), splitMode: "equal", splitVals: [], note: "", kind: "", ...over };
+}
+
+// The id of the line a write token made.
+function idOf(store) {
+  return store.state.lastChange.item.id;
+}
+
+// ---------- api ----------
+
+test("api posts { key, actor, via, action, args } as text/plain and resolves { rev, data }", async () => {
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    calls.push({ url, init });
+    return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, rev: 7, data: { hello: 1 } }) };
+  };
+  let actor = "Mo";
+  const api = createApi({ url: URL, getKey: () => "sekret-key", getActor: () => actor, fetchImpl });
+  actor = "Ajen"; // read at call time
+  const r = await api("load", { a: 1 });
+  assert.deepEqual(r, { rev: 7, data: { hello: 1 } });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, URL);
+  assert.equal(calls[0].url.includes("sekret"), false);
+  assert.equal(calls[0].init.method, "POST");
+  assert.equal(calls[0].init.headers["Content-Type"], "text/plain;charset=utf-8");
+  assert.deepEqual(JSON.parse(calls[0].init.body), { key: "sekret-key", actor: "Ajen", via: "app", action: "load", args: { a: 1 } });
+});
+
+test("api rejects with the backend's error code, network when fetch fails, server on a bad reply, and never shows the key", async () => {
+  const reply = (text) => async () => ({ ok: true, status: 200, text: async () => text });
+  const make = (fetchImpl) => createApi({ url: URL, getKey: () => "sekret-key", getActor: () => "Mo", fetchImpl });
+  const cases = [
+    [reply(JSON.stringify({ ok: false, error: "stale", message: "Too late." })), "stale"],
+    [async () => { throw new TypeError("Failed to fetch"); }, "network"],
+    [reply("<html>oops</html>"), "server"],
+    [reply(JSON.stringify({ rev: 1, data: {} })), "server"],
+    [reply(JSON.stringify({ ok: "yes" })), "server"],
+  ];
+  for (const [fetchImpl, code] of cases) {
+    const err = await make(fetchImpl)("load").then(() => null, (e) => e);
+    assert.ok(err instanceof Error, code);
+    assert.equal(err.code, code);
+    assert.equal(String(err.message).includes("sekret"), false);
+    assert.equal(String(err.stack).includes("sekret"), false);
+  }
+});
+
+test("api uses MAT_FAKE_API in place of fetch, and a rejection from it is a network failure", async () => {
+  const bodies = [];
+  let fetched = 0;
+  const api = createApi({ url: URL, getKey: () => KEY, getActor: () => "Mo", fetchImpl: async () => { fetched++; } });
+  try {
+    globalThis.MAT_FAKE_API = async (body) => { bodies.push(body); return { ok: true, rev: 3, data: { x: 1 } }; };
+    assert.deepEqual(await api("rev", {}), { rev: 3, data: { x: 1 } });
+    assert.deepEqual(bodies, [{ key: KEY, actor: "Mo", via: "app", action: "rev", args: {} }]);
+    globalThis.MAT_FAKE_API = () => Promise.reject(new Error("bridge down"));
+    const err = await api("rev", {}).then(() => null, (e) => e);
+    assert.equal(err.code, "network");
+    assert.equal(fetched, 0);
+  } finally {
+    delete globalThis.MAT_FAKE_API;
+  }
+});
+
+// ---------- boot ----------
+
+test("Boot paints from cache first", async () => {
+  const p = phone({ seed: SEED });
+  const empty = await backend(createFakeBackend());
+  const cached = { id: "cached0001", ...draft({ title: "Cached" }), rate: 111, addedBy: "Mo", addedAt: "2026-12-11T01:00:00.000Z", deleted: false };
+  p.storage.setItem("mat.cache", JSON.stringify({ data: { ...empty, expenses: [cached] }, rev: 0, loadedAt: 1000 }));
+  const release = p.net.hold("load");
+  const seen = [];
+  p.store.subscribe((s) => seen.push({ ids: s.expenses.map((e) => e.id), loadedAt: s.loadedAt }));
+  const booting = p.store.boot();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.ok(seen.length >= 1);
+  assert.deepEqual(seen[0].ids, ["cached0001"]);
+  assert.equal(seen[0].loadedAt, 1000);
+  assert.equal(p.store.state.status, "ready");
+  release();
+  await booting;
+  const server = await backend(p.fake);
+  assert.deepEqual(p.store.state.expenses, server.expenses);
+  assert.deepEqual(p.store.state.people, server.people);
+  assert.equal(p.store.state.status, "ready");
+  assert.equal(p.store.state.loadedAt, NOW);
+  assert.equal(p.store.state.online, true);
+  assert.equal(p.store.state.me, "Mo");
+  const cache = JSON.parse(p.storage.getItem("mat.cache"));
+  assert.equal(cache.loadedAt, NOW);
+  assert.equal(cache.data.expenses.length, 9);
+});
+
+test("No key", async () => {
+  const p = phone({ storage: memStorage({ "mat.me": "Mo" }) });
+  await p.store.boot();
+  assert.equal(p.store.state.status, "nokey");
+  assert.equal(p.net.sent.length, 0);
+  assert.equal(p.fake.requests.length, 0);
+});
+
+test("Wrong key", async () => {
+  const p = phone({ storage: memStorage({ "mat.key": "not-the-key", "mat.me": "Mo" }) });
+  await p.store.boot();
+  assert.equal(p.store.state.status, "nokey");
+});
+
+test("me is null when mat.me is missing or not one of the people, and setMe stores it", async () => {
+  const a = phone({ storage: memStorage({ "mat.key": KEY }) });
+  await a.store.boot();
+  assert.equal(a.store.state.me, null);
+  a.store.setMe("Ajen");
+  assert.equal(a.store.state.me, "Ajen");
+  assert.equal(a.storage.getItem("mat.me"), "Ajen");
+
+  const b = phone({ storage: memStorage({ "mat.key": KEY, "mat.me": "Zed" }) });
+  await b.store.boot();
+  assert.equal(b.store.state.me, null);
+});
+
+test("corrupt JSON in mat.cache and mat.queue is treated as absent", async () => {
+  const storage = memStorage({ "mat.key": KEY, "mat.me": "Mo", "mat.cache": "{not json", "mat.queue": "[oops" });
+  const p = phone({ seed: SEED, storage });
+  await p.store.boot();
+  assert.equal(p.store.state.status, "ready");
+  assert.equal(p.store.state.expenses.length, 9);
+  assert.equal(sent(p.fake, "addExpense"), 0);
+  // valid JSON of the wrong shape is ignored too
+  const q = phone({ seed: SEED, storage: memStorage({ "mat.key": KEY, "mat.cache": "42", "mat.queue": "{\"a\":1}" }) });
+  await q.store.boot();
+  assert.equal(q.store.state.expenses.length, 9);
+});
+
+test("storage that throws never breaks the store", async () => {
+  const fake = createFakeBackend(SEED);
+  const writesThrow = { getItem: (k) => ({ "mat.key": KEY, "mat.me": "Mo" }[k] ?? null), setItem: () => { throw new Error("QuotaExceededError"); } };
+  const p = phone({ fake, storage: writesThrow });
+  await p.store.boot();
+  assert.equal(p.store.state.status, "ready");
+  p.store.addExpense(draft());
+  p.store.markSeen();
+  p.store.setMe("Ajen");
+  await p.store.idle();
+  assert.equal((await backend(fake)).expenses.length, 10);
+
+  const allThrow = { getItem: () => { throw new Error("SecurityError"); }, setItem: () => { throw new Error("SecurityError"); } };
+  const q = phone({ fake, storage: allThrow });
+  await q.store.boot();
+  assert.equal(q.store.state.status, "nokey");
+});
+
+test("a failed load keeps the cached loadedAt and goes offline; the next good call comes back online", async () => {
+  const first = phone({ seed: SEED });
+  await first.store.boot();
+  const p = phone({ fake: first.fake, storage: first.storage });
+  p.storage.setItem("mat.cache", JSON.stringify({ ...JSON.parse(p.storage.getItem("mat.cache")), loadedAt: 1234 }));
+  p.net.offline = true;
+  await p.store.boot();
+  assert.equal(p.store.state.status, "ready");
+  assert.equal(p.store.state.online, false);
+  assert.equal(p.store.state.loadedAt, 1234);
+  assert.equal(p.store.state.expenses.length, 9);
+  p.net.offline = false;
+  await p.store.checkRev();
+  assert.equal(p.store.state.online, true);
+});
+
+test("with no cache and no signal, boot ends in error", async () => {
+  const p = phone({ seed: SEED });
+  p.net.offline = true;
+  await p.store.boot();
+  assert.equal(p.store.state.status, "error");
+  assert.equal(p.store.state.online, false);
+});
+
+// ---------- writes ----------
+
+test("Optimistic add", async () => {
+  const p = phone();
+  await p.store.boot();
+  const t = p.store.addExpense(draft());
+  assert.equal(typeof t, "string");
+  const id = idOf(p.store);
+  const line = byId(p.store.state.expenses, id);
+  assert.equal(line.pending, true);
+  assert.equal(line.title, "Dinner");
+  assert.equal(line.rate, p.store.state.rateToday);
+  assert.equal(line.rate, 111);
+  assert.deepEqual(p.store.state.lastChange, { token: t, action: "add", kind: "expense", item: p.store.state.lastChange.item, canUndo: true });
+  await p.store.idle();
+  const server = byId((await backend(p.fake)).expenses, id);
+  assert.deepEqual(byId(p.store.state.expenses, id), server);
+  assert.equal("pending" in byId(p.store.state.expenses, id), false);
+  assert.equal(server.addedBy, "Mo");
+});
+
+test("an edit made while the add is in flight reaches the backend after it", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  p.store.updateExpense(id, { amount: 15000 });
+  assert.equal(byId(p.store.state.expenses, id).amount, 15000);
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, id).amount, 15000);
+  assert.equal(byId(p.store.state.expenses, id).amount, 15000);
+  const h = await backend(p.fake, "history", { ref: id });
+  assert.deepEqual(h.entries.map((e) => e.action), ["edit", "add"]);
+});
+
+test("lastChange carries the item as changed, the old copy for an edit, and canUndo", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const t = p.store.updateExpense("seedexp006", { title: "Dinner" });
+  const lc = p.store.state.lastChange;
+  assert.equal(lc.token, t);
+  assert.equal(lc.action, "edit");
+  assert.equal(lc.kind, "expense");
+  assert.equal(lc.item.title, "Dinner");
+  assert.equal(lc.before.title, "Shibuya dinner");
+  assert.equal(lc.canUndo, true);
+  await p.store.idle();
+  for (const [fn, arg, action] of [["deleteExpense", "seedexp006", "delete"], ["restoreExpense", "seedexp006", "restore"]]) {
+    p.store[fn](arg);
+    assert.equal(p.store.state.lastChange.action, action);
+    assert.equal(p.store.state.lastChange.canUndo, true);
+    await p.store.idle();
+  }
+  const pt = p.store.addPayment({ from: "Ajen", to: "Mo", cad: 25 });
+  assert.equal(p.store.state.lastChange.action, "stamp");
+  assert.equal(p.store.state.lastChange.kind, "payment");
+  await p.store.idle();
+  const pid = idOf(p.store);
+  p.store.removePayment(pid);
+  assert.equal(p.store.state.lastChange.action, "unstamp");
+  await p.store.idle();
+  p.store.restorePayment(pid);
+  assert.equal(p.store.state.lastChange.action, "restamp");
+  await p.store.idle();
+  assert.equal(typeof pt, "string");
+});
+
+test("addPayment makes an id, a whole seed from 1 to 999999 and a rot from -13 to 7 with one decimal", async () => {
+  const p = phone();
+  await p.store.boot();
+  for (let i = 0; i < 40; i++) {
+    p.store.addPayment({ from: "Ajen", to: "Mo", cad: 1 + i });
+    const pay = p.store.state.lastChange.item;
+    assert.match(pay.id, /^[A-Za-z0-9]{20}$/);
+    assert.ok(Number.isInteger(pay.seed) && pay.seed >= 1 && pay.seed <= 999999, String(pay.seed));
+    assert.ok(pay.rot >= -13 && pay.rot <= 7, String(pay.rot));
+    assert.equal(Math.round(pay.rot * 10) / 10, pay.rot);
+  }
+  await p.store.idle();
+  assert.equal((await backend(p.fake)).payments.length, 40);
+});
+
+test("Offline queue survives a reload", async () => {
+  const one = phone();
+  await one.store.boot();
+  one.net.offline = true;
+  one.store.addExpense(draft());
+  const id = idOf(one.store);
+  await one.store.idle();
+  assert.equal(byId(one.store.state.expenses, id).pending, true);
+  assert.equal(one.store.state.online, false);
+  assert.deepEqual(queueOf(one.storage).map((q) => q.expense.id), [id]);
+
+  // reload: a new store on the same storage, still without signal
+  const two = phone({ fake: one.fake, storage: one.storage });
+  two.net.offline = true;
+  await two.store.boot();
+  assert.equal(byId(two.store.state.expenses, id).pending, true);
+  assert.equal(byId(two.store.state.expenses, id).title, "Dinner");
+
+  two.net.offline = false;
+  await Promise.all([two.store.flush(), two.store.flush()]);
+  await two.store.flush();
+  await two.store.idle();
+  assert.equal(sent(one.fake, "addExpense"), 1);
+  const server = await backend(one.fake);
+  assert.equal(server.expenses.filter((e) => e.id === id).length, 1);
+  assert.equal("pending" in byId(two.store.state.expenses, id), false);
+  assert.deepEqual(queueOf(two.storage), []);
+
+  // a third load of the page sends nothing more
+  const three = phone({ fake: one.fake, storage: one.storage });
+  await three.store.boot();
+  await three.store.idle();
+  assert.equal(sent(one.fake, "addExpense"), 1);
+});
+
+test("Undoing a queued line means it is never sent", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.offline = true;
+  const t = p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(queueOf(p.storage).length, 1);
+  await p.store.undo(t);
+  assert.equal(byId(p.store.state.expenses, id), undefined);
+  assert.deepEqual(queueOf(p.storage), []);
+  p.net.offline = false;
+  await p.store.flush();
+  await p.store.idle();
+  // a reload sends nothing either
+  const again = phone({ fake: p.fake, storage: p.storage });
+  await again.store.boot();
+  await again.store.idle();
+  assert.equal(sent(p.fake, "addExpense"), 0);
+  assert.equal(sent(p.fake, "undo"), 0);
+  assert.deepEqual((await backend(p.fake)).expenses, []);
+  assert.deepEqual((await backend(p.fake, "history")).entries, []);
+});
+
+test("a queued line undone just after flush() starts is never sent", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.offline = true;
+  const t = p.store.addExpense(draft());
+  await p.store.idle();
+  p.net.offline = false;
+  const flushing = p.store.flush();
+  p.store.undo(t);
+  await flushing;
+  await p.store.idle();
+  assert.equal(sent(p.fake, "addExpense"), 0);
+  assert.deepEqual((await backend(p.fake)).expenses, []);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("an add whose request is still out when it is undone, and then fails, is never queued", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.failing.add("addExpense");
+  const t = p.store.addExpense(draft());
+  const id = idOf(p.store);
+  p.store.undo(t);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, id), undefined);
+  assert.deepEqual(queueOf(p.storage), []);
+  p.net.failing.clear();
+  await p.store.flush();
+  await p.store.idle();
+  assert.deepEqual((await backend(p.fake)).expenses, []);
+});
+
+test("Undo right after a write", async () => {
+  const p = phone();
+  await p.store.boot();
+  const t = p.store.addExpense(draft());
+  const id = idOf(p.store);
+  assert.deepEqual(queueOf(p.storage).map((q) => q.expense.id), [id]); // kept until the backend has it
+  p.store.undo(t);
+  assert.deepEqual(queueOf(p.storage), []); // a reload now must not send it
+  assert.equal(p.store.state.expenses.find((e) => e.id === id && !e.deleted), undefined);
+  assert.equal(p.store.state.lastChange.action, "undo");
+  assert.equal(p.store.state.lastChange.canUndo, false);
+  await p.store.idle();
+  const server = byId((await backend(p.fake)).expenses, id);
+  assert.equal(server.deleted, true);
+  const h = await backend(p.fake, "history");
+  assert.deepEqual(h.entries.map((e) => e.action), ["undo", "add"]);
+  assert.deepEqual(byId(p.store.state.expenses, id), server);
+});
+
+test("Undo of an edit and of a delete", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const t1 = p.store.updateExpense("seedexp004", { amount: 4500 });
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4500);
+  p.store.undo(t1);
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200);
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, "seedexp004").amount, 4200);
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200);
+
+  const t2 = p.store.deleteExpense("seedexp006");
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, true);
+  p.store.undo(t2);
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, false);
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, "seedexp006").deleted, false);
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, false);
+});
+
+test("Undo of a stamp", async () => {
+  const p = phone();
+  await p.store.boot();
+  const t = p.store.addPayment({ from: "Ajen", to: "Mo", cad: 25 });
+  const id = idOf(p.store);
+  await p.store.idle();
+  p.store.undo(t);
+  assert.equal(byId(p.store.state.payments, id).removed, true);
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).payments, id).removed, true);
+  assert.equal(byId(p.store.state.payments, id).removed, true);
+});
+
+test("undo of an unknown or already undone token does nothing", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const t = p.store.deleteExpense("seedexp006");
+  await p.store.idle();
+  await p.store.undo("no-such-token");
+  await p.store.undo(t);
+  await p.store.undo(t);
+  await p.store.idle();
+  assert.equal(sent(p.fake, "undo"), 1);
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, false);
+});
+
+test("A failed undo puts things back", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const t = p.store.updateExpense("seedexp004", { amount: 4500 });
+  await p.store.idle();
+  p.net.failing.add("undo");
+  p.store.undo(t);
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4500);
+  assert.equal(p.store.state.notice, UNDO_FAILED);
+  assert.equal(p.store.state.online, false);
+  assert.equal(byId((await backend(p.fake)).expenses, "seedexp004").amount, 4500);
+});
+
+test("Stale undo from history", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.store.updateExpense("seedexp004", { amount: 4500 });
+  p.store.updateExpense("seedexp004", { amount: 4600 });
+  await p.store.idle();
+  await p.store.loadHistory();
+  const edits = p.store.state.history.entries.filter((e) => e.ref === "seedexp004" && e.action === "edit");
+  assert.equal(edits.length, 2);
+  const older = edits[edits.length - 1];
+  const before = JSON.parse(JSON.stringify(p.store.state.expenses));
+  await p.store.undoEntry(older.id);
+  assert.equal(p.store.state.notice, STALE);
+  assert.deepEqual(p.store.state.expenses, before);
+  assert.equal(byId((await backend(p.fake)).expenses, "seedexp004").amount, 4600);
+});
+
+test("undoEntry undoes a history entry and updates the tape", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  await p.store.loadHistory();
+  const del = p.store.state.history.entries.find((e) => e.ref === "seedexp005" && e.action === "delete");
+  assert.equal(del.canUndo, true);
+  await p.store.undoEntry(del.id);
+  assert.equal(byId(p.store.state.expenses, "seedexp005").deleted, false);
+  assert.equal(p.store.state.lastChange.action, "undo");
+  assert.equal(p.store.state.lastChange.canUndo, false);
+  const top = p.store.state.history.entries[0];
+  assert.equal(top.action, "undo");
+  assert.equal(top.undoes, del.id);
+  assert.equal(top.canUndo, true);
+  const was = p.store.state.history.entries.find((e) => e.id === del.id);
+  assert.equal(was.undoneBy, top.id);
+  assert.equal(was.canUndo, false);
+});
+
+test("Busy is retried", async () => {
+  const p = phone();
+  await p.store.boot();
+  let busy = 1;
+  p.net.override = (body) => (body.action === "addExpense" && busy-- > 0 ? { ok: false, error: "busy", message: "Someone else is saving right now." } : null);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal((await backend(p.fake)).expenses.length, 1);
+  const line = byId(p.store.state.expenses, id);
+  assert.equal("failed" in line, false);
+  assert.equal("pending" in line, false);
+  assert.deepEqual(p.waits, [400]);
+});
+
+test("busy that never clears is tried four times and the line is marked failed", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "busy", message: "Someone else is saving right now." } : null);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(p.net.sent.filter((b) => b.action === "addExpense").length, 4);
+  assert.deepEqual(p.waits, [400, 400, 400]);
+  assert.equal(byId(p.store.state.expenses, id).failed, true);
+});
+
+test("A refused write is marked, not dropped", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "bad_input", message: "Pick a day." } : null);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  const line = byId(p.store.state.expenses, id);
+  assert.equal(line.failed, true);
+  assert.equal("pending" in line, false);
+  assert.equal(line.title, "Dinner");
+  assert.deepEqual(queueOf(p.storage).map((q) => [q.expense.id, q.failed]), [[id, true]]);
+  // a failed line is not resent by flush
+  p.net.override = null;
+  await p.store.flush();
+  assert.equal((await backend(p.fake)).expenses.length, 0);
+});
+
+test("retry resends a failed line with the same id", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "server", message: "Something went wrong." } : null);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, id).failed, true);
+  p.net.override = null;
+  p.store.retry(id);
+  const line = byId(p.store.state.expenses, id);
+  assert.equal(line.pending, true);
+  assert.equal("failed" in line, false);
+  await p.store.idle();
+  const server = (await backend(p.fake)).expenses;
+  assert.deepEqual(server.map((e) => e.id), [id]);
+  assert.deepEqual(byId(p.store.state.expenses, id), server[0]);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("a refused edit is rolled back and its message shown", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.store.updateExpense("seedexp004", { splitMode: "exact", splitVals: [1, 2, 3] });
+  await p.store.idle();
+  const line = byId(p.store.state.expenses, "seedexp004");
+  assert.equal(line.splitMode, "equal");
+  assert.equal("pending" in line, false);
+  assert.equal(typeof p.store.state.notice, "string");
+});
+
+test("Delete and restore roll back offline", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.deleteExpense("seedexp006");
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, true);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, false);
+  assert.equal(p.store.state.online, false);
+  p.store.restoreExpense("seedexp005");
+  assert.equal(byId(p.store.state.expenses, "seedexp005").deleted, false);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp005").deleted, true);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+// ---------- reading ----------
+
+test("checkRev only reloads on change", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  assert.equal(sent(p.fake, "load"), 1);
+  await p.store.checkRev();
+  await p.store.checkRev();
+  assert.equal(sent(p.fake, "load"), 1);
+  await backend(p.fake, "addExpense", { expense: { id: "other00001", ...draft({ title: "Their lunch", paidBy: "Ajen" }) } });
+  await p.store.checkRev();
+  assert.equal(sent(p.fake, "load"), 2);
+  assert.equal(byId(p.store.state.expenses, "other00001").title, "Their lunch");
+});
+
+test("checkRev reloads when the rev goes down too", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  await backend(p.fake, "addExpense", { expense: { id: "other00001", ...draft() } });
+  await p.store.checkRev();
+  assert.equal(p.store.state.rev, 1);
+  p.fake.props.REV = "0"; // settings reset on the backend
+  await p.store.checkRev();
+  assert.equal(sent(p.fake, "load"), 3);
+  assert.equal(p.store.state.rev, 0);
+});
+
+test("own writes do not make checkRev reload, another phone's do", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.store.deleteExpense("seedexp006");
+  await p.store.idle();
+  await p.store.checkRev();
+  assert.equal(sent(p.fake, "load"), 1);
+  await backend(p.fake, "deleteExpense", { id: "seedexp004" });
+  p.store.deleteExpense("seedexp003");
+  await p.store.idle();
+  await p.store.checkRev();
+  assert.equal(sent(p.fake, "load"), 2);
+  assert.equal(byId(p.store.state.expenses, "seedexp004").deleted, true);
+});
+
+test("a load sent before a write settled does not wipe the write", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const release = p.net.hold("load");
+  const refreshing = p.store.refresh(); // backend answers now, reply held
+  await new Promise((r) => setTimeout(r, 0));
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  p.store.deleteExpense("seedexp006");
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, id).title, "Dinner");
+  release();
+  await refreshing;
+  const line = byId(p.store.state.expenses, id);
+  assert.ok(line, "the new line survives the older load");
+  assert.equal("pending" in line, false);
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, true);
+  // and the next load agrees with it
+  await p.store.refresh();
+  assert.equal(byId(p.store.state.expenses, id).title, "Dinner");
+  assert.equal(byId(p.store.state.expenses, "seedexp006").deleted, true);
+});
+
+test("an older load landing after a newer one is ignored", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const release = p.net.hold("load");
+  const first = p.store.refresh();
+  await new Promise((r) => setTimeout(r, 0));
+  await backend(p.fake, "addExpense", { expense: { id: "other00001", ...draft({ title: "Their lunch" }) } });
+  await p.store.refresh();
+  assert.equal(byId(p.store.state.expenses, "other00001").title, "Their lunch");
+  release();
+  await first;
+  assert.equal(byId(p.store.state.expenses, "other00001").title, "Their lunch");
+  assert.equal(p.store.state.rev, 1);
+});
+
+test("refresh keeps lines that are still pending", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.net.failing.add("addExpense");
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  await p.store.refresh();
+  assert.equal(byId(p.store.state.expenses, id).pending, true);
+  assert.equal(p.store.state.expenses.length, 10);
+});
+
+test("Person settings", async () => {
+  const one = phone();
+  const two = phone({ fake: one.fake, storage: memStorage({ "mat.key": KEY, "mat.me": "Ajen" }) });
+  await one.store.boot();
+  await two.store.boot();
+  const saving = one.store.setPerson("Mo", { simplify: false });
+  assert.equal(one.store.state.people.find((x) => x.name === "Mo").simplify, false);
+  await saving;
+  assert.equal((await backend(one.fake)).people.find((x) => x.name === "Mo").simplify, false);
+  assert.equal(one.store.state.people.find((x) => x.name === "Mo").simplify, false);
+  assert.equal(two.store.state.people.find((x) => x.name === "Mo").simplify, true);
+  await two.store.refresh();
+  assert.equal(two.store.state.people.find((x) => x.name === "Mo").simplify, false);
+});
+
+test("a person setting with no signal is rolled back", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.offline = true;
+  const saving = p.store.setPerson("Mo", { simplify: false });
+  assert.equal(p.store.state.people.find((x) => x.name === "Mo").simplify, false);
+  await saving;
+  assert.equal(p.store.state.people.find((x) => x.name === "Mo").simplify, true);
+  assert.equal(p.store.state.online, false);
+});
+
+test("History", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const states = [];
+  p.store.subscribe((s) => states.push(s.history.loading));
+  await p.store.loadHistory();
+  assert.equal(states[0], true);
+  const h = p.store.state.history;
+  assert.equal(h.loading, false);
+  assert.equal(h.entries.length, 10);
+  assert.equal(h.more, false);
+  const ids = h.entries.map((e) => e.id);
+  assert.deepEqual(ids, ids.slice().sort((a, b) => b - a));
+  const five = await p.store.historyFor("seedexp005");
+  assert.equal(five.length, 2);
+  assert.deepEqual(five.map((e) => e.action), ["delete", "add"]);
+  assert.ok(five.every((e) => e.ref === "seedexp005"));
+});
+
+test("loadHistory({ older: true }) appends the next page", async () => {
+  const expenses = [];
+  for (let i = 0; i < 205; i++) expenses.push({ id: "bulk" + String(i).padStart(6, "0"), day: "pre", title: "Line " + i, amount: 100, currency: "JPY", paidBy: "Mo", split: ALL.slice(), addedAt: new Date(Date.UTC(2026, 10, 1) + i * 1000).toISOString() });
+  const p = phone({ seed: { expenses } });
+  await p.store.boot();
+  await p.store.loadHistory();
+  assert.equal(p.store.state.history.entries.length, 200);
+  assert.equal(p.store.state.history.more, true);
+  await p.store.loadHistory({ older: true });
+  assert.equal(p.store.state.history.entries.length, 205);
+  assert.equal(p.store.state.history.more, false);
+  assert.equal(new Set(p.store.state.history.entries.map((e) => e.id)).size, 205);
+});
+
+test("historyFor rejects with network when there is no signal", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.net.offline = true;
+  const err = await p.store.historyFor("seedexp005").then(() => null, (e) => e);
+  assert.equal(err.code, "network");
+  assert.equal(p.store.state.online, false);
+});
+
+test("Seen", async () => {
+  const p = phone();
+  await p.store.boot();
+  assert.equal(p.store.state.seenAt, null);
+  p.store.markSeen();
+  assert.equal(p.store.state.seenAt, NOW);
+  assert.equal(p.storage.getItem("mat.seen"), String(NOW));
+  const again = phone({ fake: p.fake, storage: p.storage });
+  await again.store.boot();
+  assert.equal(again.store.state.seenAt, NOW);
+});
+
+test("notify sets a notice and tells subscribers; clearNotice clears it", async () => {
+  const p = phone();
+  await p.store.boot();
+  const notices = [];
+  const off = p.store.subscribe((s) => notices.push(s.notice));
+  p.store.notify("Link copied.");
+  assert.equal(p.store.state.notice, "Link copied.");
+  p.store.clearNotice();
+  assert.equal(p.store.state.notice, null);
+  assert.deepEqual(notices, ["Link copied.", null]);
+  off();
+  p.store.notify("again");
+  assert.equal(notices.length, 2);
+});
+
+// ---------- boundaries ----------
+
+test("js modules reach the outside world only through their arguments", () => {
+  const src = fs.readFileSync(path.join(HERE, "..", "js", "store.js"), "utf8");
+  for (const word of ["window", "document", "localStorage", "navigator"]) {
+    assert.equal(new RegExp("\\b" + word + "\\b").test(src), false, "store.js mentions " + word);
+  }
+  for (const f of ["store.js", "api.js", "time.js"]) {
+    const s = fs.readFileSync(path.join(HERE, "..", "js", f), "utf8");
+    assert.equal(/from\s+["'][^"']*(backend|tests)\//.test(s), false, f + " imports backend/ or tests/");
+  }
+});
