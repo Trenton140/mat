@@ -78,9 +78,22 @@ function ok_(data, rev) { return { ok: true, rev: rev, data: data }; }
 
 function err_(code, message) { return { ok: false, error: code, message: message }; }
 
+// REV from Script Properties. If the property is missing (properties were
+// reset), start from the Log's highest id so rev never goes backwards.
 function rev_() {
-  var n = Number(getProp_("REV"));
-  return isFinite(n) && n > 0 ? Math.floor(n) : 0;
+  var raw = getProp_("REV");
+  var n = Number(raw);
+  if (raw !== null && raw !== "" && isFinite(n) && n >= 0) return Math.floor(n);
+  return maxLogId_();
+}
+
+function maxLogId_() {
+  var max = 0;
+  logRows_().forEach(function (r) {
+    var id = Number(r.id);
+    if (isFinite(id) && id > max) max = id;
+  });
+  return max;
 }
 
 function bumpRev_() {
@@ -89,9 +102,12 @@ function bumpRev_() {
   return n;
 }
 
-// Appends one Log row (id from LOGSEQ) and returns it as written.
+// Appends one Log row and returns it as written. Called inside the write lock.
+// The id is one above both LOGSEQ and the Log's highest id, so ids stay unique
+// even if Script Properties were reset.
 function appendLog_(ctx, action, kind, ref, summary, before, after, undoes) {
-  var id = (Number(getProp_("LOGSEQ")) || 0) + 1;
+  var seq = Number(getProp_("LOGSEQ"));
+  var id = Math.max(isFinite(seq) ? Math.floor(seq) : 0, maxLogId_()) + 1;
   setProp_("LOGSEQ", String(id));
   var row = {
     id: id, at: nowIso_(), who: ctx.actor, via: ctx.via, action: action, kind: kind, ref: ref, summary: summary,

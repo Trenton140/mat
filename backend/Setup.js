@@ -2,9 +2,6 @@
 // The trip key goes only to Script Properties (and, from showInvite, to the
 // execution log). It is never returned and never written into the Sheet.
 
-// Columns that must stay plain text so Sheets never turns them into dates or numbers.
-var TEXT_COLUMNS_ = ["id", "day", "date", "split", "split_vals", "added_at", "deleted_at", "stamped_at", "removed_at", "at", "first_night", "last_night", "time", "value"];
-
 function setup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(TABS).forEach(function (tab) {
@@ -20,7 +17,7 @@ function setup() {
     sh.setFrozenRows(1);
     sh.getRange(1, 1, 1, have.length).setFontWeight("bold");
     have.forEach(function (h, i) {
-      if (TEXT_COLUMNS_.indexOf(h) !== -1) sh.getRange(1, i + 1, sh.getMaxRows(), 1).setNumberFormat("@");
+      if (isTextColumn(tab, h)) sh.getRange(1, i + 1, sh.getMaxRows(), 1).setNumberFormat("@");
     });
   });
 

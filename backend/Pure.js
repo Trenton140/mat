@@ -14,6 +14,18 @@ var TABS = {
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
 
+// Every column is plain text (so Sheets never turns "1/2" into a date or
+// "0012" into 12) except these numbers and booleans.
+var NUMBER_COLUMNS_ = ["amount", "rate", "cad", "seed", "rot", "order", "travel_min"];
+var LOG_NUMBER_COLUMNS_ = ["id", "undoes", "undone_by"];
+var BOOLEAN_COLUMNS_ = ["simplify", "fixed", "booked"];
+
+function isTextColumn(tab, header) {
+  if (NUMBER_COLUMNS_.indexOf(header) !== -1 || BOOLEAN_COLUMNS_.indexOf(header) !== -1) return false;
+  if (tab === "Log" && LOG_NUMBER_COLUMNS_.indexOf(header) !== -1) return false;
+  return true;
+}
+
 var ID_RE_ = /^[A-Za-z0-9][A-Za-z0-9_-]{7,39}$/;
 var DAY_RE_ = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -382,5 +394,5 @@ function entryFromRow(o, allRows) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows };
 }

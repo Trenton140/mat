@@ -7,8 +7,10 @@
 //
 // seed = { expenses?, payments?, people?, days? } (see constraints R6).
 // The returned function takes a request body and resolves to the envelope.
+// Options: clock (() => ISO string), lockFails (test-only, () => boolean).
 // Test handles: fake.tables (live rows per tab), fake.requests (every body
-// received), fake.primitives (the in-memory helpers).
+// received), fake.primitives (the in-memory helpers), fake.props (Script
+// Properties).
 
 const fs = require("fs");
 const path = require("path");
@@ -25,14 +27,27 @@ const SHEET_URL = "https://example.test/sheet";
 
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 
-// What Sheets hands back for a stored cell: a leading apostrophe is the
-// "treat as text" marker and is not part of the value.
-function readCell(v) {
+// What Sheets hands back for a stored cell under setup()'s formatting (see
+// isTextColumn in Pure.js). A leading apostrophe is the "treat as text" marker
+// and is not part of the value. A plain-text column gives back a string even
+// when a number or boolean was written; any other column turns a string that
+// looks like a number or TRUE/FALSE into a number or boolean.
+function readCell(text, v) {
+  if (v === undefined || v === null) return "";
   if (typeof v === "string" && v.charAt(0) === "'") return v.slice(1);
-  return v === undefined || v === null ? "" : v;
+  if (text) {
+    if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+    return String(v);
+  }
+  if (typeof v === "string") {
+    const t = v.trim();
+    if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+    if (/^(true|false)$/i.test(t)) return t.toUpperCase() === "TRUE";
+  }
+  return v;
 }
 
-function createFakeBackend(seed, { clock } = {}) {
+function createFakeBackend(seed, { clock, lockFails } = {}) {
   const now = clock || (() => new Date().toISOString());
   const world = vm.createContext({});
   PURE.runInContext(world);
@@ -40,7 +55,9 @@ function createFakeBackend(seed, { clock } = {}) {
 
   const tables = {};
   for (const tab of Object.keys(P.TABS)) tables[tab] = [];
-  const props = { TRIP_KEY };
+  // Seeded Log rows are not writes, so REV starts at 0 even when seeded (an
+  // unset REV would otherwise fall back to the Log's highest id).
+  const props = { TRIP_KEY, REV: "0" };
 
   const headers = (tab) => {
     const h = P.TABS[tab];
@@ -49,7 +66,7 @@ function createFakeBackend(seed, { clock } = {}) {
   };
   const readRow = (tab, stored) => {
     const o = {};
-    for (const h of headers(tab)) o[h] = readCell(stored[h]);
+    for (const h of headers(tab)) o[h] = readCell(P.isTextColumn(tab, h), stored[h]);
     return o;
   };
 
@@ -67,7 +84,7 @@ function createFakeBackend(seed, { clock } = {}) {
       const h = headers(tab);
       if (h.indexOf(column) === -1) return null;
       for (const stored of tables[tab]) {
-        if (String(readCell(stored[column])) !== String(value)) continue;
+        if (String(readCell(P.isTextColumn(tab, column), stored[column])) !== String(value)) continue;
         for (const key of Object.keys(patch)) {
           if (h.indexOf(key) === -1 || patch[key] === undefined) continue;
           stored[key] = patch[key] === null ? "" : P.sanitizeCell(patch[key]);
@@ -85,7 +102,10 @@ function createFakeBackend(seed, { clock } = {}) {
     setProp_(key, value) {
       props[key] = String(value);
     },
+    // Test-only: lockFails() returning true plays a lock that never frees up
+    // (same envelope as Env.js withLock_).
     withLock_(fn) {
+      if (lockFails && lockFails()) return { ok: false, error: "busy", message: "Someone else is saving right now. Try again in a moment." };
       return fn();
     },
     getRate_: () => RATE,
@@ -113,6 +133,7 @@ function createFakeBackend(seed, { clock } = {}) {
   fake.tables = tables;
   fake.requests = requests;
   fake.primitives = primitives;
+  fake.props = props;
   return fake;
 }
 

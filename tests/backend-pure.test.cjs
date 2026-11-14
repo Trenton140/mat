@@ -178,3 +178,27 @@ test("the setup seed rows are the trip, three people and one day per date", () =
   assert.equal(s.Days[10].date, "2026-12-20");
   assert.notEqual(P.setupSeedRows().People[0], s.People[0]);
 });
+
+test("every column is plain text except the numbers and the on/off flags", () => {
+  const numbers = { Expenses: ["amount", "rate"], Settlements: ["cad", "seed", "rot"], People: ["order"], Stops: ["travel_min"], Log: ["id", "undoes", "undone_by"] };
+  const flags = { People: ["simplify"], Stops: ["fixed", "booked"] };
+  for (const [tab, headers] of Object.entries(P.TABS)) {
+    for (const h of headers) {
+      const notText = (numbers[tab] || []).includes(h) || (flags[tab] || []).includes(h);
+      assert.equal(P.isTextColumn(tab, h), !notText, tab + "." + h);
+    }
+  }
+  assert.equal(P.isTextColumn("Expenses", "id"), true);
+  assert.equal(P.isTextColumn("Settlements", "id"), true);
+  assert.equal(P.isTextColumn("Expenses", "split_vals"), true);
+  assert.equal(P.isTextColumn("Expenses", "title"), true);
+});
+
+test("rows read back from text columns still give numbers where the API wants them", () => {
+  const e = P.expenseFromRow({ id: "x", day: "2026-12-11", title: "0012", amount: 4200, currency: "JPY", rate: 111, paid_by: "Mo", split: "Mo,Ajen", split_mode: "parts", split_vals: "1,3", note: "3-4", kind: "", added_by: "Mo", added_at: "t", deleted_at: "" });
+  assert.deepEqual(e.splitVals, [1, 3]);
+  assert.equal(P.expenseFromRow({ id: "x", split: "Mo", split_mode: "parts", split_vals: "3" }).splitVals[0], 3);
+  assert.equal(e.title, "0012");
+  assert.equal(e.note, "3-4");
+  assert.equal(P.parseLogRow({ id: 7, undoes: 3, undone_by: "" }).undoes, 3);
+});

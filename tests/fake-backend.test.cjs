@@ -540,3 +540,83 @@ test("the in-memory sheet helpers behave like the real ones", () => {
   assert.equal(p.appendObj_("Expenses", { id: "exp0000002" }), undefined);
   assert.deepEqual(Object.keys(fake.tables.Expenses[2]), TABS.Expenses);
 });
+
+test("text that looks like a date or a number comes back exactly as typed", async () => {
+  const call = client();
+  const a = await call("addExpense", { expense: ramen({ id: "exp0000001", title: "1/2", note: "3-4" }) });
+  const b = await call("addExpense", { expense: ramen({ id: "exp0000002", title: "0012" }) });
+  assert.equal(a.data.expense.title, "1/2");
+  assert.equal(a.data.expense.note, "3-4");
+  assert.equal(b.data.expense.title, "0012");
+  const load = (await call("load")).data.expenses;
+  assert.deepEqual(load.map((e) => [e.title, e.note]), [["1/2", "3-4"], ["0012", ""]]);
+  assert.equal(typeof load[0].amount, "number");
+  assert.equal(typeof load[0].rate, "number");
+  const hist = await historyAll(call);
+  assert.deepEqual(hist.map((e) => e.summary), ["rang up 0012 ¥4,200", "rang up 1/2 ¥4,200"]);
+  assert.deepEqual(hist.map((e) => e.id), [2, 1]);
+  const u = await call("undo", { logId: b.data.logId });
+  assert.equal(u.data.expense.title, "0012");
+  assert.equal(u.data.entry.undoes, 2);
+});
+
+test("the in-memory sheet hands cells back the way Sheets does under the column formats", () => {
+  const fake = createFakeBackend();
+  const p = fake.primitives;
+  p.appendObj_("Expenses", { id: "exp0000001", title: 12, note: true, amount: "0012", rate: "111.5", split_vals: 3 });
+  const row = p.readTable_("Expenses")[0];
+  assert.equal(row.title, "12");
+  assert.equal(row.note, "TRUE");
+  assert.equal(row.amount, 12);
+  assert.equal(row.rate, 111.5);
+  assert.equal(row.split_vals, "3");
+  p.appendObj_("Log", { id: "5", undoes: "2", summary: 7 });
+  const log = p.readTable_("Log")[0];
+  assert.equal(log.id, 5);
+  assert.equal(log.undoes, 2);
+  assert.equal(log.summary, "7");
+  assert.equal(p.readTable_("People")[0].simplify, true);
+  assert.equal(p.readTable_("People")[0].order, 1);
+});
+
+test("log ids and rev carry on after Script Properties are wiped", async () => {
+  const call = client({ expenses: [ramen({ id: "exp0000009" })] });
+  await call("addExpense", { expense: ramen() });
+  await call("updateExpense", { id: "exp0000001", patch: { amount: 4500 } });
+  const last = await call("deleteExpense", { id: "exp0000009" });
+  assert.equal(last.data.logId, 4);
+  const revBefore = last.rev;
+  for (const k of Object.keys(call.fake.props)) if (k !== "TRIP_KEY") delete call.fake.props[k];
+  assert.ok((await call("rev")).rev >= 4);
+  const next = await call("addExpense", { expense: ramen({ id: "exp0000002" }) });
+  assert.equal(next.ok, true);
+  assert.equal(next.data.logId, 5);
+  assert.ok(next.rev > revBefore, `rev ${next.rev} after ${revBefore}`);
+  const ids = call.fake.tables.Log.map((r) => r.id);
+  assert.equal(new Set(ids).size, ids.length);
+  const u = await call("undo", { logId: 5 });
+  assert.equal(u.ok, true);
+  assert.equal(u.data.logId, 6);
+});
+
+test("a write that cannot get the lock answers busy, writes nothing and leaves rev alone", async () => {
+  let locked = false;
+  const fake = createFakeBackend({ expenses: [ramen({ id: "exp0000009" })] }, { lockFails: () => locked });
+  const send = (action, args) => fake({ key: KEY, actor: "Mo", action, args });
+  await send("deleteExpense", { id: "exp0000009" });
+  const before = JSON.stringify(fake.tables);
+  locked = true;
+  for (const [action, args] of [["addExpense", { expense: ramen() }], ["restoreExpense", { id: "exp0000009" }], ["setPerson", { name: "Mo", patch: { simplify: false } }], ["undo", { logId: 2 }]]) {
+    const r = await send(action, args);
+    assert.equal(r.ok, false, action);
+    assert.equal(r.error, "busy");
+    assert.equal(typeof r.message, "string");
+    assert.equal(r.rev, 1);
+  }
+  assert.equal(JSON.stringify(fake.tables), before);
+  const load = await send("load", {});
+  assert.equal(load.ok, true);
+  assert.equal(load.rev, 1);
+  locked = false;
+  assert.equal((await send("addExpense", { expense: ramen() })).rev, 2);
+});
