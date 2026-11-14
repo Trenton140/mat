@@ -37,10 +37,11 @@ function memStorage(init = {}) {
 //   net.override(body) return an envelope to answer instead of the backend
 //   net.hold(action)   the next response for that action waits for release()
 //   net.lose           actions that reach the backend but whose reply is lost
+//   net.garble         actions that reach the backend but get a non-envelope reply
 function phone({ seed, fake, storage, me = "Mo", nowMs = NOW } = {}) {
   fake = fake || createFakeBackend(seed);
   storage = storage || memStorage({ "mat.key": KEY, "mat.me": me });
-  const net = { offline: false, failing: new Set(), lose: new Set(), override: null, holds: [], sent: [] };
+  const net = { offline: false, failing: new Set(), lose: new Set(), garble: new Set(), override: null, holds: [], sent: [] };
   net.hold = (action) => {
     let release;
     const promise = new Promise((r) => { release = r; });
@@ -54,6 +55,7 @@ function phone({ seed, fake, storage, me = "Mo", nowMs = NOW } = {}) {
     let env = net.override ? net.override(body) : null;
     if (!env) env = await fake(body);
     if (net.lose.has(body.action)) throw new TypeError("Load failed");
+    if (net.garble.has(body.action)) return { ok: false, status: 502, text: async () => "<html>Bad gateway</html>" };
     const hold = net.holds.find((h) => h.action === body.action && !h.used);
     if (hold) {
       hold.used = true;
@@ -577,6 +579,70 @@ test("a reload while an undone add waits offline finishes it on the next contact
   assert.deepEqual(queueOf(two.storage), []);
 });
 
+test("an undone add whose reply came back garbled is finished on the next contact: add then undo", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.garble.add("addExpense"); // the backend saved it, the reply is an error page
+  const t = p.store.addExpense(draft());
+  const id = idOf(p.store);
+  p.store.undo(t);
+  await p.store.idle();
+  assert.equal(p.store.state.expenses.find((e) => e.id === id && !e.deleted), undefined);
+  assert.deepEqual(queueOf(p.storage).map((q) => [q.undo, q.args.expense.id]), [[true, id]]);
+  p.net.garble.clear();
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, id).deleted, true);
+  assert.deepEqual((await backend(p.fake, "history")).entries.map((e) => e.action), ["undo", "add"]);
+  await p.store.refresh();
+  assert.equal(byId(p.store.state.expenses, id).deleted, true);
+  assert.equal(p.store.state.notice, null);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("an add whose reply came back garbled stays queued and is resent once, not marked failed", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.garble.add("addExpense");
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  const line = byId(p.store.state.expenses, id);
+  assert.equal(line.pending, true);
+  assert.equal("failed" in line, false);
+  assert.deepEqual(queueOf(p.storage).map((q) => [q.expense.id, q.failed, q.sent]), [[id, false, true]]);
+  p.net.garble.clear();
+  await p.store.checkRev();
+  await p.store.idle();
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(sent(p.fake, "addExpense"), 2); // the garbled one and one resend
+  const server = (await backend(p.fake)).expenses;
+  assert.equal(server.filter((e) => e.id === id).length, 1);
+  assert.deepEqual((await backend(p.fake, "history")).entries.map((e) => e.action), ["add"]);
+  assert.deepEqual(byId(p.store.state.expenses, id), byId(server, id));
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("an undo whose reply came back garbled is finished without a second undo", async () => {
+  const p = phone();
+  await p.store.boot();
+  const t = p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  p.net.garble.add("undo");
+  p.store.undo(t);
+  await p.store.idle();
+  assert.equal(p.store.state.expenses.find((e) => e.id === id && !e.deleted), undefined);
+  p.net.garble.clear();
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, id).deleted, true);
+  assert.deepEqual((await backend(p.fake, "history")).entries.map((e) => e.action), ["undo", "add"]);
+  assert.equal(p.store.state.notice, null);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
 test("an undone add that the backend refuses is dropped with nothing more sent", async () => {
   const p = phone();
   await p.store.boot();
@@ -822,7 +888,7 @@ test("A refused write is marked, not dropped", async () => {
 test("retry resends a failed line with the same id", async () => {
   const p = phone();
   await p.store.boot();
-  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "server", message: "Something went wrong." } : null);
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "bad_input", message: "Pick a day." } : null);
   p.store.addExpense(draft());
   const id = idOf(p.store);
   await p.store.idle();

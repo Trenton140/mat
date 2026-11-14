@@ -41,7 +41,12 @@ const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v))
 const defaultWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const codeOf = (err) => (err && err.code) || "server";
 // Worth trying again on the next contact: the backend may not have seen it.
-const transient = (err) => codeOf(err) === "network" || codeOf(err) === "busy";
+// The backend may have saved it: no reply, or a reply that was not an envelope
+// (or its own "server" error). Only an explicit refusal (bad_input, not_found,
+// stale, bad_key) or busy (the lock was never taken) proves nothing was saved.
+const fateUnknown = (err) => codeOf(err) === "network" || codeOf(err) === "server";
+// Worth trying again on the next contact.
+const transient = (err) => fateUnknown(err) || codeOf(err) === "busy";
 const refusedAsStale = (err) => codeOf(err) === "stale" || codeOf(err) === "not_found";
 
 function bare(item) {
@@ -417,11 +422,11 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     } catch (err) {
       op.inFlight = false;
       const code = codeOf(err);
-      if (code === "network") op.lost = true;
+      if (fateUnknown(err)) op.lost = true;
       if (op.undone) {
         // finishUndo decides what still has to happen
       } else if (op.api === "addExpense") {
-        op.status = code === "network" ? "queued" : "failed";
+        op.status = fateUnknown(err) ? "queued" : "failed"; // same id resent later is safe
       } else {
         removeOp(op);
         state.notice = code === "network" ? NO_SIGNAL : (err && err.message) || NO_SIGNAL;
