@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAT probe</title>
+</head>
+<body>
+<pre id="out">working...</pre>
+<script type="module">
+import { API_URL } from "../js/config.js";
+const out = document.getElementById("out");
+if (!API_URL) {
+  out.textContent = "API_URL is not set yet";
+} else {
+  try {
+    const res = await fetch(API_URL, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action: "ping" }),
+    });
+    out.textContent = JSON.stringify(await res.json());
+  } catch (err) {
+    out.textContent = "Error: " + err;
+  }
+}
+</script>
+</body>
+</html>
