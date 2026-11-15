@@ -1,6 +1,8 @@
 // The shell, first open and the receipt (Task 7).
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const { ORIGIN, SEED, NOON12, makeBackend, open, until, text, expectText, visible } = require("./helpers.cjs");
 
 const NAMES = ["Mo", "Ajen", "Trenton"];
@@ -231,8 +233,13 @@ module.exports = [
   {
     name: "not connected: says so and calls nothing",
     async run({ page }) {
-      // A bridge is there but no MAT_FAKE_API, and API_URL is empty: the app
-      // must not call anything at all.
+      // A bridge is there but no MAT_FAKE_API, and API_URL is empty (the
+      // shipped config with its address blanked): the app must not call
+      // anything at all.
+      const config = fs.readFileSync(path.join(__dirname, "..", "..", "js", "config.js"), "utf8")
+        .replace(/API_URL = "[^"]*"/, 'API_URL = ""');
+      assert.ok(config.includes('API_URL = ""'), "the address was blanked");
+      await page.route("**/js/config.js", (route) => route.fulfill({ contentType: "text/javascript", body: config }));
       const backend = makeBackend(SEED, { now: NOON12 });
       await page.exposeFunction("__matBridge", (body) => backend.handle(body));
       const outside = [];
