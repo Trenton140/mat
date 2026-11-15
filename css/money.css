@@ -36,7 +36,7 @@
 .spot:active .ghost{transform:scale(.97)}
 .spot.is-armed .ghost{border-style:solid;border-color:var(--shu);color:rgba(214,60,30,.6)}
 .stamp{position:absolute;inset:0;transform:rotate(var(--rot));mix-blend-mode:multiply}
-.stamp.hit{animation:hit .22s both}
+.stamp.hit{animation:hit .22s backwards}
 @keyframes hit{
   0%{transform:rotate(var(--rot)) scale(2.5);opacity:0;animation-timing-function:cubic-bezier(.7,0,1,.7)}
   62%{transform:rotate(var(--rot)) scale(.92);opacity:1}

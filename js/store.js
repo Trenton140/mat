@@ -753,7 +753,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
           return;
         }
         if (fateUnknown(err)) wantReload();
-        state.notice = UNDO_FAILED;
+        state.notice = fateUnknown(err) ? UNCONFIRMED : UNDO_FAILED;
       }
       changed();
     });

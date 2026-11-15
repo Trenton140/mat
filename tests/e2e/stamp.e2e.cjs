@@ -399,6 +399,37 @@ module.exports = [
     },
   },
   {
+    name: "an unconfirmed stamp stays faded after its hit finishes, and reaches full strength once confirmed",
+    async run({ page }) {
+      const backend = await ready(page);
+      await waitOpen(page, 2);
+      const handle = backend.handle;
+      backend.handle = async (body) => {
+        const env = await handle.call(backend, body);
+        if (body.action === "addPayment") throw new Error("reply lost");
+        return env;
+      };
+      await arm(page, "Ajen>Mo");
+      await page.click(spot("Ajen>Mo"));
+      await idle(page);
+      await page.waitForSelector("#slip .s-row.is-pending .stamp");
+      const settled = () =>
+        page.evaluate(() => {
+          const st = document.querySelector("#slip .s-row.is-pending .stamp");
+          return !!st && st.getAnimations().every((a) => a.playState === "finished");
+        });
+      await until(settled, "the hit animation has finished");
+      const opacity = () => page.evaluate(() => Number(getComputedStyle(document.querySelector("#slip .stamp")).opacity));
+      assert.ok((await opacity()) < 1, "pending stamp is faded: " + (await opacity()));
+      backend.handle = handle;
+      await page.evaluate(() => globalThis.__matTest.store.checkRev());
+      await idle(page);
+      await until(async () => (await page.locator("#slip .s-row.is-pending").count()) === 0, "confirmed");
+      await until(() => page.evaluate(() => document.querySelector("#slip .stamp").getAnimations().every((a) => a.playState === "finished")), "animations done");
+      assert.equal(await opacity(), 1);
+    },
+  },
+  {
     name: "a double tap on an armed spot makes one payment, even a part payment whose row stays open",
     async run({ page }) {
       const backend = await ready(page);

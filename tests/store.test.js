@@ -781,9 +781,26 @@ test("A failed undo puts things back", async () => {
   assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200);
   await p.store.idle();
   assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4500);
-  assert.equal(p.store.state.notice, UNDO_FAILED);
+  // A failed fetch may have left the phone: no reply, so the fate is unknown.
+  assert.equal(p.store.state.notice, UNCONFIRMED);
   assert.equal(p.store.state.online, false);
   assert.equal(byId((await backend(p.fake)).expenses, "seedexp004").amount, 4500);
+});
+
+test("an undo from the bar whose reply is lost says it is checking, and the next contact shows it undone", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const t = p.store.updateExpense("seedexp004", { amount: 4500 });
+  await p.store.idle();
+  p.net.lose.add("undo");
+  p.store.undo(t);
+  await p.store.idle();
+  assert.equal(p.store.state.notice, "Couldn’t confirm that. Checking…");
+  p.net.lose.clear();
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, "seedexp004").amount, 4200, "the undo landed");
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200, "the screen shows what the backend holds");
 });
 
 test("Stale undo from history", async () => {
