@@ -13,8 +13,15 @@
 //   for the write it undoes. A write whose item has nothing in flight starts
 //   at once.
 // - Adds of expenses are kept in mat.queue from the moment they are made
-//   until the backend has them, and resent on the next contact. Any other
-//   write that cannot reach the backend is rolled back.
+//   until the backend has them, and resent on the next contact. A stamp whose
+//   reply never came is kept too (in memory only: a reload fetches the truth)
+//   and resent with the same id on the next contact. Any other write that
+//   gets no reply is rolled back, said to be unconfirmed, and the next contact
+//   reloads, so the screen shows whatever the backend holds. Only a write the
+//   phone knows never left (it said it had no network) is said not saved.
+// - An Undo of a write whose fate was unknown (or whose reply said it changed
+//   nothing, because an earlier unconfirmed one had landed) waits for a load,
+//   then undoes the backend's own record of it from the item's history.
 // - An add (or stamp) that is undone after its request left the phone may
 //   or may not be on the backend. It is kept in mat.queue as an undo to
 //   finish, until the backend confirms it: resend the add (the backend
@@ -28,10 +35,13 @@ import { newId } from "./time.js";
 const BUSY_RETRIES = 3;
 const BUSY_DELAY_MS = 400;
 const UNDO_FAILED = "Couldn’t undo that. Try again from History.";
-const NO_SIGNAL = "No signal. That wasn’t saved.";
+// The request provably never left the phone.
+const NOT_SAVED = "No signal. That wasn’t saved.";
+// No reply: it may or may not be on the backend; the next contact shows which.
+const UNCONFIRMED = "Couldn’t confirm that. Checking…";
 const STALE = "That was changed again since. Undo the newer change first.";
 
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "sheetUrl"];
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl"];
 const LIST = { expense: "expenses", payment: "payments", person: "people" };
 const KEY_FIELD = { expense: "id", payment: "id", person: "name" };
 const FLAG = { expense: "deleted", payment: "removed" };
@@ -40,13 +50,17 @@ const ADD_API = { expense: "addExpense", payment: "addPayment" };
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const defaultWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const codeOf = (err) => (err && err.code) || "server";
-// Worth trying again on the next contact: the backend may not have seen it.
-// The backend may have saved it: no reply, or a reply that was not an envelope
-// (or its own "server" error). Only an explicit refusal (bad_input, not_found,
-// stale, bad_key) or busy (the lock was never taken) proves nothing was saved.
-const fateUnknown = (err) => codeOf(err) === "network" || codeOf(err) === "server";
+// No usable reply: no signal, or a reply that was not an envelope (or the
+// backend's own "server" error).
+const noReply = (err) => codeOf(err) === "network" || codeOf(err) === "server";
+// The request provably never left the phone.
+const neverSent = (err) => !!(err && err.notSent);
+// The backend may have saved it: no reply to a request that did leave. Only an
+// explicit refusal (bad_input, not_found, stale, bad_key), busy (the lock was
+// never taken) or a request that never left proves nothing was saved.
+const fateUnknown = (err) => noReply(err) && !neverSent(err);
 // Worth trying again on the next contact.
-const transient = (err) => fateUnknown(err) || codeOf(err) === "busy";
+const transient = (err) => noReply(err) || codeOf(err) === "busy";
 const refusedAsStale = (err) => codeOf(err) === "stale" || codeOf(err) === "not_found";
 
 function bare(item) {
@@ -55,6 +69,27 @@ function bare(item) {
   delete out.pending;
   delete out.failed;
   return out;
+}
+
+const isName = (names, n) => typeof n === "string" && names.includes(n);
+const positive = (n) => typeof n === "number" && isFinite(n) && n > 0;
+
+// Why money.js cannot use a row from the Sheet, or null when it can: a name
+// that is not one of the people, or an amount it cannot read.
+function unreadable(kind, x, names) {
+  if (kind === "expense") {
+    if (!isName(names, x.paidBy)) return "name";
+    if (!Array.isArray(x.split) || !x.split.length || !x.split.every((n) => isName(names, n))) return "name";
+    if (!positive(x.amount) || (x.currency !== "JPY" && x.currency !== "CAD")) return "amount";
+    if (x.currency === "JPY" && !positive(x.rate)) return "amount";
+    if (x.splitMode === "parts" || x.splitMode === "exact") {
+      if (!Array.isArray(x.splitVals) || x.splitVals.length !== x.split.length || !x.splitVals.every(positive)) return "amount";
+    }
+    return null;
+  }
+  if (!isName(names, x.from) || !isName(names, x.to)) return "name";
+  if (!positive(x.cad)) return "amount";
+  return null;
 }
 
 function isData(d) {
@@ -90,8 +125,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, sheetUrl: "",
-    loadedAt: null, seenAt: null, lastChange: null, notice: null,
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "",
+    loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
 
@@ -109,17 +144,42 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   let appliedLoad = 0;
   let flushing = null;
   let historyLoaded = false;
+  // A write got no reply: the first load started after this many loads shows
+  // the truth (null when none is owed).
+  let reloadAfter = null;
+  let contactReload = null;
+  let unsureUndos = []; // undos of unconfirmed writes, waiting for a contact
 
   // ---- deriving and telling ----
 
+  // One view that throws must not stop the others, or the store.
   function emit() {
-    for (const fn of [...subs]) fn(state);
+    for (const fn of [...subs]) {
+      try {
+        fn(state);
+      } catch (err) {
+        if (typeof globalThis.reportError === "function") globalThis.reportError(err);
+      }
+    }
   }
 
   function derive() {
     if (base) for (const k of DATA_KEYS) state[k] = base[k];
     const lists = {};
     for (const kind of Object.keys(LIST)) lists[kind] = base ? base[LIST[kind]].slice() : [];
+    // Rows from the Sheet the money maths cannot read (a hand edit with a
+    // name the app does not know, say) are kept out of it and listed.
+    const names = lists.person.map((x) => x.name);
+    const aside = [];
+    for (const kind of ["expense", "payment"]) {
+      lists[kind] = lists[kind].filter((x) => {
+        const reason = unreadable(kind, x, names);
+        if (!reason) return true;
+        aside.push({ kind, id: x.id, title: kind === "expense" ? x.title : x.from + " \u2192 " + x.to, reason });
+        return false;
+      });
+    }
+    state.setAside = aside;
     for (const op of ops) {
       const list = lists[op.kind];
       const field = KEY_FIELD[op.kind];
@@ -163,7 +223,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   }
 
   const isAdd = (op) => op.api === ADD_API[op.kind];
-  const isLiveQueuedAdd = (op) => op.api === "addExpense" && !op.undone && ops.includes(op);
+  const isLiveAdd = (op) => isAdd(op) && !op.undone && ops.includes(op);
+  const isLiveQueuedAdd = (op) => op.api === "addExpense" && isLiveAdd(op);
   // The request may have reached the backend.
   const mayHaveLanded = (op) => op.inFlight || op.lost || op.logId !== null;
 
@@ -176,17 +237,20 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       failed: op.status === "failed",
       sent: op.inFlight || op.lost,
     }));
-    const undos = resolving.map((op) => ({ undo: true, kind: op.kind, args: op.args, logId: op.logId }));
+    const undos = resolving.map((op) => ({ undo: true, kind: op.kind, args: op.args, logId: op.logId, actor: op.actor || null }));
     setItem("mat.queue", JSON.stringify(live.concat(undos)));
   }
 
   // ---- talking to the backend ----
 
-  async function call(action, args) {
+  async function call(action, args, opts) {
     for (let attempt = 0; ; attempt++) {
       try {
-        const r = await api(action, args);
+        const r = opts ? await api(action, args, opts) : await api(action, args);
         state.online = true;
+        // Contact after a write that got no reply: show what the backend has.
+        // (refresh and checkRev see to it themselves.)
+        if (reloadAfter !== null && action !== "load" && action !== "rev") reloadOnContact();
         return r;
       } catch (err) {
         const code = err && err.code;
@@ -195,7 +259,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
           continue;
         }
         if (code === "network") state.online = false;
-        if (code === "bad_key") state.status = "nokey";
+        if (code === "bad_key") {
+          state.status = "nokey";
+          state.keyRefused = true; // a key was tried and the trip said no
+        }
         throw err;
       }
     }
@@ -246,10 +313,24 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   // ---- reading ----
 
-  // Proof of contact: send anything that is waiting.
+  // Proof of contact: send anything that is waiting, and finish undos of
+  // unconfirmed writes against what was just loaded.
   function afterContact() {
-    const waiting = resolving.length > 0 || ops.some((op) => isLiveQueuedAdd(op) && op.status === "queued");
+    const waiting = resolving.length > 0 || ops.some((op) => isLiveAdd(op) && op.status === "queued");
     if (waiting) track(flush());
+    for (const op of unsureUndos.splice(0)) track(enqueue(chainKey(op.kind, op.id), () => undoUnsure(op, false)));
+  }
+
+  function reloadOnContact() {
+    if (contactReload) return;
+    contactReload = track(refresh().finally(() => {
+      contactReload = null;
+    }));
+  }
+
+  // A write got no reply: the next contact reloads.
+  function wantReload() {
+    reloadAfter = loadCount;
   }
 
   async function refresh() {
@@ -263,6 +344,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       changed();
       return false;
     }
+    if (reloadAfter !== null && mine > reloadAfter) reloadAfter = null;
     if (mine < appliedLoad) return true; // a newer load already landed
     appliedLoad = mine;
     const data = copy(r.data);
@@ -286,7 +368,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       changed();
       return;
     }
-    if (r.rev !== state.rev) {
+    if (r.rev !== state.rev || reloadAfter !== null) {
       await refresh();
       return;
     }
@@ -318,6 +400,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
           args: copy(q.args), before: null, after: copy(item), view: () => null,
           status: "queued", undone: true, inFlight: false, lost: true,
           logId: typeof q.logId === "number" ? q.logId : null,
+          actor: typeof q.actor === "string" ? q.actor : null,
         };
         startResolving(op);
         continue;
@@ -337,6 +420,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   }
 
   async function boot() {
+    state.keyRefused = false;
     const key = getItem("mat.key");
     myName = getItem("mat.me");
     const seen = Number(getItem("mat.seen"));
@@ -353,8 +437,13 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       state.loadedAt = typeof cache.loadedAt === "number" ? cache.loadedAt : null;
       state.status = "ready";
     }
-    restoreQueue();
-    changed();
+    // Whatever painting the cache does, the load still goes out.
+    try {
+      restoreQueue();
+      changed();
+    } catch {
+      // a broken cache or queue: the load below replaces it
+    }
     if (await refresh()) await flush();
   }
 
@@ -375,6 +464,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       args: { expense: copy(expense) }, before: null, after,
       view: (cur) => ({ ...(cur || {}), ...after }),
       status: "sending", undone: false, logId: null, inFlight: false, lost: false,
+      actor: after.addedBy,
     };
   }
 
@@ -409,32 +499,48 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     op.inFlight = true;
     if (op.api === "addExpense") saveQueue();
     try {
-      const r = await call(op.api, op.args);
+      const r = await call(op.api, op.args, isAdd(op) && op.actor ? { actor: op.actor } : undefined);
       op.inFlight = false;
       const item = r.data[op.kind];
       op.logId = r.data.logId === undefined ? null : r.data.logId;
       op.status = "done";
       removeOp(op);
       confirm(op.kind, item);
-      if (op.logId !== null) stepRev(r.rev);
+      // A resent add is answered with the backend's current rev, which may
+      // hold other phones' changes: never take it as this write's own step.
+      if (op.lost) track(checkRev());
+      else if (op.logId !== null) stepRev(r.rev);
+      if (op.logId === null && !isAdd(op)) op.noop = true; // the backend already had it so
       const lc = state.lastChange;
       if (lc && lc.token === op.token) state.lastChange = { ...lc, item: copy(item) };
     } catch (err) {
       op.inFlight = false;
-      const code = codeOf(err);
       if (fateUnknown(err)) op.lost = true;
-      if (op.undone) {
+      if (op.undone && isAdd(op)) {
         // finishUndo decides what still has to happen
+      } else if (isAdd(op) && noReply(err)) {
+        op.status = "queued"; // the same id resent later is safe
       } else if (op.api === "addExpense") {
-        op.status = fateUnknown(err) ? "queued" : "failed"; // same id resent later is safe
+        op.status = "failed";
       } else {
         removeOp(op);
-        state.notice = code === "network" ? NO_SIGNAL : (err && err.message) || NO_SIGNAL;
+        state.notice = failNotice(err);
       }
     }
     saveQueue();
     saveCache();
     changed();
+  }
+
+  // What a write that did not go through says. A write with no reply is
+  // rolled back for now, and the next contact reloads to show the truth.
+  function failNotice(err) {
+    if (neverSent(err)) return NOT_SAVED;
+    if (noReply(err)) {
+      wantReload();
+      return UNCONFIRMED;
+    }
+    return (err && err.message) || UNCONFIRMED;
   }
 
   function change(kind, id, action, apiAction, patch) {
@@ -443,10 +549,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     const after = { ...bare(before), ...patch };
     const args = action === "edit" ? { id, patch: copy(patch) } : { id };
     return begin({
-      token: newId(), kind, id, action, api: apiAction, args,
+      token: newId(), kind, id, action, api: apiAction, args, patch: copy(patch),
       before: bare(before), after,
       view: (cur) => (cur ? { ...cur, ...patch } : null),
-      status: "sending", undone: false, logId: null, inFlight: false, lost: false,
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: myName,
     });
   }
 
@@ -469,7 +575,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       token: newId(), kind: "payment", id: payment.id, action: "stamp", api: "addPayment",
       args: { payment }, before: null, after,
       view: (cur) => ({ ...(cur || {}), ...after }),
-      status: "sending", undone: false, logId: null, inFlight: false, lost: false,
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: myName,
     });
   }
 
@@ -512,7 +618,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         if (!contact) return "wait";
         let r;
         try {
-          r = await call(op.api, op.args); // same id: the backend returns the first one
+          r = await call(op.api, op.args, op.actor ? { actor: op.actor } : undefined); // same id: the backend returns the first one
         } catch (err) {
           if (transient(err)) return "offline";
           stopResolving(op); // refused: it is not on the backend
@@ -570,20 +676,34 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return enqueue(chainKey(op.kind, op.id), () => finishUndo(op, false));
   }
 
+  // A settled write whose effect on the backend this phone cannot tell from
+  // its reply: no reply at all, or "nothing changed" (an earlier unconfirmed
+  // write, or another phone, had already done it).
+  const unsure = (op) => !isAdd(op) && op.logId === null && (op.lost || op.noop);
+
   function undo(token) {
     const op = writes.get(token);
     if (!op || op.undone) return Promise.resolve();
     op.undone = true;
+    if (isAdd(op)) {
+      state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(undoneView(op, bare(find(op.kind, op.id)))), canUndo: false };
+      return takeBack(op);
+    }
+    if (!ops.includes(op) && unsure(op)) {
+      // Nothing is shown as undone until the backend says what there is to undo.
+      return enqueue(chainKey(op.kind, op.id), () => undoUnsure(op, true));
+    }
     state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(undoneView(op, bare(find(op.kind, op.id)))), canUndo: false };
-    if (isAdd(op)) return takeBack(op);
     const uop = { kind: op.kind, id: op.id, status: "sending", view: (cur) => undoneView(op, cur) };
     ops.push(uop);
     changed();
     return enqueue(chainKey(op.kind, op.id), async () => {
       if (op.logId === null) {
-        // the write never landed, or changed nothing: nothing to undo
         removeOp(uop);
         changed();
+        // The write turned out unsure: settle it against the backend.
+        if (unsure(op)) return undoUnsure(op, true);
+        // the write never landed: nothing to undo
         return;
       }
       try {
@@ -599,10 +719,80 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
           await showBackendAfterRefusedUndo(err);
           return;
         }
+        if (fateUnknown(err)) wantReload();
         state.notice = UNDO_FAILED;
       }
       changed();
     });
+  }
+
+  const plainVal = (v) => JSON.stringify(typeof v === "string" ? v.trim() : v);
+  const sameAs = (item, fields) => Object.keys(fields).every((k) => plainVal(item[k]) === plainVal(fields[k]));
+
+  // Undo of an unsure write (runs on the item's chain). With `load`, first
+  // loads so the screen and the decision use what the backend holds; without
+  // a contact it waits for the next one (afterContact calls back with
+  // load = false, just after a load).
+  async function undoUnsure(op, load) {
+    if (load && !(await refresh())) {
+      unsureUndos.push(op);
+      return;
+    }
+    const item = base ? base[LIST[op.kind]].find((x) => x.id === op.id) : null;
+    const landed = !!item && sameAs(item, op.patch);
+    if (item && !landed && sameAs(item, pick(op.before, op.patch))) {
+      // The change is not on the backend: there is nothing to undo.
+      done(item);
+      return;
+    }
+    let entries;
+    try {
+      entries = (await call("history", { ref: op.id })).data.entries;
+    } catch (err) {
+      if (transient(err)) unsureUndos.push(op);
+      else failed();
+      return;
+    }
+    const top = entries.filter((e) => e.kind === op.kind).sort((a, b) => b.id - a.id)[0];
+    const ours = landed && top && top.action === op.action && top.who === op.actor && top.undoneBy === null && top.canUndo;
+    if (!ours) {
+      failed();
+      return;
+    }
+    let r;
+    try {
+      r = await call("undo", { logId: top.id });
+    } catch (err) {
+      op.undone = false;
+      if (refusedAsStale(err)) {
+        await showBackendAfterRefusedUndo(err);
+        return;
+      }
+      if (fateUnknown(err)) wantReload();
+      failed();
+      return;
+    }
+    confirm(op.kind, r.data[op.kind]);
+    stepRev(r.rev);
+    saveCache();
+    done(r.data[op.kind]);
+    if (historyLoaded) await loadHistory();
+
+    function done(shown) {
+      state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: copy(shown), canUndo: false };
+      changed();
+    }
+    function failed() {
+      op.undone = false;
+      state.notice = UNDO_FAILED;
+      changed();
+    }
+  }
+
+  function pick(from, keysOf) {
+    const out = {};
+    for (const k of Object.keys(keysOf)) out[k] = from ? from[k] : undefined;
+    return out;
   }
 
   function retry(id) {
@@ -644,7 +834,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     if (flushing) return flushing;
     flushing = (async () => {
       for (const op of ops.slice()) {
-        if (op.api !== "addExpense" || op.status !== "queued") continue;
+        if (!isAdd(op) || op.status !== "queued") continue;
         if (op.undone || !ops.includes(op)) continue; // undone since the pass began
         await send(op);
         if (op.status === "queued" && !op.undone) return; // still no signal
@@ -675,7 +865,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         saveCache();
         ok = true;
       } catch (err) {
-        state.notice = err && err.code === "network" ? NO_SIGNAL : (err && err.message) || NO_SIGNAL;
+        state.notice = failNotice(err);
       }
       removeOp(op);
       changed();
