@@ -234,3 +234,33 @@ test("the rate is fetched only when today's is missing and no failure in the las
   assert.equal(P.shouldFetchRate(null, "junk", now), true);
   assert.equal(P.shouldFetchRate(null, "2026-12-10T13:00:00.000Z", now), true);
 });
+
+test("rateSource: today's stored rate is live, an earlier day's is last, none is the stand-in (F7)", () => {
+  assert.equal(P.rateSource("108.4", "108.4"), "live");
+  assert.equal(P.rateSource(null, "107.9"), "last");
+  assert.equal(P.rateSource("", "107.9"), "last");
+  assert.equal(P.rateSource(null, null), "fallback");
+  assert.equal(P.rateSource("junk", "0"), "fallback");
+});
+
+test("sameKey compares whole keys and is false for any difference (F12)", () => {
+  assert.equal(P.sameKey("abc123", "abc123"), true);
+  assert.equal(P.sameKey("abc123", "abc124"), false);
+  assert.equal(P.sameKey("abc123", "abc12"), false);
+  assert.equal(P.sameKey("abc12", "abc123"), false);
+  assert.equal(P.sameKey("", ""), false, "an empty key never matches");
+  assert.equal(P.sameKey(null, "abc"), false);
+  assert.equal(P.sameKey("abc", undefined), false);
+});
+
+test("every message the backend can show uses the curly apostrophe (R20, F10)", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = path.join(__dirname, "..", "backend");
+  for (const f of fs.readdirSync(dir).filter((n) => n.endsWith(".js"))) {
+    const src = fs.readFileSync(path.join(dir, f), "utf8");
+    for (const lit of src.match(/"(?:[^"\\\n]|\\.)*"/g) || []) {
+      assert.equal(/[A-Za-z]'[A-Za-z]/.test(lit), false, f + ": " + lit);
+    }
+  }
+});

@@ -113,3 +113,9 @@ test("log ids compare as numbers even when the sheet hands them back as text", (
   assert.equal(P.canUndo(log[0], log), false);
   assert.equal(P.canUndo(log[1], log), true);
 });
+
+test("a person's e-Transfer change reads as a sentence without the address, and is never undoable (F9)", () => {
+  assert.equal(P.summarize("edit", "person", { name: "Ajen", etransfer: "" }, { name: "Ajen", etransfer: "a@example.com" }), "changed Ajen’s e-Transfer address");
+  const entry = { id: 3, kind: "person", ref: "Ajen", undoneBy: null };
+  assert.equal(P.canUndo(entry, [entry]), false);
+});

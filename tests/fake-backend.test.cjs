@@ -683,3 +683,70 @@ test("a write that cannot get the lock answers busy, writes nothing and leaves r
   locked = false;
   assert.equal((await send("addExpense", { expense: ramen() })).rev, 2);
 });
+
+// ---------- fix wave ----------
+
+test("load says where today's rate came from: live by default, or what the fake is set to (F7)", async () => {
+  const call = client();
+  assert.equal((await call("load")).data.rateSource, "live");
+  call.fake.setRate(111, "fallback");
+  const r = await call("load");
+  assert.equal(r.data.rateToday, 111);
+  assert.equal(r.data.rateSource, "fallback");
+  call.fake.setRate(109.5, "last");
+  assert.deepEqual([(await call("load")).data.rateToday, (await call("load")).data.rateSource], [109.5, "last"]);
+  assert.equal((await call("addExpense", { expense: ramen() })).data.expense.rate, 109.5, "an add takes the same rate");
+});
+
+test("changing an e-Transfer address is logged without the address; a Simplify flip alone is not (F9)", async () => {
+  const call = client();
+  const r = await call("setPerson", { name: "Trenton", patch: { etransfer: "t@example.com" } });
+  assert.equal(r.ok, true);
+  assert.equal(r.rev, 1);
+  const [entry] = await historyAll(call);
+  assert.deepEqual(
+    { action: entry.action, kind: entry.kind, ref: entry.ref, who: entry.who, summary: entry.summary, canUndo: entry.canUndo },
+    { action: "edit", kind: "person", ref: "Trenton", who: "Mo", summary: "changed Trenton’s e-Transfer address", canUndo: false },
+  );
+  assert.equal(JSON.stringify(entry).includes("t@example.com"), false, "the address is not in what history returns");
+  const row = call.fake.tables.Log[0];
+  assert.deepEqual(JSON.parse(row.before), { name: "Trenton", etransfer: "" });
+  assert.deepEqual(JSON.parse(row.after), { name: "Trenton", etransfer: "t@example.com" });
+
+  await call("setPerson", { name: "Trenton", patch: { simplify: false } });
+  await call("setPerson", { name: "Trenton", patch: { etransfer: "t@example.com", simplify: true } }); // same address
+  assert.equal((await historyAll(call)).length, 1, "a Simplify flip writes no Log row");
+
+  await call("setPerson", { name: "Trenton", patch: { etransfer: "new@example.com", simplify: false } });
+  assert.equal((await historyAll(call)).length, 2);
+});
+
+test("a person entry can never be undone: undo answers stale and changes nothing (F9)", async () => {
+  const call = client();
+  await call("setPerson", { name: "Ajen", patch: { etransfer: "a@example.com" } });
+  const [entry] = await historyAll(call);
+  const r = await call("undo", { logId: entry.id });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "stale");
+  assert.equal(r.message, "That change can’t be undone.");
+  const load = await call("load");
+  assert.equal(load.data.people.find((p) => p.name === "Ajen").etransfer, "a@example.com");
+  assert.equal(call.fake.tables.Log.length, 1);
+});
+
+test("history for an expense is not mixed with a person of the same name (F9)", async () => {
+  const call = client();
+  await call("addExpense", { expense: ramen() });
+  await call("setPerson", { name: "Mo", patch: { etransfer: "m@example.com" } });
+  const forLine = await historyAll(call, { ref: "exp0000001" });
+  assert.deepEqual(forLine.map((e) => e.kind), ["expense"]);
+});
+
+test("the key check reads the cached key, not Script Properties, and compares whole keys (F12)", async () => {
+  const fake = createFakeBackend();
+  for (const key of ["test-key", "test-kez", "test-ke", "test-key2", ""]) {
+    const r = await fake({ key, actor: "Mo", action: "rev", args: {} });
+    assert.equal(r.ok, key === "test-key", key);
+  }
+  assert.equal(fake.propReads.includes("TRIP_KEY"), false);
+});

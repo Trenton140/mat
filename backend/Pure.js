@@ -77,7 +77,7 @@ function realDay_(s) {
 }
 
 function validateExpense(input, peopleNames) {
-  if (!isObj_(input)) return fail_("That didn't come through properly.");
+  if (!isObj_(input)) return fail_("That didn’t come through properly.");
   var id = input.id, day = input.day, title = input.title, amount = input.amount;
   if (typeof id !== "string" || !ID_RE_.test(id)) return fail_("That line has a bad id.");
   if (typeof day !== "string" || (day !== "pre" && (!DAY_RE_.test(day) || !realDay_(day)))) return fail_("Pick a day.");
@@ -95,18 +95,18 @@ function validateExpense(input, peopleNames) {
   var split = input.split;
   if (!Array.isArray(split) || split.length === 0) return fail_("Pick who shares it.");
   for (var i = 0; i < split.length; i++) {
-    if (typeof split[i] !== "string" || peopleNames.indexOf(split[i]) === -1) return fail_("Someone in the split isn't on this trip.");
+    if (typeof split[i] !== "string" || peopleNames.indexOf(split[i]) === -1) return fail_("Someone in the split isn’t on this trip.");
     if (split.indexOf(split[i]) !== i) return fail_("Someone is in the split twice.");
   }
   var note = input.note === undefined || input.note === null ? "" : input.note;
-  if (typeof note !== "string") return fail_("The note didn't come through properly.");
+  if (typeof note !== "string") return fail_("The note didn’t come through properly.");
   note = note.trim();
   if (note.length > 200) return fail_("Keep the note under 200 letters.");
   var kind = input.kind === undefined || input.kind === null ? "" : input.kind;
-  if (kind !== "" && KINDS.indexOf(kind) === -1) return fail_("That kind isn't one we know.");
+  if (kind !== "" && KINDS.indexOf(kind) === -1) return fail_("That kind isn’t one we know.");
   var mode = input.splitMode === undefined || input.splitMode === null || input.splitMode === "" ? "equal" : input.splitMode;
   var vals = input.splitVals === undefined || input.splitVals === null ? [] : input.splitVals;
-  if (!Array.isArray(vals)) return fail_("The split didn't come through properly.");
+  if (!Array.isArray(vals)) return fail_("The split didn’t come through properly.");
   if (mode === "equal") {
     vals = [];
   } else if (mode === "parts") {
@@ -127,10 +127,10 @@ function validateExpense(input, peopleNames) {
       rounded.push(currency === "JPY" ? units : units / 100);
     }
     var total = currency === "JPY" ? amount : cents_(amount);
-    if (sum !== total) return fail_("The amounts don't add up to the total.");
+    if (sum !== total) return fail_("The amounts don’t add up to the total.");
     vals = rounded;
   } else {
-    return fail_("That way of splitting isn't one we know.");
+    return fail_("That way of splitting isn’t one we know.");
   }
   return {
     ok: true,
@@ -139,7 +139,7 @@ function validateExpense(input, peopleNames) {
 }
 
 function validatePayment(input, peopleNames) {
-  if (!isObj_(input)) return fail_("That didn't come through properly.");
+  if (!isObj_(input)) return fail_("That didn’t come through properly.");
   if (typeof input.id !== "string" || !ID_RE_.test(input.id)) return fail_("That payment has a bad id.");
   if (typeof input.from !== "string" || peopleNames.indexOf(input.from) === -1) return fail_("Pick who paid.");
   if (typeof input.to !== "string" || peopleNames.indexOf(input.to) === -1) return fail_("Pick who got paid.");
@@ -154,14 +154,14 @@ function validatePayment(input, peopleNames) {
 }
 
 function validatePersonPatch(patch) {
-  if (!isObj_(patch)) return fail_("That didn't come through properly.");
+  if (!isObj_(patch)) return fail_("That didn’t come through properly.");
   var out = {};
   var keys = Object.keys(patch);
   if (keys.length === 0) return fail_("Nothing to change.");
   for (var i = 0; i < keys.length; i++) {
     var k = keys[i];
     if (k === "etransfer") {
-      if (typeof patch.etransfer !== "string") return fail_("The e-Transfer address didn't come through properly.");
+      if (typeof patch.etransfer !== "string") return fail_("The e-Transfer address didn’t come through properly.");
       var t = patch.etransfer.trim();
       if (t.length > 80) return fail_("Keep the e-Transfer address under 80 letters.");
       out.etransfer = t;
@@ -305,6 +305,23 @@ function setupSeedRows() {
 
 // Whether to fetch today's rate: only when today's is not stored yet and the
 // last failed fetch (failAtIso) was not within the past hour.
+// Where the rate in use came from: today's stored rate is "live", an earlier
+// day's (RATE_LAST) is "last", none at all means the stand-in 111, "fallback".
+function rateSource(todayKeyValue, lastValue) {
+  if (Number(todayKeyValue) > 0) return "live";
+  if (Number(lastValue) > 0) return "last";
+  return "fallback";
+}
+
+// The trip key check: whole keys only, and the time taken does not depend on
+// where two keys of the same length first differ.
+function sameKey(given, key) {
+  if (typeof given !== "string" || typeof key !== "string" || key === "" || given.length !== key.length) return false;
+  var diff = 0;
+  for (var i = 0; i < key.length; i++) diff |= given.charCodeAt(i) ^ key.charCodeAt(i);
+  return diff === 0;
+}
+
 function shouldFetchRate(todayKeyValue, failAtIso, nowIso) {
   if (Number(todayKeyValue) > 0) return false;
   var failAt = failAtIso ? Date.parse(failAtIso) : NaN;
@@ -340,6 +357,8 @@ function expenseDiff_(before, after) {
 }
 
 function summarize(action, kind, before, after) {
+  // The address itself never goes in a sentence: it stays in the Sheet.
+  if (kind === "person") return "changed " + (after || before).name + "\u2019s e-Transfer address";
   if (kind === "payment") {
     var pay = after || before;
     var what = pay.from + " \u2192 " + pay.to + " " + money_(pay.cad, "CAD");
@@ -366,6 +385,7 @@ function undoTarget(entry) {
 }
 
 function canUndo(entry, allEntries) {
+  if (entry.kind === "person") return false;
   if (entry.undoneBy !== null && entry.undoneBy !== undefined && entry.undoneBy !== "") return false;
   for (var i = 0; i < allEntries.length; i++) {
     var o = allEntries[i];
@@ -414,5 +434,5 @@ function entryFromRow(o, allRows) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey };
 }

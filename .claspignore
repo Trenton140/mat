@@ -1,0 +1,6 @@
+# Read by clasp, which runs with rootDir "backend" (see .clasp.json): patterns
+# are relative to backend/. Push only the Apps Script sources and the
+# manifest; everything else (package.json above all) stays local.
+**/**
+!*.js
+!appsscript.json

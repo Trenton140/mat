@@ -9,8 +9,24 @@ function setProp_(key, value) {
   PropertiesService.getScriptProperties().setProperty(key, String(value));
 }
 
+// The trip key, from the script cache (six hours) so that a request does not
+// cost a Script Properties read; Script Properties on a miss. After changing
+// TRIP_KEY by hand, run showInvite() to drop the cached copy.
+var TRIP_KEY_CACHE_S_ = 6 * 60 * 60;
+
+function tripKey_() {
+  var cache = CacheService.getScriptCache();
+  var key = cache.get("TRIP_KEY");
+  if (key) return key;
+  key = getProp_("TRIP_KEY");
+  if (key) cache.put("TRIP_KEY", key, TRIP_KEY_CACHE_S_);
+  return key;
+}
+
 // Runs fn under the script lock. If the lock is not free within 8 seconds,
-// returns the busy envelope instead (handle_ adds rev).
+// returns the busy envelope instead (handle_ adds rev). Sheet writes are
+// buffered: they are flushed before the lock is let go, so the next request
+// never reads the Sheet without them.
 function withLock_(fn) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(8000)) {
@@ -19,7 +35,11 @@ function withLock_(fn) {
   try {
     return fn();
   } finally {
-    lock.releaseLock();
+    try {
+      SpreadsheetApp.flush();
+    } finally {
+      lock.releaseLock();
+    }
   }
 }
 

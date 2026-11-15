@@ -11,7 +11,9 @@
 // keepsApostrophe (Sheets hands back a text cell's leading ' verbatim).
 // Test handles: fake.tables (live rows per tab), fake.requests (every body
 // received), fake.primitives (the in-memory helpers), fake.props (Script
-// Properties).
+// Properties), fake.propReads (every Script Properties key read, in order),
+// fake.setRate(rate, source) (today's rate and where it came from: "live",
+// "last" or "fallback"; default 111, "live").
 
 const fs = require("fs");
 const path = require("path");
@@ -62,6 +64,9 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   // Seeded Log rows are not writes, so REV starts at 0 even when seeded (an
   // unset REV would otherwise fall back to the Log's highest id).
   const props = { TRIP_KEY, REV: "0" };
+  const propReads = [];
+  const rate = { rate: RATE, source: "live" };
+  const cache = {}; // the script cache, for the trip key
 
   const headers = (tab) => {
     const h = P.TABS[tab];
@@ -105,7 +110,15 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       return primitives.updateWhere_(tab, "id", id, patch);
     },
     getProp_(key) {
+      propReads.push(key);
       return Object.prototype.hasOwnProperty.call(props, key) ? props[key] : null;
+    },
+    // Same as Env.js: the cached key, Script Properties only on a miss.
+    tripKey_() {
+      if (cache.TRIP_KEY) return cache.TRIP_KEY;
+      const key = Object.prototype.hasOwnProperty.call(props, "TRIP_KEY") ? props.TRIP_KEY : null;
+      if (key) cache.TRIP_KEY = key;
+      return key;
     },
     setProp_(key, value) {
       props[key] = String(value);
@@ -116,7 +129,8 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       if (lockFails && lockFails()) return { ok: false, error: "busy", message: "Someone else is saving right now. Try again in a moment." };
       return fn();
     },
-    getRate_: () => RATE,
+    getRate_: () => rate.rate,
+    getRateInfo_: () => ({ rate: rate.rate, source: rate.source }),
     nowIso_: () => now(),
     sheetUrl_: () => SHEET_URL,
   };
@@ -142,6 +156,11 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   fake.requests = requests;
   fake.primitives = primitives;
   fake.props = props;
+  fake.propReads = propReads;
+  fake.setRate = (r, source) => {
+    rate.rate = r;
+    rate.source = source;
+  };
   return fake;
 }
 

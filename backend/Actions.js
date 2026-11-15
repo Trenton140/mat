@@ -3,27 +3,27 @@
 // elsewhere (Sheets.js, Env.js, Rate.js on Apps Script; in memory in
 // tests/fake-backend.cjs):
 //   readTable_, appendObj_, updateById_, updateWhere_,
-//   getProp_, setProp_, withLock_, getRate_, nowIso_, sheetUrl_
+//   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_
 // It also uses the pure helpers from Pure.js.
 
 var MSG_ = {
-  badRequest: "That request didn't come through properly.",
-  badKey: "This link's trip key doesn't match. Ask for a fresh invite link.",
-  badAction: "The app asked for something the trip sheet doesn't know how to do.",
+  badRequest: "That request didn’t come through properly.",
+  badKey: "This link’s trip key doesn’t match. Ask for a fresh invite link.",
+  badAction: "The app asked for something the trip sheet doesn’t know how to do.",
   badActor: "Pick who you are first.",
-  badId: "That didn't say which line it meant.",
-  badPatch: "That change didn't come through properly.",
-  patchKey: "Only a line's details can be changed.",
+  badId: "That didn’t say which line it meant.",
+  badPatch: "That change didn’t come through properly.",
+  patchKey: "Only a line’s details can be changed.",
   editDeleted: "Bring it back first.",
-  noExpense: "That line isn't there any more.",
-  noPayment: "That payment isn't there any more.",
-  noPerson: "That person isn't on this trip.",
-  badLogId: "That didn't say which change to undo.",
-  noLog: "That change isn't in the history.",
-  undone: "That's already been undone.",
+  noExpense: "That line isn’t there any more.",
+  noPayment: "That payment isn’t there any more.",
+  noPerson: "That person isn’t on this trip.",
+  badLogId: "That didn’t say which change to undo.",
+  noLog: "That change isn’t in the history.",
+  undone: "That’s already been undone.",
   newer: "That was changed again since. Undo the newer change first.",
-  cantUndo: "That change can't be undone.",
-  badHistory: "That history request didn't come through properly.",
+  cantUndo: "That change can’t be undone.",
+  badHistory: "That history request didn’t come through properly.",
   server: "Something went wrong on our side. Try again.",
 };
 
@@ -31,8 +31,7 @@ var EXPENSE_PATCH_KEYS_ = ["title", "amount", "currency", "paidBy", "split", "sp
 
 function handle_(body) {
   if (!isObj_(body)) return err_("bad_input", MSG_.badRequest);
-  var key = getProp_("TRIP_KEY");
-  if (!key || typeof body.key !== "string" || body.key !== key) return err_("bad_key", MSG_.badKey);
+  if (!sameKey(body.key, tripKey_())) return err_("bad_key", MSG_.badKey);
   var env;
   try {
     env = dispatch_(body);
@@ -187,6 +186,7 @@ function paymentEditableOf_(p) {
 
 function load_() {
   var rev = rev_();
+  var rate = getRateInfo_();
   var trip = {};
   readTable_("Trip").forEach(function (r) {
     var k = cellText_(r.key).trim();
@@ -200,7 +200,8 @@ function load_() {
     stays: readTable_("Stays").filter(function (r) { return cellText_(r.id) !== ""; }).map(plainRow_),
     expenses: readTable_("Expenses").filter(function (r) { return cellText_(r.id) !== ""; }).map(expenseFromRow),
     payments: readTable_("Settlements").filter(function (r) { return cellText_(r.id) !== ""; }).map(paymentFromRow),
-    rateToday: getRate_(),
+    rateToday: rate.rate,
+    rateSource: rate.source,
     sheetUrl: sheetUrl_(),
   }, rev);
 }
@@ -331,8 +332,16 @@ function setPerson_(args, ctx) {
   var cur = personFromRow(row);
   var changed = Object.keys(v.value).some(function (k) { return cur[k] !== v.value[k]; });
   if (!changed) return ok_({ person: cur }, rev_());
-  var saved = updateWhere_("People", "name", args.name, v.value);
-  return ok_({ person: personFromRow(saved) }, bumpRev_());
+  var saved = personFromRow(updateWhere_("People", "name", args.name, v.value));
+  // A new e-Transfer address is where money gets sent: it goes in the Log.
+  // The address itself is only in the snapshots (the Sheet), never the sentence.
+  // A Simplify flip alone is a reading preference and is not logged.
+  if (saved.etransfer !== cur.etransfer) {
+    var was = { name: cur.name, etransfer: cur.etransfer };
+    var now = { name: saved.name, etransfer: saved.etransfer };
+    appendLog_(ctx, "edit", "person", saved.name, summarize("edit", "person", was, now), was, now);
+  }
+  return ok_({ person: saved }, bumpRev_());
 }
 
 // ---- undo ----
@@ -347,10 +356,10 @@ function undo_(args, ctx) {
   if (!row) return err_("not_found", MSG_.noLog);
 
   var entry = parseLogRow(row);
+  if (entry.kind !== "expense" && entry.kind !== "payment") return err_("stale", MSG_.cantUndo);
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
   if (!canUndo(entry, rows.map(logShape_))) return err_("stale", MSG_.newer);
   if (!entry.before && !entry.after) return err_("stale", MSG_.cantUndo);
-  if (entry.kind !== "expense" && entry.kind !== "payment") return err_("stale", MSG_.cantUndo);
 
   var isExpense = entry.kind === "expense";
   var tab = isExpense ? "Expenses" : "Settlements";

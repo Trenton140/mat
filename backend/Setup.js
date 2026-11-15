@@ -31,6 +31,10 @@ function setup() {
 
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty("TRIP_KEY")) props.setProperty("TRIP_KEY", Utilities.getUuid().replace(/-/g, "").slice(0, 24));
+
+  // Last, so the tabs are there either way: a rate host that refuses Google's
+  // servers must show up now, not as a silent stand-in rate on every line.
+  requireLiveRate_();
 }
 
 function seedIfEmpty_(tab, objs) {
@@ -42,6 +46,9 @@ function seedIfEmpty_(tab, objs) {
 }
 
 function showInvite() {
+  // The key is cached for six hours (tripKey_ in Env.js): forget the cached
+  // copy so a key changed by hand in Script Properties takes effect now.
+  CacheService.getScriptCache().remove("TRIP_KEY");
   var key = PropertiesService.getScriptProperties().getProperty("TRIP_KEY");
   Logger.log(key ? "Trip key: " + key : "No trip key yet. Run setup() first.");
 }

@@ -14,7 +14,7 @@ function doPost(e) {
   try {
     body = JSON.parse(e && e.postData ? e.postData.contents : undefined);
   } catch (err) {
-    return json_({ ok: false, error: "bad_input", message: "That request didn't come through properly." });
+    return json_({ ok: false, error: "bad_input", message: "That request didn’t come through properly." });
   }
   try {
     return json_(handle_(body));
