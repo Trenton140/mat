@@ -8,6 +8,7 @@ import { defaultRingDay } from "./time.js";
 import { mountMoney } from "./views/money.js";
 import { mountFirst } from "./views/first.js";
 import { mountRegister } from "./views/register.js";
+import { mountLine } from "./views/line.js";
 import { mountUndoBar } from "./views/ubar.js";
 
 // localStorage, or a stand-in in memory when the browser will not give it.
@@ -82,12 +83,24 @@ function start() {
 
   const phone = document.getElementById("phone");
   const register = mountRegister(phone, store, { storage: raw });
+  // One sheet at a time: opening one closes the other.
+  const line = mountLine(phone, store, {
+    onEdit: (id) => {
+      line.close();
+      register.edit(id);
+    },
+  });
   const ring = (day) => {
-    if (store.state.trip && store.state.trip.start) register.open(day);
+    if (!(store.state.trip && store.state.trip.start)) return;
+    line.close();
+    register.open(day);
   };
   mountMoney(document.getElementById("vMoney"), store, {
     onRing: ring,
-    onLine: () => {}, // Task 9: the receipt line sheet
+    onLine: (id) => {
+      register.close();
+      line.open(id);
+    },
     onHistory: () => {}, // Task 11: History
   });
   mountUndoBar(phone, store);

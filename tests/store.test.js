@@ -1119,6 +1119,84 @@ test("notify sets a notice and tells subscribers; clearNotice clears it", async 
   assert.equal(notices.length, 2);
 });
 
+// ---------- discard ----------
+
+test("discard of a queued line that never left the phone sends nothing, ever", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.offline = true;
+  await p.store.refresh(); // the failed load is what tells the store there is no signal
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, id).pending, true);
+  assert.equal(p.net.sent.filter((b) => b.action === "addExpense").length, 0, "it never left the phone");
+  const before = p.net.sent.filter((b) => b.action === "addExpense").length;
+  assert.equal(p.store.discard(id), true);
+  assert.equal(byId(p.store.state.expenses, id), undefined);
+  assert.deepEqual(queueOf(p.storage), []);
+  p.net.offline = false;
+  await p.store.refresh();
+  await p.store.idle();
+  assert.equal(sent(p.fake, "addExpense"), 0, "no add reached the backend");
+  assert.equal(p.net.sent.filter((b) => b.action === "addExpense").length, before, "none sent after it either");
+  assert.equal(byId(p.store.state.expenses, id), undefined);
+});
+
+test("discard of a line the backend refused removes it and leaves nothing on the backend", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "bad_input", message: "Pick a day." } : null);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, id).failed, true);
+  assert.equal(p.store.discard(id), true);
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, id), undefined);
+  assert.deepEqual(queueOf(p.storage), []);
+  p.net.override = null;
+  await p.store.refresh();
+  assert.equal(byId(p.store.state.expenses, id), undefined);
+  assert.equal(byId((await backend(p.fake)).expenses, id), undefined);
+});
+
+test("discard of a line whose reply was lost is resolved as add then undo on the next contact", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.lose.add("addExpense");
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, id).deleted, false, "it did reach the backend");
+  p.net.lose.clear();
+  assert.equal(p.store.discard(id), true);
+  const goneFromReceipt = () => { const l = byId(p.store.state.expenses, id); return !l || l.deleted === true; };
+  assert.equal(goneFromReceipt(), true, "gone from the receipt at once");
+  await p.store.idle();
+  await p.store.refresh();
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).expenses, id).deleted, true);
+  assert.equal(goneFromReceipt(), true, "gone from the receipt");
+});
+
+test("discard does nothing for a confirmed line", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const line = p.store.state.expenses[0];
+  assert.equal(p.store.discard(line.id), false);
+  assert.equal(p.store.discard("nosuchid1"), false);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  assert.equal(p.store.unsaved(id), true, "still on its way");
+  await p.store.idle();
+  assert.equal(p.store.unsaved(id), false);
+  p.store.updateExpense(id, { note: "x" });
+  assert.equal(p.store.unsaved(id), false, "an edit of a confirmed line is not an unsaved line");
+  assert.equal(p.store.discard(id), false, "a line the backend has confirmed");
+  assert.equal(byId(p.store.state.expenses, id).deleted, false);
+});
+
 // ---------- boundaries ----------
 
 test("js modules reach the outside world only through their arguments", () => {

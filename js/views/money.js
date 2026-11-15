@@ -176,7 +176,6 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     if (add) return onRing(add.dataset.addday);
     const row = target.closest(".rc-row[data-id]");
     if (!row) return;
-    if (row.classList.contains("is-failed")) return store.retry(row.dataset.id);
     onLine(row.dataset.id);
   };
   rc.addEventListener("click", (ev) => act(ev.target));

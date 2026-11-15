@@ -556,23 +556,26 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     }
   }
 
+  // Takes an add back: forgotten when it provably never left the phone,
+  // otherwise resolved as add-then-undo on the next contact.
+  function takeBack(op) {
+    removeOp(op);
+    if (!mayHaveLanded(op)) {
+      saveQueue();
+      changed();
+      return Promise.resolve();
+    }
+    startResolving(op);
+    changed();
+    return enqueue(chainKey(op.kind, op.id), () => finishUndo(op, false));
+  }
+
   function undo(token) {
     const op = writes.get(token);
     if (!op || op.undone) return Promise.resolve();
     op.undone = true;
     state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(undoneView(op, bare(find(op.kind, op.id)))), canUndo: false };
-    if (isAdd(op)) {
-      removeOp(op);
-      if (!mayHaveLanded(op)) {
-        // never left the phone, or refused outright: forget it
-        saveQueue();
-        changed();
-        return Promise.resolve();
-      }
-      startResolving(op);
-      changed();
-      return enqueue(chainKey(op.kind, op.id), () => finishUndo(op, false));
-    }
+    if (isAdd(op)) return takeBack(op);
     const uop = { kind: op.kind, id: op.id, status: "sending", view: (cur) => undoneView(op, cur) };
     ops.push(uop);
     changed();
@@ -609,6 +612,18 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     saveQueue();
     changed();
     return send(op);
+  }
+
+  const unsavedAdd = (id) => ops.find((o) => isLiveQueuedAdd(o) && o.id === id);
+
+  // A line that is still pending or failed, with no way forward: take it back
+  // without a word on the undo bar. A confirmed line is left alone (false).
+  function discard(id) {
+    const op = unsavedAdd(id);
+    if (!op) return false;
+    op.undone = true;
+    takeBack(op);
+    return true;
   }
 
   // Sends queued lines, then finishes undos left open. One pass at a time.
@@ -767,6 +782,6 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     addPayment,
     removePayment: (id) => change("payment", id, "unstamp", "removePayment", { removed: true }),
     restorePayment: (id) => change("payment", id, "restamp", "restorePayment", { removed: false }),
-    retry, undo, undoEntry, loadHistory, historyFor,
+    retry, discard, unsaved: (id) => !!unsavedAdd(id), undo, undoEntry, loadHistory, historyFor,
   };
 }

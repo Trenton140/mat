@@ -591,7 +591,8 @@ module.exports = [
       backend.failWith = null;
       await page.click("#regDone");
       await waitClosed(page);
-      await page.click('.rc-row[data-id="' + row.id + '"]');
+      await page.click('.rc-row[data-id="' + row.id + '"]'); // opens the line sheet (Task 9)
+      await page.click("#lnRetry");
       await waitRow(page, "Bento", (r) => !r.cls.includes("is-failed") && !r.cls.includes("is-pending"), "normal again");
       await idle(page);
       assert.equal(savedTitled(backend, "Bento").length, 1, "exactly one copy on the backend");

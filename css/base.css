@@ -23,7 +23,8 @@ i{font-style:normal}
 [hidden]{display:none !important}
 :focus-visible{outline:2px solid var(--text);outline-offset:2px}
 
-.phone{position:relative;width:min(100%,400px);height:min(100%,860px);background:var(--ground);overflow:hidden;
+/* clip, not hidden: a closed sheet waiting below must never make the phone scrollable. */
+.phone{position:relative;width:min(100%,400px);height:min(100%,860px);background:var(--ground);overflow:hidden;overflow:clip;
   border-radius:38px;box-shadow:0 0 0 1px #2a2421,0 40px 90px -30px #000;isolation:isolate}
 @media (max-width:480px){ .phone{width:100%;height:100%;border-radius:0;box-shadow:none} }
 .views{position:absolute;inset:0}
