@@ -10,6 +10,7 @@ import { mountFirst } from "./views/first.js";
 import { mountRegister } from "./views/register.js";
 import { mountLine } from "./views/line.js";
 import { mountHistory } from "./views/history.js";
+import { mountYou } from "./views/you.js";
 import { mountUndoBar } from "./views/ubar.js";
 
 // localStorage, or a stand-in in memory when the browser will not give it.
@@ -86,6 +87,13 @@ function start() {
   const register = mountRegister(phone, store, { storage: raw });
   // One sheet at a time: opening one closes the others.
   const history = mountHistory(phone, store);
+  const you = mountYou(phone, store, {
+    getKey: () => storage.getItem("mat.key"),
+    onHistory: () => {
+      you.close(false);
+      history.open();
+    },
+  });
   const line = mountLine(phone, store, {
     onEdit: (id) => {
       line.close(false);
@@ -96,6 +104,7 @@ function start() {
     if (!(store.state.trip && store.state.trip.start)) return;
     line.close(false);
     history.close(false);
+    you.close(false);
     register.open(day);
   };
   mountMoney(document.getElementById("vMoney"), store, {
@@ -103,11 +112,13 @@ function start() {
     onLine: (id) => {
       register.close();
       history.close(false);
+      you.close(false);
       line.open(id);
     },
     onHistory: () => {
       register.close();
       line.close(false);
+      you.close(false);
       history.open();
     },
   });
@@ -120,7 +131,12 @@ function start() {
   // Click-through tests reach the register and the store here; only when the
   // fake backend is in the page, never in the real app.
   if (typeof globalThis.MAT_FAKE_API === "function") globalThis.__matTest = { store, register };
-  // #youBtn: Task 12 opens Settings.
+  document.getElementById("youBtn").addEventListener("click", () => {
+    register.close();
+    line.close(false);
+    history.close(false);
+    you.open();
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") store.markSeen();

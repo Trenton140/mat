@@ -1,0 +1,323 @@
+// Settings (Task 12): the "You 設定" sheet.
+
+const assert = require("node:assert/strict");
+const { SEED, NOON12, open, until, text, expectText, visible } = require("./helpers.cjs");
+
+// ---- small tools for this file ----
+
+const isOpen = (page) => page.evaluate(() => document.getElementById("you").classList.contains("is-open"));
+// Open, and risen all the way (the sheet slides up over 500 ms).
+const waitYou = (page) =>
+  until(
+    () => page.evaluate(() => {
+      const s = document.getElementById("you");
+      return s.classList.contains("is-open") && Math.abs(s.getBoundingClientRect().bottom - innerHeight) < 1;
+    }),
+    "the settings sheet opens",
+  );
+const waitYouClosed = (page) => until(async () => !(await isOpen(page)), "the settings sheet closes");
+const loads = (backend) => backend.requests.filter((r) => r.action === "load").length;
+const setPersonRequests = (backend) => backend.requests.filter((r) => r.action === "setPerson").length;
+const people = (backend) => backend.fake.primitives.readTable_("People");
+const addressOf = (backend, name) => people(backend).find((p) => p.name === name).etransfer;
+const mailValue = (page) => page.inputValue("#setMail");
+const clipboard = (page) => page.evaluate(() => navigator.clipboard.readText());
+const storage = (page, k) => page.evaluate((key) => localStorage.getItem(key), k);
+const waitMail = (page, v) => until(async () => (await mailValue(page)) === v, "the address field reads " + JSON.stringify(v));
+
+async function ready(page, opts = {}) {
+  const backend = await open(page, { seed: SEED, nowMs: NOON12, ...opts });
+  await until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0), "the receipt draws");
+  return backend;
+}
+
+async function openYou(page) {
+  await page.click("#youBtn");
+  await waitYou(page);
+}
+
+async function pick(page, name) {
+  await page.click('#setWho [data-me="' + name + '"]');
+  await until(async () => (await storage(page, "mat.me")) === name, "mat.me is " + name);
+}
+
+module.exports = [
+  {
+    name: "You opens the sheet, titled You 設定, a dialog with focus inside, rows in order; Done, the scrim and Escape close it and focus returns to You",
+    async run({ page }) {
+      await ready(page);
+      assert.equal(await isOpen(page), false);
+      assert.equal(await page.evaluate(() => document.getElementById("you").inert), true);
+      await openYou(page);
+      assert.equal(await page.getAttribute("#you", "role"), "dialog");
+      assert.equal(await page.getAttribute("#you", "aria-modal"), "true");
+      assert.equal(await text(page, "#you .sheet-top span"), "You設定");
+      assert.equal(await page.evaluate(() => document.getElementById("you").contains(document.activeElement)), true, "focus moves into the sheet");
+      const order = await page.evaluate(() => {
+        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setHow", "setInvite", "setSheet", "setReport"];
+        const all = [...document.querySelectorAll("#you *")];
+        return ids.map((id) => all.indexOf(document.getElementById(id)));
+      });
+      assert.ok(order.every((n) => n > 0) && order.slice().sort((a, b) => a - b).join() === order.join(), "rows are in the asked order: " + order);
+      assert.equal(await page.locator("#you").getByText("Try another day").count(), 0, "no demo clock in this plan");
+
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      assert.equal(await page.evaluate(() => document.activeElement.id), "youBtn", "focus returns to You");
+      await openYou(page);
+      await page.mouse.click(195, 60); // the dimmed table above the sheet
+      await waitYouClosed(page);
+      await openYou(page);
+      await page.keyboard.press("Escape");
+      await waitYouClosed(page);
+    },
+  },
+  {
+    name: "one overlay at a time: Settings closes the register, the line sheet and History, and each of them closes Settings",
+    async run({ page }) {
+      await ready(page);
+      const reg = () => page.evaluate(() => globalThis.__matTest.register.isOpen());
+      const lineOpen = () => page.evaluate(() => document.getElementById("line").classList.contains("is-open"));
+      const histOpen = () => page.evaluate(() => document.getElementById("hist").classList.contains("is-open"));
+      // The register is open: You cannot be tapped under it, so open it from code, then use You from code's door (the button).
+      await page.evaluate(() => globalThis.__matTest.register.open());
+      await until(reg, "register opens");
+      await page.evaluate(() => document.getElementById("youBtn").click());
+      await waitYou(page);
+      await until(async () => !(await reg()), "the register closed");
+
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      await page.click("#rc .rc-row");
+      await until(lineOpen, "line sheet opens");
+      await page.evaluate(() => document.getElementById("youBtn").click());
+      await waitYou(page);
+      await until(async () => !(await lineOpen()), "the line sheet closed");
+
+      await page.evaluate(() => document.getElementById("histBtn").click());
+      await until(histOpen, "history opens");
+      assert.equal(await isOpen(page), false, "History closed Settings");
+      await page.evaluate(() => document.getElementById("youBtn").click());
+      await waitYou(page);
+      await until(async () => !(await histOpen()), "History closed");
+
+      await page.evaluate(() => document.getElementById("ring").click());
+      await until(reg, "Ring up opens the register");
+      assert.equal(await isOpen(page), false, "the register closed Settings");
+    },
+  },
+  {
+    name: "switching person stores mat.me and #say follows; the field then shows that person's own address and a half-typed one is dropped",
+    async run({ page }) {
+      const backend = await ready(page);
+      await expectText(page, "#say", "You’re owed $1,343.08.");
+      await openYou(page);
+      assert.equal(await page.locator("#setWho [data-me]").count(), 3);
+      assert.equal(await page.getAttribute('#setWho [data-me="Mo"]', "aria-pressed"), "true");
+      await page.fill("#setMail", "mo@example.test");
+      await page.click("#setMailSave");
+      await until(() => addressOf(backend, "Mo") === "mo@example.test", "Mo's address saved");
+
+      await page.fill("#setMail", "half-typed");
+      await pick(page, "Ajen");
+      await expectText(page, "#say", "You owe Mo $221.73.");
+      assert.equal(await page.getAttribute('#setWho [data-me="Ajen"]', "aria-pressed"), "true");
+      assert.equal(await page.getAttribute('#setWho [data-me="Mo"]', "aria-pressed"), "false");
+      await waitMail(page, "");
+      await page.fill("#setMail", "ajen@example.test");
+      await page.click("#setMailSave");
+      await until(() => addressOf(backend, "Ajen") === "ajen@example.test", "Ajen's address saved");
+      assert.equal(addressOf(backend, "Mo"), "mo@example.test", "Mo's is untouched");
+      await pick(page, "Mo");
+      await waitMail(page, "mo@example.test");
+      await pick(page, "Ajen");
+      await waitMail(page, "ajen@example.test");
+    },
+  },
+  {
+    name: "e-Transfer: the field is built for an address, an unchanged save sends nothing, a save is kept after reopening, a failed one keeps what was typed",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      const attrs = await page.$eval("#setMail", (i) => ({
+        maxlength: i.getAttribute("maxlength"),
+        autocapitalize: i.getAttribute("autocapitalize"),
+        autocorrect: i.getAttribute("autocorrect"),
+        inputmode: i.getAttribute("inputmode"),
+        size: parseFloat(getComputedStyle(i).fontSize),
+      }));
+      assert.deepEqual({ ...attrs, size: undefined }, { maxlength: "80", autocapitalize: "none", autocorrect: "off", inputmode: "email", size: undefined });
+      assert.ok(attrs.size >= 16, "at least 16 px, so iOS does not zoom");
+      assert.equal(await page.isDisabled("#setMailSave"), true, "nothing to save yet");
+
+      // An address with markup is shown as text, never as HTML.
+      const odd = "<b>x</b>@example.test";
+      await page.fill("#setMail", odd);
+      await page.click("#setMailSave");
+      await until(() => addressOf(backend, "Mo") === odd, "saved as typed");
+      assert.equal(await page.locator("#you b", { hasText: "x" }).count(), 0, "no element made from the address");
+      assert.equal(await mailValue(page), odd);
+
+      // The same value again: Save is off and Enter sends nothing.
+      const sent = setPersonRequests(backend);
+      assert.equal(await page.isDisabled("#setMailSave"), true);
+      await page.focus("#setMail");
+      await page.keyboard.press("Enter");
+      await page.evaluate(() => globalThis.__matTest.store.idle());
+      assert.equal(setPersonRequests(backend), sent, "an unchanged address sends nothing");
+
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      await openYou(page);
+      assert.equal(await mailValue(page), odd, "reopening shows it");
+
+      // No signal: the typed text stays in the field and Save is still there to try again.
+      backend.failWith = "network";
+      await page.fill("#setMail", "new@example.test");
+      await page.click("#setMailSave");
+      await page.evaluate(() => globalThis.__matTest.store.idle());
+      assert.equal(await mailValue(page), "new@example.test", "what was typed is kept");
+      assert.equal(addressOf(backend, "Mo"), odd);
+      assert.equal(await page.isDisabled("#setMailSave"), false, "Save can be tapped again");
+      backend.failWith = null;
+      await page.click("#setMailSave");
+      await until(() => addressOf(backend, "Mo") === "new@example.test", "saved once the signal is back");
+      assert.equal(await mailValue(page), "new@example.test");
+    },
+  },
+  {
+    name: "the stamp sound switch flips On and Off and mat.sound between on and off",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      await expectText(page, "#setSoundV", "On");
+      await page.click("#setSound");
+      await expectText(page, "#setSoundV", "Off");
+      assert.equal(await storage(page, "mat.sound"), "off");
+      await page.click("#setSound");
+      await expectText(page, "#setSoundV", "On");
+      assert.equal(await storage(page, "mat.sound"), "on");
+      await page.click("#setSound");
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      await openYou(page);
+      await expectText(page, "#setSoundV", "Off"); // still off after reopening
+    },
+  },
+  {
+    name: "History closes Settings and opens the tape",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      await page.click("#setHist");
+      await waitYouClosed(page);
+      await until(() => page.evaluate(() => document.getElementById("hist").classList.contains("is-open")), "the tape opens");
+      await until(() => page.evaluate(() => document.querySelectorAll("#tape .tp-row").length > 0), "entries arrive");
+    },
+  },
+  {
+    name: "Last updated reads Up to date 13:20 like the receipt, and a tap fetches once",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      await expectText(page, "#setFresh", "Up to date 13:20");
+      assert.equal(await text(page, "#fresh"), await text(page, "#setFresh"), "the same words as the receipt");
+      const before = loads(backend);
+      await page.click("#setFresh");
+      await until(() => loads(backend) === before + 1, "one load");
+      await page.evaluate(() => globalThis.__matTest.store.idle());
+      assert.equal(loads(backend), before + 1, "only one");
+      await expectText(page, "#setFresh", "Up to date 13:20");
+    },
+  },
+  {
+    name: "How this works shows the three lines from first open, and folds away again",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      assert.equal(await visible(page, "#setHowLines"), false);
+      assert.equal(await page.getAttribute("#setHow", "aria-expanded"), "false");
+      await page.click("#setHow");
+      assert.equal(await page.getAttribute("#setHow", "aria-expanded"), "true");
+      const lines = await page.$$eval("#setHowLines .how-l", (els) => els.map((e) => e.textContent));
+      const { HOW_LINES } = await import("../../js/views/first.js");
+      assert.deepEqual(lines, HOW_LINES);
+      assert.deepEqual(lines, ["Ring up what you paid.", "The slip says who pays whom.", "Stamp it the moment you send."]);
+      await page.click("#setHow");
+      assert.equal(await visible(page, "#setHowLines"), false);
+    },
+  },
+  {
+    name: "the invite link copies origin + path + #k=<key>, the bar says so, and the key is never on screen",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      await page.click("#setInvite");
+      await expectText(page, "#ubarT", "Link copied.");
+      const expected = await page.evaluate(() => location.origin + location.pathname + "#k=test-key");
+      assert.equal(await clipboard(page), expected);
+      assert.equal(expected, "http://localhost:4173/#k=test-key");
+      assert.equal(await page.evaluate(() => document.body.innerText.includes("test-key") || document.body.innerHTML.includes("test-key")), false, "the key is not drawn anywhere");
+      assert.equal(await page.evaluate(() => location.hash), "", "and not in the address bar");
+    },
+  },
+  {
+    name: "Google Sheet is a real link that opens in a new tab; with no sheet address the row is hidden",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      assert.equal(await page.getAttribute("#setSheet", "href"), "https://example.test/sheet");
+      assert.equal(await page.getAttribute("#setSheet", "target"), "_blank");
+      assert.equal(await page.getAttribute("#setSheet", "rel"), "noopener");
+      assert.equal(await page.evaluate(() => document.getElementById("setSheet").tagName), "A");
+      assert.ok(await visible(page, "#setSheet"));
+
+      // A backend that has no sheet address to give.
+      const orig = backend.handle;
+      backend.handle = async (body) => {
+        const r = await orig.call(backend, body);
+        if (r && r.ok && r.data && "sheetUrl" in r.data) r.data.sheetUrl = "";
+        return r;
+      };
+      await page.click("#setFresh");
+      await until(async () => !(await visible(page, "#setSheet")), "the row is hidden");
+      assert.equal(await page.getAttribute("#setSheet", "href"), null);
+    },
+  },
+  {
+    name: "Report a problem copies who, Money, the version, the time and the five newest history sentences, never the key",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      await page.click("#setReport");
+      await expectText(page, "#ubarT", "Copied. Paste it to Mo or Claude.");
+      const note = await clipboard(page);
+      const { APP_VERSION } = await import("../../js/config.js");
+      assert.match(note, /^Who: Mo$/m);
+      assert.match(note, /^Screen: Money$/m);
+      assert.ok(note.includes("App version: " + APP_VERSION));
+      assert.match(note, /^Time: Sat Dec 12, 13:20$/m);
+      const entries = await backend.handle({ key: "test-key", actor: "Mo", via: "app", action: "history", args: {} });
+      const newest = entries.data.entries.slice(0, 5).map((e) => e.who + " " + e.summary + (e.via === "claude" ? " (through Claude)" : ""));
+      assert.equal(newest.length, 5);
+      assert.deepEqual(note.split("\n").filter((l) => l.startsWith("- ")), newest.map((x) => "- " + x));
+      assert.equal(note.includes("test-key"), false, "no trip key in the note");
+      assert.equal(await page.isDisabled("#setReport"), false);
+    },
+  },
+  {
+    name: "Report a problem with no signal says history unavailable and still copies",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      backend.failWith = "network";
+      await page.click("#setReport");
+      await expectText(page, "#ubarT", "Copied. Paste it to Mo or Claude.");
+      const note = await clipboard(page);
+      assert.match(note, /^Latest changes: history unavailable$/m);
+      assert.equal(note.split("\n").some((l) => l.startsWith("- ")), false);
+      assert.match(note, /^Who: Mo$/m);
+      backend.failWith = null;
+    },
+  },
+];

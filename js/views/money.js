@@ -7,7 +7,7 @@
 import { standing, jpyOf, cadCents, shares } from "../money.js";
 import { tripDay } from "../time.js";
 import { mountSlip, viewerOwed } from "./slip.js";
-import { yen, dollars, typed, dayHead, issuer, pt, clock, sentence, tripSpan } from "../format.js";
+import { yen, dollars, typed, dayHead, issuer, pt, freshText, sentence, tripSpan } from "../format.js";
 
 const NO_SIGNAL = "Couldn’t reach the trip sheet.";
 
@@ -109,7 +109,7 @@ function drawReceipt(rc, s, live, ctx) {
   head.append(el("b", "", issuer(s.people)), document.createTextNode([s.trip.name, tripSpan(s.trip)].filter(Boolean).join(", ")));
   head.append(el("div", "rc-no", "レシート No." + String(live.length).padStart(4, "0")));
   if (s.loadedAt !== null) {
-    const fresh = el("button", "rc-fresh", "Up to date " + clock(s.loadedAt));
+    const fresh = el("button", "rc-fresh", freshText(s.loadedAt));
     fresh.type = "button";
     fresh.id = "fresh";
     head.append(fresh);

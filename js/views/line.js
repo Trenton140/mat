@@ -7,7 +7,7 @@
 // Text from people or the Sheet goes in with textContent only.
 
 import { expenseShares, cadCents, jpyOf } from "../money.js";
-import { dollars, yen, typed, dayHead, pt } from "../format.js";
+import { dollars, yen, typed, dayHead, pt, localDay, historySentence } from "../format.js";
 
 const NO_HISTORY = "History needs a connection.";
 const UNSAVED = "Not saved yet.";
@@ -36,14 +36,7 @@ function fig(tag, cls, str) {
 function dateOf(iso) {
   const t = Date.parse(iso);
   if (!isFinite(t)) return "";
-  const d = new Date(t);
-  const day = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
-  return dayHead(day, []).en;
-}
-
-// A history entry as a sentence.
-function sentenceOf(entry) {
-  return entry.who + " " + entry.summary + (entry.via === "claude" ? " (through Claude)" : "");
+  return dayHead(localDay(t), []).en;
 }
 
 // The part of a line that decides what the sheet shows, so history is fetched
@@ -184,7 +177,7 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
       ...entries.map((en) => {
         const row = el("div", "ln-ev" + (en.undoneBy ? " is-undone" : ""));
         const when = dateOf(en.at);
-        row.append(el("time", "", when), el("span", "", sentenceOf(en)));
+        row.append(el("time", "", when), el("span", "", historySentence(en)));
         return row;
       }),
     );

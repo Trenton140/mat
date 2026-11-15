@@ -384,4 +384,20 @@ module.exports = [
       await until(async () => (await paidRows(page)).length === 2, "the other phone's stamp shows");
     },
   },
+  {
+    name: "on a phone in Toronto a stamp made at 13:20 on Sat Dec 12 in Japan reads 'Paid Fri Dec 11.' (the phone's own day)",
+    timezoneId: "America/Toronto",
+    async run({ page }) {
+      const backend = await ready(page);
+      await waitOpen(page, 2);
+      await arm(page, "Ajen>Mo");
+      await page.click(spot("Ajen>Mo"));
+      await until(async () => (await paidRows(page)).length === 1, "a stamped row");
+      await idle(page);
+      // 13:20 Sat Dec 12 in Japan is 23:20 Fri Dec 11 in Toronto.
+      const [paid] = await paidRows(page);
+      assert.equal(paid.sub, "Paid Fri Dec 11. Nothing more to send.");
+      assert.equal(new Date(saved(backend)[0].stampedAt).getTime(), NOON12);
+    },
+  },
 ];

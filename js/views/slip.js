@@ -12,8 +12,7 @@
 // import time, so tests import this module in Node.
 
 import { owedList, direct, routedVia, balances } from "../money.js";
-import { dollars, pt, dayHead } from "../format.js";
-import { dateIn } from "../time.js";
+import { dollars, pt, dayHead, localDay } from "../format.js";
 import { paidStampSVG } from "../stamp.js";
 import { thud } from "../sound.js";
 import { drawWorking, routeSentence } from "./working.js";
@@ -80,7 +79,7 @@ function read(s) {
   const open = list.map((t) => ({ ...t, key: keyOf(t), via: simplify ? routedVia(t, directList, names) : null }));
   const stamps = s.payments.filter((p) => !p.removed).sort(newestFirst);
   const address = Object.fromEntries(s.people.map((p) => [p.name, p.etransfer ? String(p.etransfer).trim() : ""]));
-  return { me: s.me, simplify, tz: s.trip.tz, people: s.people, live, payments: s.payments, open, stamps, address };
+  return { me: s.me, simplify, people: s.people, live, payments: s.payments, open, stamps, address };
 }
 
 export function mountSlip(slip, store) {
@@ -113,8 +112,9 @@ export function mountSlip(slip, store) {
 
   function paidDay(v, p) {
     const ms = Date.parse(p.stampedAt);
-    if (!isFinite(ms) || !v.tz) return "Paid.";
-    return "Paid " + dayHead(dateIn(v.tz, ms), []).en + ".";
+    // The day a stamp was made is the time of a change: the phone's own zone, not the trip's.
+    if (!isFinite(ms)) return "Paid.";
+    return "Paid " + dayHead(localDay(ms), []).en + ".";
   }
 
   function openRow(v, t) {

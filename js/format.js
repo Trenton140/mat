@@ -70,6 +70,23 @@ export function clock(ms) {
   return String(d.getHours()).padStart(2, "0") + ":" + String(d.getMinutes()).padStart(2, "0");
 }
 
+// The day of a moment in the phone's own time zone, as "YYYY-MM-DD" ("" when ms is not a time).
+export function localDay(ms) {
+  if (!isFinite(ms)) return "";
+  const d = new Date(ms);
+  return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+}
+
+// "Up to date 13:20": how fresh the figures on screen are (the receipt and Settings both show it).
+export function freshText(ms) {
+  return "Up to date " + clock(ms);
+}
+
+// A history entry as one sentence: "Ajen rang up Tempura ¥101".
+export function historySentence(entry) {
+  return entry.who + " " + entry.summary + (entry.via === "claude" ? " (through Claude)" : "");
+}
+
 // Where the viewer stands, from money.js standing().
 export function sentence(s) {
   if (s.kind === "owed") return s.who ? s.who + " owes you " + dollars(s.cents) + "." : "You’re owed " + dollars(s.cents) + ".";
