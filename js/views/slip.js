@@ -1,0 +1,437 @@
+// The settlement slip (旅費精算書): who pays whom right now, the stamp spot on
+// each open transfer, stamped payments (newest first, folded beyond two),
+// show the working, the routing sentence, the e-Transfer address, Remind and
+// the Simplify switch.
+//
+// mountSlip(el, store) draws into el and redraws on store changes, but only
+// when what it shows has changed, so a stamp's hit is not restarted and a
+// half-typed amount keeps its place. Names and addresses go in as
+// textContent; the stamp's SVG is built from numbers only (js/stamp.js).
+//
+// remindText and sentCents are pure, and nothing here touches the DOM at
+// import time, so tests import this module in Node.
+
+import { owedList, direct, routedVia } from "../money.js";
+import { dollars, pt, dayHead } from "../format.js";
+import { dateIn } from "../time.js";
+import { paidStampSVG } from "../stamp.js";
+import { thud } from "../sound.js";
+import { drawWorking, routeSentence } from "./working.js";
+
+const ARM_MS = 8000;
+const FOLD = 2;
+const MAX_CENTS = 10000000; // $100,000, the backend's limit
+const ASK = "Pay each person directly? You’ll make more payments. The totals are the same.";
+const ENTER = "Enter what was sent.";
+
+// "250", "250.3" or "250.30" -> cents; anything else, zero or too much -> null.
+// Read on the string: no floating point.
+export function sentCents(str) {
+  const m = /^(\d{1,6})(?:\.(\d{1,2}))?$/.exec(String(str).trim());
+  if (!m) return null;
+  const cents = Number(m[1]) * 100 + Number((m[2] || "").padEnd(2, "0"));
+  return cents > 0 && cents <= MAX_CENTS ? cents : null;
+}
+
+const plain = (cents) => Math.floor(cents / 100) + "." + String(cents % 100).padStart(2, "0");
+
+// The message Remind hands to the share sheet.
+export function remindText(me, transfer, people) {
+  const mine = (people || []).find((p) => p.name === me);
+  const address = mine && mine.etransfer ? String(mine.etransfer).trim() : "";
+  return transfer.from + ", you owe me " + dollars(transfer.cents) + " for the Japan trip." + (address ? " e-Transfer: " + address : "");
+}
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function button(cls, text) {
+  const b = el("button", cls, text);
+  b.type = "button";
+  return b;
+}
+
+const keyOf = (t) => t.from + ">" + t.to;
+const centsOf = (p) => Math.round(p.cad * 100);
+const calm = () => !!(globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches);
+const newestFirst = (a, b) => (a.stampedAt === b.stampedAt ? 0 : String(b.stampedAt || "") < String(a.stampedAt || "") ? -1 : 1);
+
+// What the slip shows, from the store's state. null: nothing to show yet.
+function read(s) {
+  const names = s.people.map((p) => p.name);
+  if (!s.trip || !s.trip.start || !names.length) return null;
+  const live = s.expenses.filter((e) => !e.deleted);
+  const mine = s.people.find((p) => p.name === s.me);
+  const simplify = mine ? mine.simplify !== false : true;
+  const list = owedList(names, live, s.payments, simplify);
+  const directList = simplify ? direct(names, live, s.payments) : list;
+  const open = list.map((t) => ({ ...t, key: keyOf(t), via: simplify ? routedVia(t, directList, names) : null }));
+  const stamps = s.payments.filter((p) => !p.removed).sort(newestFirst);
+  const address = Object.fromEntries(s.people.map((p) => [p.name, p.etransfer ? String(p.etransfer).trim() : ""]));
+  return { me: s.me, simplify, tz: s.trip.tz, people: s.people, live, payments: s.payments, open, stamps, address };
+}
+
+export function mountSlip(slip, store) {
+  // What this phone is doing on the slip; never saved.
+  const ui = { armed: null, amt: "", err: false, work: null, lines: false, rm: null, older: false, ask: false };
+  let fresh = new Set(); // payment ids to draw with the hit, once
+  let armTimer = null;
+  let shown = null; // signature of the last drawing
+  let view = null;
+
+  function disarm() {
+    clearTimeout(armTimer);
+    armTimer = null;
+    ui.armed = null;
+    ui.err = false;
+  }
+
+  function startTimer() {
+    clearTimeout(armTimer);
+    armTimer = setTimeout(() => {
+      disarm();
+      draw();
+    }, ARM_MS);
+  }
+
+  // ---- drawing ----
+
+  const who = (v, name, cap) => (name === v.me ? (cap ? "You" : "you") : name);
+
+  function paidDay(v, p) {
+    const ms = Date.parse(p.stampedAt);
+    if (!isFinite(ms) || !v.tz) return "Paid.";
+    return "Paid " + dayHead(dateIn(v.tz, ms), []).en + ".";
+  }
+
+  function openRow(v, t) {
+    const armed = ui.armed === t.key;
+    const row = el("div", "s-row is-open");
+    row.dataset.key = t.key;
+    const left = el("div", "s-l");
+    left.append(el("div", "s-who", who(v, t.from, true) + " → " + who(v, t.to)));
+    if (armed) {
+      const amt = el("label", "s-amt is-edit");
+      const input = el("input");
+      input.id = "stampAmt";
+      input.type = "text";
+      input.inputMode = "decimal";
+      input.autocomplete = "off";
+      input.setAttribute("aria-label", "Amount sent, in dollars");
+      input.value = ui.amt;
+      amt.append(el("span", "s-cur", "$"), input);
+      left.append(amt);
+      const sub = el("div", "s-sub");
+      if (ui.err) sub.append(el("span", "s-err", ENTER));
+      else sub.textContent = "Did " + (t.to === v.me ? "it land" : t.to + " get it") + "? Tap again to stamp.";
+      left.append(sub);
+    } else {
+      const amt = button("s-amt");
+      amt.innerHTML = pt(dollars(t.cents)); // pt() escapes before adding its spans
+      amt.setAttribute("aria-expanded", String(ui.work === t.key));
+      left.append(amt);
+    }
+    if (t.via) left.append(el("p", "s-route", routeSentence(t, t.via, v.me)));
+    if (v.me && t.to === v.me && t.from !== v.me) {
+      const r = button("remind", "Remind");
+      r.dataset.key = t.key;
+      left.append(r);
+    }
+    const spot = button("spot" + (armed ? " is-armed" : ""));
+    spot.dataset.key = t.key;
+    spot.setAttribute("aria-label", armed ? "Tap again to stamp it paid" : "Stamp " + t.from + " to " + t.to + " as paid");
+    spot.append(el("span", "ghost", "済"));
+    row.append(left, spot);
+
+    const address = v.address[t.to];
+    if (armed && address) {
+      const send = el("div", "s-send");
+      const to = el("span", "", address);
+      to.id = "sendTo";
+      const copy = button("", "Copy");
+      copy.id = "copyTo";
+      send.append(el("span", "s-send-l", "e-Transfer to"), to, copy);
+      row.append(send);
+    }
+    if (ui.work === t.key) row.append(drawWorking(t.from, { me: v.me, live: v.live, payments: v.payments, linesOpen: ui.lines }));
+    return row;
+  }
+
+  function paidRow(v, p, hit) {
+    const row = el("div", "s-row is-paid");
+    row.dataset.pid = p.id;
+    const left = el("div", "s-l");
+    const amt = el("div", "s-amt");
+    amt.innerHTML = pt(dollars(centsOf(p)));
+    const done = !v.open.some((t) => t.from === p.from && t.to === p.to);
+    left.append(el("div", "s-who", who(v, p.from, true) + " → " + who(v, p.to)), amt, el("div", "s-sub", paidDay(v, p) + (done ? " Nothing more to send." : "")));
+    const spot = button("spot");
+    spot.dataset.pid = p.id;
+    spot.setAttribute("aria-label", "Stamped paid. Remove this stamp?");
+    const stamp = el("div", hit ? "stamp hit" : "stamp");
+    const rot = Number(p.rot);
+    stamp.style.setProperty("--rot", (isFinite(rot) ? rot : 0) + "deg");
+    // Built only from numbers and constants (js/stamp.js), so innerHTML is safe.
+    stamp.innerHTML = paidStampSVG(p.seed);
+    spot.append(stamp);
+    row.append(left, spot);
+    if (ui.rm === p.id) {
+      const rm = el("div", "s-rm");
+      const yes = button("rm-yes", "Remove this stamp");
+      yes.dataset.rm = p.id;
+      const keep = button("rm-keep", "Keep it");
+      keep.dataset.keep = "";
+      rm.append(yes, keep);
+      row.append(rm);
+    }
+    return row;
+  }
+
+  function simpBlock(v) {
+    const box = el("div", "simp");
+    const sw = button("simp-sw");
+    sw.id = "simp";
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-checked", String(v.simplify));
+    const track = el("span", "simp-t");
+    track.append(el("i"));
+    sw.append(el("span", "simp-l", "Simplify: fewest payments"), track);
+    const ask = el("div", "simp-ask");
+    ask.id = "simpAsk";
+    ask.hidden = !ui.ask;
+    const keep = button("simp-keep", "Keep it on");
+    keep.id = "simpKeep";
+    const off = button("simp-off", "Turn it off");
+    off.id = "simpOff";
+    const btns = el("div", "simp-b");
+    btns.append(keep, off);
+    ask.append(el("p", "simp-q", ASK), btns);
+    box.append(sw, ask);
+    return box;
+  }
+
+  // Which focused control to put focus back on after a redraw.
+  function focusTarget() {
+    const a = document.activeElement;
+    if (!a || !slip.contains(a)) return null;
+    if (a.id) return { sel: "#" + a.id, a };
+    const row = a.closest(".s-row");
+    const cls = a.classList[0];
+    if (!row || !cls) return null;
+    const attr = row.dataset.key !== undefined ? 'data-key="' + CSS.escape(row.dataset.key) + '"' : 'data-pid="' + CSS.escape(row.dataset.pid) + '"';
+    return { sel: ".s-row[" + attr + "] ." + cls, a };
+  }
+
+  function draw(force) {
+    const v = view;
+    if (!v) {
+      if (shown !== "") slip.replaceChildren();
+      shown = "";
+      return;
+    }
+    // Drop what no longer exists.
+    if (ui.armed && !v.open.some((t) => t.key === ui.armed)) disarm();
+    if (ui.work && !v.open.some((t) => t.key === ui.work)) ui.work = null;
+    if (ui.rm && !v.stamps.some((p) => p.id === ui.rm)) ui.rm = null;
+    if (!v.me) ui.ask = false;
+
+    const hits = calm() ? new Set() : fresh;
+    const sig = JSON.stringify([
+      v.me, v.simplify, v.open, v.address,
+      v.stamps.map((p) => [p.id, p.from, p.to, p.cad, p.seed, p.rot, paidDay(v, p)]),
+      ui.work ? [v.live.map((e) => [e.id, e.title, e.amount, e.currency, e.rate, e.paidBy, e.split, e.splitMode, e.splitVals, e.day]), v.payments.map((p) => [p.id, p.removed])] : 0,
+      { ...ui, amt: undefined },
+    ]);
+    fresh = new Set();
+    if (sig === shown && !force && !hits.size) return;
+    shown = sig;
+
+    const focus = focusTarget();
+    const caret = focus && focus.a.id === "stampAmt" ? [focus.a.selectionStart, focus.a.selectionEnd] : null;
+
+    const head = el("div", "slip-t");
+    head.append(el("b", "", "旅費精算書"), el("span", "", "Trip settlement"));
+    const rows = v.open.map((t) => openRow(v, t));
+    const stamps = ui.older ? v.stamps : v.stamps.slice(0, FOLD);
+    if (!rows.length && !v.stamps.length) rows.push(el("div", "s-row s-none", "Nobody owes anybody."));
+    for (const p of stamps) rows.push(paidRow(v, p, hits.has(p.id)));
+    if (stamps.length < v.stamps.length) {
+      const n = v.stamps.length - stamps.length;
+      const older = button("s-older", n + (n === 1 ? " earlier payment" : " earlier payments"));
+      older.id = "older";
+      rows.push(older);
+    }
+    const foot = el("div", "slip-f", "Stamp it the moment you send. What's left is always what's shown here.");
+    slip.replaceChildren(head, ...rows, foot, ...(v.me ? [simpBlock(v)] : []));
+
+    if (focus) {
+      const again = slip.querySelector(focus.sel);
+      if (again) {
+        again.focus({ preventScroll: true });
+        if (caret && again.setSelectionRange) again.setSelectionRange(caret[0], caret[1]);
+      }
+    }
+  }
+
+  // ---- acting ----
+
+  function stamp(key) {
+    const t = view && view.open.find((x) => x.key === key);
+    if (!t) return;
+    const cents = sentCents(ui.amt);
+    if (cents === null) {
+      ui.err = true;
+      startTimer();
+      draw(true);
+      return;
+    }
+    // Disarmed before the store draws anything, so a second tap finds no
+    // armed spot: one payment per stamp.
+    disarm();
+    store.addPayment({ from: t.from, to: t.to, cad: cents / 100 });
+    const lc = store.state.lastChange;
+    if (lc && lc.action === "stamp" && lc.item) fresh.add(lc.item.id);
+    draw(true);
+    thud();
+    if (!calm()) {
+      setTimeout(() => {
+        slip.classList.remove("shake");
+        void slip.offsetWidth; // play the shake again
+        slip.classList.add("shake");
+      }, 130);
+    }
+  }
+
+  function tapSpot(key) {
+    if (ui.armed === key) return stamp(key);
+    const t = view.open.find((x) => x.key === key);
+    if (!t) return;
+    ui.armed = key;
+    ui.amt = plain(t.cents);
+    ui.err = false;
+    ui.rm = null;
+    startTimer();
+    draw();
+  }
+
+  function copy(text, done) {
+    const clip = globalThis.navigator && globalThis.navigator.clipboard;
+    const failed = () => store.notify("Couldn't copy that.");
+    if (!clip || typeof clip.writeText !== "function") return failed();
+    try {
+      clip.writeText(text).then(() => store.notify(done), failed);
+    } catch {
+      failed();
+    }
+  }
+
+  function remind(key) {
+    const t = view.open.find((x) => x.key === key);
+    if (!t) return;
+    const text = remindText(view.me, t, view.people);
+    const nav = globalThis.navigator;
+    const fallBack = () => copy(text, "Copied. Paste it in your chat.");
+    if (!nav || typeof nav.share !== "function") return fallBack();
+    try {
+      const p = nav.share({ text });
+      // Closing the share sheet rejects with AbortError: not an error.
+      if (p && typeof p.catch === "function") p.catch((err) => (err && err.name === "AbortError" ? null : fallBack()));
+    } catch {
+      fallBack();
+    }
+  }
+
+  function toggleSimp() {
+    if (!view.me) return;
+    if (ui.ask) {
+      ui.ask = false;
+      return draw();
+    }
+    if (view.simplify) {
+      ui.ask = true;
+      return draw();
+    }
+    store.setPerson(view.me, { simplify: true });
+  }
+
+  slip.addEventListener("click", (ev) => {
+    if (!view) return;
+    const t = ev.target;
+    if (t.closest("#stampAmt")) return;
+    const spotBtn = t.closest("button.spot[data-key]");
+    if (spotBtn) return tapSpot(spotBtn.dataset.key);
+    if (t.closest("#copyTo")) {
+      const armed = view.open.find((x) => x.key === ui.armed);
+      return armed && copy(view.address[armed.to] || "", "Address copied.");
+    }
+    const r = t.closest("button.remind[data-key]");
+    if (r) return remind(r.dataset.key);
+    if (t.closest("[data-paid]")) {
+      ui.lines = !ui.lines;
+      return draw();
+    }
+    const amt = t.closest(".s-row.is-open button.s-amt");
+    if (amt) {
+      const key = amt.closest(".s-row").dataset.key;
+      ui.work = ui.work === key ? null : key;
+      ui.lines = false;
+      return draw();
+    }
+    const rm = t.closest("[data-rm]");
+    if (rm) {
+      ui.rm = null;
+      store.removePayment(rm.dataset.rm);
+      return draw();
+    }
+    if (t.closest("[data-keep]")) {
+      ui.rm = null;
+      return draw();
+    }
+    const paid = t.closest(".s-row.is-paid[data-pid]");
+    if (paid) {
+      ui.rm = paid.dataset.pid;
+      disarm();
+      return draw();
+    }
+    if (t.closest("#older")) {
+      ui.older = true;
+      return draw();
+    }
+    if (t.closest("#simp")) return toggleSimp();
+    if (t.closest("#simpKeep")) {
+      ui.ask = false;
+      return draw();
+    }
+    if (t.closest("#simpOff")) {
+      ui.ask = false;
+      draw();
+      store.setPerson(view.me, { simplify: false });
+    }
+  });
+  slip.addEventListener("input", (ev) => {
+    if (ev.target.id !== "stampAmt") return;
+    ui.amt = ev.target.value;
+    startTimer(); // typing is not leaving it alone
+  });
+  slip.addEventListener("keydown", (ev) => {
+    if (ev.target.id === "stampAmt" && ev.key === "Enter" && ui.armed) {
+      ev.preventDefault();
+      stamp(ui.armed);
+    }
+  });
+  slip.addEventListener("animationend", (ev) => {
+    if (ev.target === slip) slip.classList.remove("shake");
+  });
+
+  function render(s) {
+    view = read(s);
+    draw();
+  }
+
+  render(store.state);
+  store.subscribe(render);
+}

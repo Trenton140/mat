@@ -1,0 +1,67 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { rng, paidStampSVG } from "../js/stamp.js";
+import { remindText, sentCents } from "../js/views/slip.js";
+
+test("a stamp is drawn from its seed: the same seed, the same stamp", () => {
+  assert.equal(paidStampSVG(42), paidStampSVG(42));
+  assert.notEqual(paidStampSVG(42), paidStampSVG(43));
+  assert.ok(paidStampSVG(42).includes("済"));
+  assert.ok(paidStampSVG(42).startsWith("<svg"));
+});
+
+test("rng is deterministic and stays between 0 and 1", () => {
+  const a = rng(7);
+  const b = rng(7);
+  const first = [a(), a(), a()];
+  assert.deepEqual([b(), b(), b()], first);
+  for (const v of first) assert.ok(v >= 0 && v < 1, String(v));
+  assert.notDeepEqual([rng(8)(), rng(8)(), rng(8)()], first);
+});
+
+test("the stamp SVG is built only from numbers and constants", () => {
+  // No text from outside ever reaches it, so innerHTML is safe for it.
+  const svg = paidStampSVG(123456);
+  assert.equal(/[<>]\s*script/i.test(svg), false);
+  assert.equal(paidStampSVG("1<x>"), paidStampSVG(1), "a seed is read as a number");
+});
+
+test("Remind says who, how much and where to send it", () => {
+  const people = [{ name: "Mo", etransfer: "mo@example.com" }];
+  assert.equal(
+    remindText("Mo", { from: "Ajen", to: "Mo", cents: 25030 }, people),
+    "Ajen, you owe me $250.30 for the Japan trip. e-Transfer: mo@example.com",
+  );
+  assert.equal(remindText("Mo", { from: "Ajen", to: "Mo", cents: 25030 }, [{ name: "Mo", etransfer: "" }]), "Ajen, you owe me $250.30 for the Japan trip.");
+  assert.equal(remindText("Mo", { from: "Ajen", to: "Mo", cents: 25030 }, []), "Ajen, you owe me $250.30 for the Japan trip.");
+});
+
+test("what was sent is read as dollars and cents, on the string", () => {
+  assert.equal(sentCents("250"), 25000);
+  assert.equal(sentCents("250.3"), 25030);
+  assert.equal(sentCents("250.30"), 25030);
+  assert.equal(sentCents(" 0.29 "), 29);
+  assert.equal(sentCents("100000"), 10000000);
+  assert.equal(sentCents("1121.35"), 112135);
+  for (const bad of ["", "0", "0.00", "-5", "100000.01", "250.301", "2,500", "$250", "abc", "1e3", ".5", "5.", "12 3", "Infinity"]) {
+    assert.equal(sentCents(bad), null, JSON.stringify(bad));
+  }
+});
+
+test("the routing sentence says who is paid through whom, from the viewer's side", async () => {
+  const { routeSentence } = await import("../js/views/working.js");
+  const row = { from: "Mo", to: "Trenton", cents: 1000 };
+  assert.equal(routeSentence(row, "Ajen", "Mo"), "You pay Trenton because you owe Ajen and Ajen owes Trenton. Fewer payments, same totals.");
+  assert.equal(routeSentence(row, "Ajen", "Trenton"), "Mo pays you because Mo owes Ajen and Ajen owes you. Fewer payments, same totals.");
+  assert.equal(routeSentence(row, "Ajen", "Ajen"), "Mo pays Trenton because Mo owes you and you owe Trenton. Fewer payments, same totals.");
+  assert.equal(routeSentence(row, "others", "Mo"), "You pay Trenton to cover what the others owe. Fewer payments, same totals.");
+});
+
+test("the working: paid, share, sent, and received only when not zero", async () => {
+  const { workingLines } = await import("../js/views/working.js");
+  const w = { paid: 0, share: 1000, sent: 0, received: 0 };
+  assert.deepEqual(workingLines("Mo", w, "Mo").map((l) => l.label), ["You paid", "Your share came to", "Already sent"]);
+  const other = workingLines("Ajen", { ...w, received: 400 }, "Mo");
+  assert.deepEqual(other.map((l) => [l.label, l.cents]), [["Ajen paid", 0], ["Ajen’s share came to", 1000], ["Already sent", 0], ["Already received", 400]]);
+  assert.equal(other[0].paid, true);
+});

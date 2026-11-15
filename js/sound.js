@@ -1,0 +1,49 @@
+// The stamp's thud: a short low thump made with the Web Audio API (no file,
+// no network). On unless mat.sound is "off". Sound is never needed, so every
+// failure is swallowed. Safe to import in Node: nothing runs until called.
+
+const KEY = "mat.sound";
+let ac = null; // made on the first thud, which always follows a tap
+
+export function soundOn() {
+  try {
+    return globalThis.localStorage.getItem(KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+export function setSound(on) {
+  try {
+    globalThis.localStorage.setItem(KEY, on ? "on" : "off");
+  } catch {
+    // nowhere to keep it: the default stands
+  }
+}
+
+export function thud() {
+  if (!soundOn()) return;
+  try {
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AC) return;
+    if (!ac) ac = new AC();
+    if (ac.state === "suspended") {
+      const p = ac.resume();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
+    const t = ac.currentTime;
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.type = "sine";
+    o.frequency.setValueAtTime(120, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    g.gain.setValueAtTime(0.5, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    o.connect(g);
+    g.connect(ac.destination);
+    o.start(t);
+    o.stop(t + 0.18);
+  } catch {
+    // no sound: the stamp still lands
+  }
+}

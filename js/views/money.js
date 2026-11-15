@@ -1,10 +1,12 @@
-// The Money screen: where you stand, the settlement slip and the till receipt.
+// The Money screen: where you stand, the settlement slip (js/views/slip.js)
+// and the till receipt.
 // mountMoney(root, store, { onRing(day), onLine(id), onHistory() }) draws into
 // root and redraws on every store change. Every figure comes from money.js and
 // format.js; text from people or the Sheet goes in with textContent only.
 
 import { balances, owedList, standing, jpyOf, cadCents, shares } from "../money.js";
 import { tripDay } from "../time.js";
+import { mountSlip } from "./slip.js";
 import { yen, dollars, typed, dayHead, issuer, pt, clock, sentence, tripSpan } from "../format.js";
 
 const NO_SIGNAL = "Couldn't reach the trip sheet.";
@@ -45,25 +47,6 @@ function receiptDays(s, live, nowMs) {
   }
   for (const e of live) if (e.day !== "pre") dates.add(e.day);
   return ["pre", ...[...dates].sort()];
-}
-
-// The slip, as a plain list of what is owed now. Task 10 replaces this with
-// js/views/slip.js (stamping, Simplify, the working).
-function drawSlip(slip, list, me) {
-  const who = (name, cap) => (name === me ? (cap ? "You" : "you") : name);
-  const head = el("div", "slip-t");
-  head.append(el("b", "", "旅費精算書"), el("span", "", "Trip settlement"));
-  const rows = list.map((t) => {
-    const row = el("div", "s-row");
-    const left = el("div");
-    left.append(el("div", "s-who", who(t.from, true) + " → " + who(t.to)), fig("div", "s-amt", dollars(t.cents)));
-    const spot = el("span", "spot");
-    spot.append(el("span", "ghost", "済"));
-    row.append(left, spot);
-    return row;
-  });
-  if (!rows.length) rows.push(el("div", "s-row s-none", "Nobody owes anybody."));
-  slip.replaceChildren(head, ...rows);
 }
 
 function drawLine(e, ctx) {
@@ -168,6 +151,7 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
   const rc = el("div", "rc");
   rc.id = "rc";
   root.replaceChildren(top, slip, rc);
+  mountSlip(slip, store);
 
   histBtn.addEventListener("click", () => onHistory());
   const act = (target) => {
@@ -207,11 +191,11 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
       ", across ", el("b", "", String(live.length)), live.length === 1 ? " receipt." : " receipts.");
 
     const ctx = { me: s.me, online: s.online, seenAt: s.seenAt, people: s.people, names, days: s.days, nowMs: now() };
+    // The one count of what is new: lines and stamps by someone else since you looked.
     const fresh = live.filter((e) => isNewLine(e, s.me, s.seenAt)).length + s.payments.filter((p) => isNewStamp(p, s.me, s.seenAt)).length;
     histN.textContent = String(fresh);
     histN.hidden = fresh === 0;
 
-    drawSlip(slip, list, s.me);
     drawReceipt(rc, s, live, ctx);
   }
 
