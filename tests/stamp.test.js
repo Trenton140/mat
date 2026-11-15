@@ -43,7 +43,12 @@ test("what was sent is read as dollars and cents, on the string", () => {
   assert.equal(sentCents(" 0.29 "), 29);
   assert.equal(sentCents("100000"), 10000000);
   assert.equal(sentCents("1121.35"), 112135);
-  for (const bad of ["", "0", "0.00", "-5", "100000.01", "250.301", "2,500", "$250", "abc", "1e3", ".5", "5.", "12 3", "Infinity"]) {
+  // A decimal comma (some iPhone keypads) and a leading dot.
+  assert.equal(sentCents("250,30"), 25030);
+  assert.equal(sentCents("250,3"), 25030);
+  assert.equal(sentCents(".5"), 50);
+  assert.equal(sentCents(",05"), 5);
+  for (const bad of ["", ".", ",", "0", "0.00", ",00", "-5", "100000.01", "250.301", "250,301", "2,500", "1,2,3", "1.2,3", "$250", "abc", "1e3", "5.", "5,", "12 3", "Infinity"]) {
     assert.equal(sentCents(bad), null, JSON.stringify(bad));
   }
 });

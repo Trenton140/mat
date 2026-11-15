@@ -11,7 +11,7 @@
 // remindText and sentCents are pure, and nothing here touches the DOM at
 // import time, so tests import this module in Node.
 
-import { owedList, direct, routedVia } from "../money.js";
+import { owedList, direct, routedVia, balances } from "../money.js";
 import { dollars, pt, dayHead } from "../format.js";
 import { dateIn } from "../time.js";
 import { paidStampSVG } from "../stamp.js";
@@ -24,11 +24,12 @@ const MAX_CENTS = 10000000; // $100,000, the backend's limit
 const ASK = "Pay each person directly? You’ll make more payments. The totals are the same.";
 const ENTER = "Enter what was sent.";
 
-// "250", "250.3" or "250.30" -> cents; anything else, zero or too much -> null.
-// Read on the string: no floating point.
+// "250", "250.3", "250.30", "250,30" (a decimal comma, as some keypads type)
+// or ".5" -> cents; anything else, zero or too much -> null. Read on the
+// string: no floating point.
 export function sentCents(str) {
-  const m = /^(\d{1,6})(?:\.(\d{1,2}))?$/.exec(String(str).trim());
-  if (!m) return null;
+  const m = /^(\d{0,6})(?:[.,](\d{1,2}))?$/.exec(String(str).trim());
+  if (!m || (m[1] === "" && m[2] === undefined)) return null;
   const cents = Number(m[1]) * 100 + Number((m[2] || "").padEnd(2, "0"));
   return cents > 0 && cents <= MAX_CENTS ? cents : null;
 }
@@ -60,14 +61,21 @@ const centsOf = (p) => Math.round(p.cad * 100);
 const calm = () => !!(globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches);
 const newestFirst = (a, b) => (a.stampedAt === b.stampedAt ? 0 : String(b.stampedAt || "") < String(a.stampedAt || "") ? -1 : 1);
 
-// What the slip shows, from the store's state. null: nothing to show yet.
-function read(s) {
+// The viewer's reading of who owes whom, under their own Simplify setting:
+// { names, live, simplify, list, bal }. The one source for both the slip and
+// the sentence at the top of Money (#say), so they cannot disagree.
+export function viewerOwed(s) {
   const names = s.people.map((p) => p.name);
-  if (!s.trip || !s.trip.start || !names.length) return null;
   const live = s.expenses.filter((e) => !e.deleted);
   const mine = s.people.find((p) => p.name === s.me);
   const simplify = mine ? mine.simplify !== false : true;
-  const list = owedList(names, live, s.payments, simplify);
+  return { names, live, simplify, list: owedList(names, live, s.payments, simplify), bal: balances(names, live, s.payments) };
+}
+
+// What the slip shows, from the store's state. null: nothing to show yet.
+function read(s) {
+  if (!s.trip || !s.trip.start || !s.people.length) return null;
+  const { names, live, simplify, list } = viewerOwed(s);
   const directList = simplify ? direct(names, live, s.payments) : list;
   const open = list.map((t) => ({ ...t, key: keyOf(t), via: simplify ? routedVia(t, directList, names) : null }));
   const stamps = s.payments.filter((p) => !p.removed).sort(newestFirst);
@@ -77,7 +85,8 @@ function read(s) {
 
 export function mountSlip(slip, store) {
   // What this phone is doing on the slip; never saved.
-  const ui = { armed: null, amt: "", err: false, work: null, lines: false, rm: null, older: false, ask: false };
+  // typed: the amount was changed by hand, so a sync must not overwrite it.
+  const ui = { armed: null, amt: "", typed: false, err: false, work: null, lines: false, rm: null, older: false, ask: false };
   let fresh = new Set(); // payment ids to draw with the hit, once
   let armTimer = null;
   let shown = null; // signature of the last drawing
@@ -235,6 +244,8 @@ export function mountSlip(slip, store) {
     }
     // Drop what no longer exists.
     if (ui.armed && !v.open.some((t) => t.key === ui.armed)) disarm();
+    // Untouched, the armed amount follows the transfer as syncs change it.
+    if (ui.armed && !ui.typed) ui.amt = plain(v.open.find((t) => t.key === ui.armed).cents);
     if (ui.work && !v.open.some((t) => t.key === ui.work)) ui.work = null;
     if (ui.rm && !v.stamps.some((p) => p.id === ui.rm)) ui.rm = null;
     if (!v.me) ui.ask = false;
@@ -265,7 +276,7 @@ export function mountSlip(slip, store) {
       older.id = "older";
       rows.push(older);
     }
-    const foot = el("div", "slip-f", "Stamp it the moment you send. What's left is always what's shown here.");
+    const foot = el("div", "slip-f", "Stamp it the moment you send. What’s left is always what’s shown here.");
     slip.replaceChildren(head, ...rows, foot, ...(v.me ? [simpBlock(v)] : []));
 
     if (focus) {
@@ -312,6 +323,7 @@ export function mountSlip(slip, store) {
     if (!t) return;
     ui.armed = key;
     ui.amt = plain(t.cents);
+    ui.typed = false;
     ui.err = false;
     ui.rm = null;
     startTimer();
@@ -320,7 +332,7 @@ export function mountSlip(slip, store) {
 
   function copy(text, done) {
     const clip = globalThis.navigator && globalThis.navigator.clipboard;
-    const failed = () => store.notify("Couldn't copy that.");
+    const failed = () => store.notify("Couldn’t copy that.");
     if (!clip || typeof clip.writeText !== "function") return failed();
     try {
       clip.writeText(text).then(() => store.notify(done), failed);
@@ -415,6 +427,7 @@ export function mountSlip(slip, store) {
   slip.addEventListener("input", (ev) => {
     if (ev.target.id !== "stampAmt") return;
     ui.amt = ev.target.value;
+    ui.typed = true;
     startTimer(); // typing is not leaving it alone
   });
   slip.addEventListener("keydown", (ev) => {

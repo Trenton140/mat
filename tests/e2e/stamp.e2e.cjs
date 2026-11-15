@@ -70,7 +70,7 @@ module.exports = [
         list.map((t) => ({ key: t.from + ">" + t.to, who: t.from + " → you", amt: dollars(t.cents) })),
       );
       for (const t of list) assert.equal(await page.locator(spot(t.from + ">" + t.to)).count(), 1);
-      await expectText(page, "#slip .slip-f", "Stamp it the moment you send. What's left is always what's shown here.");
+      await expectText(page, "#slip .slip-f", "Stamp it the moment you send. What’s left is always what’s shown here.");
       await expectText(page, "#simp .simp-l", "Simplify: fewest payments");
       assert.equal(await page.getAttribute("#simp", "aria-checked"), "true");
       // Legible: the slip's figures are Zen Kaku Gothic, never the dot face.
@@ -193,6 +193,32 @@ module.exports = [
       await page.click(spot("Ajen>Mo"));
       await idle(page);
       assert.equal(saved(backend)[0].cad, 250.3);
+    },
+  },
+  {
+    name: "an untouched armed amount follows a sync; a typed one is kept",
+    async run({ page }) {
+      const backend = await ready(page);
+      await waitOpen(page, 2);
+      await arm(page, "Ajen>Mo");
+      assert.equal(await page.inputValue("#stampAmt"), "221.73");
+      // Another phone: Mo paid $30 that Ajen and Mo share, so Ajen owes $15 more.
+      const lunch = { id: "otherexp001", day: "2026-12-12", title: "Lunch", amount: 30, currency: "CAD", paidBy: "Mo", split: ["Mo", "Ajen"], splitMode: "equal", splitVals: [], note: "", kind: "" };
+      await otherPhone(backend, "Trenton", "addExpense", { expense: lunch });
+      await page.evaluate(() => globalThis.__matTest.store.checkRev());
+      await until(async () => (await page.inputValue("#stampAmt")) === "236.73", "the field follows the new amount");
+      assert.deepEqual(await armed(page), ["Ajen>Mo"], "still armed");
+
+      // Typed by hand: a sync leaves it alone.
+      await page.fill("#stampAmt", "200");
+      await otherPhone(backend, "Trenton", "addExpense", { expense: { ...lunch, id: "otherexp002" } });
+      await page.evaluate(() => globalThis.__matTest.store.checkRev());
+      // The seed's 8 lines plus the two lunches.
+      await until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length === 10), "the second sync lands");
+      assert.equal(await page.inputValue("#stampAmt"), "200");
+      await page.click(spot("Ajen>Mo"));
+      await idle(page);
+      assert.equal(saved(backend)[0].cad, 200);
     },
   },
   {
@@ -336,17 +362,22 @@ module.exports = [
     },
   },
   {
-    name: "a double tap on an armed spot makes one payment",
+    name: "a double tap on an armed spot makes one payment, even a part payment whose row stays open",
     async run({ page }) {
       const backend = await ready(page);
       await waitOpen(page, 2);
       await arm(page, "Ajen>Mo");
+      // A part payment: the row stays open under the finger, so only the
+      // disarm before saving stops the second tap from stamping again.
+      await page.fill("#stampAmt", "100");
       const box = await page.locator(spot("Ajen>Mo")).boundingBox();
       await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
-      await until(async () => (await paidRows(page)).length === 1, "one stamped row");
+      await until(async () => (await paidRows(page)).length >= 1, "a stamped row");
       await idle(page);
       assert.equal(backend.fake.tables.Settlements.length, 1, "one row in Settlements");
       assert.equal(backend.requests.filter((r) => r.action === "addPayment").length, 1, "one addPayment request");
+      assert.equal(saved(backend)[0].cad, 100);
+      assert.ok((await openRows(page)).some((r) => r.key === "Ajen>Mo"), "the remainder is still open");
       // A payment another phone adds meanwhile shows on the next load.
       await otherPhone(backend, "Trenton", "addPayment", { payment: { id: "otherpay001", from: "Trenton", to: "Mo", cad: 1, seed: 5, rot: 1 } });
       await page.evaluate(() => globalThis.__matTest.store.refresh());

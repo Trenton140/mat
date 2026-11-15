@@ -4,12 +4,12 @@
 // root and redraws on every store change. Every figure comes from money.js and
 // format.js; text from people or the Sheet goes in with textContent only.
 
-import { balances, owedList, standing, jpyOf, cadCents, shares } from "../money.js";
+import { standing, jpyOf, cadCents, shares } from "../money.js";
 import { tripDay } from "../time.js";
-import { mountSlip } from "./slip.js";
+import { mountSlip, viewerOwed } from "./slip.js";
 import { yen, dollars, typed, dayHead, issuer, pt, clock, sentence, tripSpan } from "../format.js";
 
-const NO_SIGNAL = "Couldn't reach the trip sheet.";
+const NO_SIGNAL = "Couldn’t reach the trip sheet.";
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -182,10 +182,9 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     }
     histBtn.hidden = false;
     slip.hidden = false;
-    const live = s.expenses.filter((e) => !e.deleted);
-    const mine = s.people.find((p) => p.name === s.me);
-    const list = owedList(names, live, s.payments, mine ? mine.simplify !== false : true);
-    say.textContent = s.me ? sentence(standing(s.me, list, balances(names, live, s.payments))) : "";
+    // The same reading the slip shows (one source: viewerOwed).
+    const { live, list, bal } = viewerOwed(s);
+    say.textContent = s.me ? sentence(standing(s.me, list, bal)) : "";
     // The words stay dim; the three figures are bold and bright.
     sayP.replaceChildren("The trip so far is ", el("b", "", yen(sum(live, jpyOf))), ", about ", el("b", "", dollars(sum(live, cadCents))),
       ", across ", el("b", "", String(live.length)), live.length === 1 ? " receipt." : " receipts.");
