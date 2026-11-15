@@ -3,7 +3,7 @@
 
 const assert = require("node:assert/strict");
 const P = require("../../backend/Pure.js");
-const { SEED, NOON12, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
+const { SEED, NOON12, SEEDED_AT, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
 
 // ---- small tools for this file ----
 
@@ -59,6 +59,12 @@ async function keys(page, seq) {
   for (const k of seq.split(" ")) await page.click('#pad .key[data-k="' + k + '"]');
 }
 
+// The seed lines were rung up at SEEDED_AT; the phone is on Japan time.
+const SEEDED_DAY = (() => {
+  const f = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", weekday: "short", month: "short", day: "numeric" }).formatToParts(new Date(SEEDED_AT));
+  const v = (t) => f.find((x) => x.type === t).value;
+  return v("weekday") + " " + v("month") + " " + v("day");
+})();
 const idOfSeed = (title) => SEED.expenses.find((e) => e.title === title).id;
 // What the backend's own wording says about a line, as another phone would cause it.
 const otherPhone = (backend, action, args, via = "app") => backend.handle({ key: "test-key", actor: "Ajen", via, action, args });
@@ -80,7 +86,11 @@ module.exports = [
       assert.ok(body.includes("Shibuya dinner"), body);
       assert.ok(body.includes("¥14,500"), body);
       assert.ok(body.includes("Trenton paid"), body);
-      await expectText(page, "#lnBy", /^Rung up by Trenton, \w{3} \w{3} \d+$/);
+      assert.equal(SEEDED_DAY, "Fri Nov 20");
+      await expectText(page, "#lnBy", "Rung up by Trenton, " + SEEDED_DAY);
+      // Focus moves to the sheet (not the note field), which is a modal dialog.
+      assert.equal(await page.evaluate(() => document.activeElement.id), "lnDone");
+      assert.equal(await page.evaluate(() => [document.getElementById("line").getAttribute("role"), document.getElementById("line").getAttribute("aria-modal")].join()), "dialog,true");
       assert.ok(await visible(page, "#lnEdit"));
       assert.ok(await visible(page, "#lnDel"));
       assert.equal(await visible(page, "#lnRetry"), false, "no Try again on a saved line");
@@ -92,7 +102,7 @@ module.exports = [
       await ready(page);
       await openLine(page, "Taxi back");
       await expectText(page, "#lnShare", "You’re not in this one.");
-      await expectText(page, "#lnBy", /^Rung up by Ajen, /);
+      await expectText(page, "#lnBy", "Rung up by Ajen, " + SEEDED_DAY);
       const fonts = await page.evaluate(() =>
         ["#lineBody .ln-t", "#lineBody .ln-a", "#lnLog span", "#lnShare"].map((s) => {
           const el = document.querySelector(s);
@@ -147,6 +157,16 @@ module.exports = [
     },
   },
   {
+    name: "any other history error says it could not load, not that there is no connection",
+    async run({ page }) {
+      const backend = await ready(page);
+      backend.failWith = "server";
+      await openLine(page, "Shibuya dinner");
+      await expectText(page, "#lnLog", "Couldn’t load the history.");
+      backend.failWith = null;
+    },
+  },
+  {
     name: "a note saves from the sheet: row, backend and undo bar all show it; 200 characters is the limit",
     async run({ page }) {
       const backend = await ready(page);
@@ -166,6 +186,27 @@ module.exports = [
       await page.focus("#lnNote");
       await page.keyboard.type("x".repeat(250));
       assert.equal((await page.inputValue("#lnNote")).length, 200, "maxlength 200");
+    },
+  },
+  {
+    name: "a note whose save failed stays in the field with Save enabled, and a second Save stores it",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openLine(page, "Shibuya dinner");
+      backend.failWith = "network";
+      await page.fill("#lnNote", "ref 22");
+      await page.click("#lnNoteSave");
+      await idle(page);
+      await expectText(page, "#ubarT", /No signal/);
+      assert.equal(await page.inputValue("#lnNote"), "ref 22", "what was typed is still there");
+      assert.equal(await page.evaluate(() => document.getElementById("lnNoteSave").disabled), false, "Save is enabled");
+      assert.equal(savedTitled(backend, "Shibuya dinner")[0].note, "");
+      backend.failWith = null;
+      await page.click("#lnNoteSave");
+      await idle(page);
+      await until(() => savedTitled(backend, "Shibuya dinner")[0].note === "ref 22", "the second Save stores it");
+      assert.equal(await page.inputValue("#lnNote"), "ref 22");
+      assert.equal(await page.evaluate(() => document.getElementById("lnNoteSave").disabled), true, "nothing left to save");
     },
   },
   {
@@ -225,9 +266,11 @@ module.exports = [
     async run({ page }) {
       await ready(page);
       await openLine(page, "Shibuya dinner");
+      const row = await rowOf(page, "Shibuya dinner");
       await page.click("#lnDone");
       await waitSheetClosed(page);
       assert.equal(await page.evaluate(() => document.getElementById("line").inert), true);
+      assert.equal(await page.evaluate(() => document.activeElement.dataset.id), row.id, "focus goes back to the row that opened it");
 
       await openLine(page, "Shibuya dinner");
       await page.mouse.click(195, 40); // above the sheet
@@ -269,7 +312,7 @@ module.exports = [
     },
   },
   {
-    name: "Delete on a line that was refused drops it for good: nothing on the backend, no undo bar",
+    name: "Delete on a line that was refused drops it for good: nothing on the backend, and the bar says Undone.",
     async run({ page }) {
       const backend = await ready(page);
       backend.failWith = "bad_input";
@@ -285,6 +328,8 @@ module.exports = [
       await page.click("#lnDel");
       await waitSheetClosed(page);
       await until(async () => !(await rowOf(page, "Bento")), "the row is gone");
+      await expectText(page, "#ubarT", "Undone.");
+      assert.equal(await visible(page, "#ubarU"), false, "no Undo button for a line that is gone");
       backend.failWith = null;
       await idle(page);
       assert.equal(saved(backend).filter((e) => e.title === "Bento").length, 0, "never reached the backend");

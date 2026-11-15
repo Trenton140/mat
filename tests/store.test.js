@@ -76,6 +76,7 @@ async function backend(fake, action = "load", args = {}, actor = "Ajen") {
   return r.data;
 }
 
+const until = async (f) => { for (let i = 0; i < 200 && !f(); i++) await new Promise((r) => setTimeout(r, 5)); };
 const sent = (fake, action) => fake.requests.filter((r) => r.action === action).length;
 const queueOf = (storage) => JSON.parse(storage.getItem("mat.queue") || "[]");
 const byId = (list, id) => list.find((x) => x.id === id);
@@ -1195,6 +1196,41 @@ test("discard does nothing for a confirmed line", async () => {
   assert.equal(p.store.unsaved(id), false, "an edit of a confirmed line is not an unsaved line");
   assert.equal(p.store.discard(id), false, "a line the backend has confirmed");
   assert.equal(byId(p.store.state.expenses, id).deleted, false);
+});
+
+test("discard says Undone. on the undo bar instead of leaving a dead Undo", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "bad_input", message: "Pick a day." } : null);
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(p.store.state.lastChange.action, "add");
+  assert.equal(p.store.discard(id), true);
+  const lc = p.store.state.lastChange;
+  assert.equal(lc.action, "undo");
+  assert.equal(lc.canUndo, false);
+  assert.equal(lc.item.id, id);
+});
+
+test("discard while the add is in flight: the backend ends with it deleted, add and undo in its history, and none on the phone", async () => {
+  const p = phone();
+  await p.store.boot();
+  const release = p.net.hold("addExpense"); // the backend takes the add; the reply waits
+  p.store.addExpense(draft());
+  const id = idOf(p.store);
+  await until(() => p.net.sent.some((b) => b.action === "addExpense"));
+  assert.equal(p.store.discard(id), true);
+  release();
+  await p.store.idle();
+  const data = await backend(p.fake);
+  assert.equal(byId(data.expenses, id).deleted, true);
+  const h = await backend(p.fake, "history", { ref: id });
+  const actions = h.entries.map((e) => e.action);
+  assert.ok(actions.includes("add") && actions.includes("undo"), "history: " + actions);
+  const l = byId(p.store.state.expenses, id);
+  assert.equal(!l || l.deleted === true, true);
+  assert.deepEqual(queueOf(p.storage), []);
 });
 
 // ---------- boundaries ----------

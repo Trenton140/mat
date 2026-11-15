@@ -86,13 +86,13 @@ function start() {
   // One sheet at a time: opening one closes the other.
   const line = mountLine(phone, store, {
     onEdit: (id) => {
-      line.close();
+      line.close(false);
       register.edit(id);
     },
   });
   const ring = (day) => {
     if (!(store.state.trip && store.state.trip.start)) return;
-    line.close();
+    line.close(false);
     register.open(day);
   };
   mountMoney(document.getElementById("vMoney"), store, {

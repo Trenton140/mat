@@ -11,6 +11,7 @@ import { dollars, yen, typed, dayHead, pt } from "../format.js";
 
 const NO_HISTORY = "History needs a connection.";
 const UNSAVED = "Not saved yet.";
+const HISTORY_FAILED = "Couldn’t load the history.";
 
 const MARKUP = `
 <div class="sheet-top"><span>This line</span><button type="button" id="lnDone">Done</button></div>
@@ -56,6 +57,7 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
   const sheet = el("div", "sheet");
   sheet.id = "line";
   sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
   sheet.setAttribute("aria-label", "Receipt line");
   sheet.inert = true;
   sheet.innerHTML = MARKUP;
@@ -95,6 +97,7 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
   body.append(title, amount, paid, dl, share, by, noteBox, logHead, log);
 
   let lineId = null;
+  let sentNote = null; // the text last sent with Save, kept in the field if the save fails
   let shownNote = ""; // the note as last drawn; the field follows it until it is typed in
   let shownSig = "";
   let fetchNo = 0;
@@ -150,7 +153,9 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
     noteBox.hidden = unsaved;
     editBtn.hidden = unsaved;
     retryBtn.hidden = !e.failed;
-    if (!unsaved && note.value === shownNote) note.value = e.note || "";
+    if (sentNote !== null && !e.pending && e.note === sentNote) sentNote = null; // saved: the field follows the line again
+    const holdsSent = sentNote !== null && note.value === sentNote;
+    if (!unsaved && note.value === shownNote && !holdsSent) note.value = e.note || "";
     shownNote = e.note || "";
     noteSave.disabled = note.value.trim() === shownNote;
   }
@@ -166,8 +171,8 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
     let entries;
     try {
       entries = await store.historyFor(lineId);
-    } catch {
-      if (mine === fetchNo) log.replaceChildren(el("div", "ln-ev", NO_HISTORY));
+    } catch (err) {
+      if (mine === fetchNo) log.replaceChildren(el("div", "ln-ev", err && err.code === "network" ? NO_HISTORY : HISTORY_FAILED));
       return;
     }
     if (mine !== fetchNo || !sheet.classList.contains("is-open")) return;
@@ -209,6 +214,7 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
     }
     note.value = "";
     shownNote = "";
+    sentNote = null;
     shownSig = "";
     log.replaceChildren();
     sheet.classList.add("is-open");
@@ -217,24 +223,31 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
     root.classList.add("line-open");
     sheet.scrollTop = 0;
     render();
+    sheet.querySelector("#lnDone").focus({ preventScroll: true }); // not the note field: no keyboard pops up
     return true;
   }
 
-  function close() {
+  // restoreFocus: give focus back to the row that opened the sheet, when it is still there.
+  function close(restoreFocus = true) {
     if (!sheet.classList.contains("is-open")) return;
     fetchNo++;
+    const id = lineId;
     lineId = null;
     sheet.classList.remove("is-open");
     sheet.inert = true;
     scrim.hidden = true;
     root.classList.remove("line-open");
     if (sheet.contains(document.activeElement)) document.activeElement.blur();
+    if (restoreFocus === true) {
+      const row = root.querySelector('#rc .rc-row[data-id="' + id + '"]');
+      if (row) row.focus({ preventScroll: true });
+    }
   }
 
   // ---- taps ----
 
-  sheet.querySelector("#lnDone").addEventListener("click", close);
-  scrim.addEventListener("click", close);
+  sheet.querySelector("#lnDone").addEventListener("click", () => close());
+  scrim.addEventListener("click", () => close());
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Escape") close();
   });
@@ -244,6 +257,7 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
     if (!e || store.unsaved(e.id)) return;
     const text = note.value.trim();
     if (text === (e.note || "")) return;
+    sentNote = text;
     store.updateExpense(lineId, { note: text });
   };
   noteSave.addEventListener("click", saveNote);
@@ -261,24 +275,24 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
   editBtn.addEventListener("click", () => {
     const id = lineId;
     if (!id) return;
-    close();
+    close(false);
     onEdit(id);
   });
   retryBtn.addEventListener("click", () => {
     const id = lineId;
-    close();
+    close(false);
     if (id) store.retry(id);
   });
   delBtn.addEventListener("click", () => {
     const e = current();
     if (!e) return;
     const id = lineId;
-    close();
+    close(false);
     if (store.unsaved(id)) store.discard(id);
     else store.deleteExpense(id);
   });
 
   store.subscribe(render);
 
-  return { open, close, isOpen: () => sheet.classList.contains("is-open") };
+  return { open, close: (restoreFocus) => close(restoreFocus), isOpen: () => sheet.classList.contains("is-open") };
 }

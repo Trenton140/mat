@@ -617,11 +617,16 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   const unsavedAdd = (id) => ops.find((o) => isLiveQueuedAdd(o) && o.id === id);
 
   // A line that is still pending or failed, with no way forward: take it back
-  // without a word on the undo bar. A confirmed line is left alone (false).
+  // and say "Undone." on the undo bar, as undo does. A confirmed line is left
+  // alone (false).
   function discard(id) {
     const op = unsavedAdd(id);
     if (!op) return false;
     op.undone = true;
+    const lc = state.lastChange;
+    if (lc && lc.token === op.token) {
+      state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(op.after), canUndo: false };
+    }
     takeBack(op);
     return true;
   }
