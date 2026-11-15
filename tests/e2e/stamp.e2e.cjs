@@ -350,7 +350,7 @@ module.exports = [
       backend.failWith = "network";
       await arm(page, "Ajen>Mo");
       await page.click(spot("Ajen>Mo"));
-      await expectText(page, "#ubarT", "No signal. That wasn't saved.");
+      await expectText(page, "#ubarT", "No signal. That wasn’t saved.");
       await idle(page);
       assert.equal(await page.locator("#slip .stamp").count(), 0, "no stamp left on the slip");
       assert.equal(await page.locator("#slip .s-row.is-paid").count(), 0);

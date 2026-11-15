@@ -10,7 +10,7 @@ function fail(code, message) {
   return err;
 }
 
-const NO_SIGNAL = "Couldn't reach the trip sheet.";
+const NO_SIGNAL = "Couldn’t reach the trip sheet.";
 const BAD_REPLY = "The trip sheet sent back something unexpected.";
 
 export function createApi({ url, getKey, getActor, fetchImpl }) {

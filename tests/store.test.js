@@ -16,7 +16,7 @@ const KEY = "test-key";
 const URL = "https://example.test/exec";
 const NOW = Date.UTC(2026, 11, 11, 3);
 const ALL = ["Mo", "Ajen", "Trenton"];
-const UNDO_FAILED = "Couldn't undo that. Try again from History.";
+const UNDO_FAILED = "Couldn’t undo that. Try again from History.";
 const STALE = "That was changed again since. Undo the newer change first.";
 
 // ---------- helpers ----------
@@ -839,6 +839,39 @@ test("undoEntry undoes a history entry and updates the tape", async () => {
   const was = p.store.state.history.entries.find((e) => e.id === del.id);
   assert.equal(was.undoneBy, top.id);
   assert.equal(was.canUndo, false);
+});
+
+test("after an undo from History the tape is loaded again from the first page", async () => {
+  const a = phone({ seed: SEED });
+  const b = phone({ seed: SEED, fake: a.fake, storage: memStorage({ "mat.key": KEY, "mat.me": "Ajen" }) });
+  await a.store.boot();
+  await b.store.boot();
+  await a.store.loadHistory();
+  const del = a.store.state.history.entries.find((e) => e.ref === "seedexp005" && e.action === "delete");
+  b.store.updateExpense("seedexp004", { amount: 4500 }); // another phone, after the tape was loaded
+  await b.store.idle();
+  const before = sent(a.fake, "history");
+  await a.store.undoEntry(del.id);
+  assert.equal(sent(a.fake, "history"), before + 1);
+  const top = a.store.state.history.entries.slice(0, 2).map((e) => e.action + ":" + e.ref);
+  assert.deepEqual(top, ["undo:seedexp005", "edit:seedexp004"]);
+  assert.equal(a.store.state.history.entries.find((e) => e.id === del.id).undoneBy, a.store.state.history.entries.find((e) => e.action === "undo").id);
+});
+
+test("a failed History load says why: no connection, or any other trouble", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.net.failing.add("history");
+  await p.store.loadHistory();
+  assert.equal(p.store.state.history.error, "network");
+  p.net.failing.clear();
+  p.net.override = (body) => (body.action === "history" ? { ok: false, error: "server", message: "Boom" } : null);
+  await p.store.loadHistory();
+  assert.equal(p.store.state.history.error, "server");
+  p.net.override = null;
+  await p.store.loadHistory();
+  assert.equal(p.store.state.history.error, null);
+  assert.equal(p.store.state.history.entries.length, 10);
 });
 
 test("Busy is retried", async () => {

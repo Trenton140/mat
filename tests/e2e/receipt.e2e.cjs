@@ -182,7 +182,7 @@ module.exports = [
         if (new URL(r.url()).hostname !== "localhost" && !r.url().includes("fonts.googleapis.com")) outside.push(r.url());
       });
       await page.goto(ORIGIN + "/");
-      await expectText(page, "#gate", "This app isn't connected yet.");
+      await expectText(page, "#gate", "This app isn’t connected yet.");
       assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0);
       assert.deepEqual(outside, [], "no request to any other host (fonts aside)");
       assert.equal(backend.requests.length, 0, "the bridge received nothing");

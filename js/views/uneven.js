@@ -132,7 +132,7 @@ export function mountUneven(host, { onChange }) {
           val = el("input", "un-val");
           val.type = "text";
           val.autocomplete = "off";
-          val.setAttribute("aria-label", name + "'s amount");
+          val.setAttribute("aria-label", name + "’s amount");
         } else {
           val = el("span", "un-val");
         }

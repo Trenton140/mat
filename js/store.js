@@ -27,8 +27,8 @@ import { newId } from "./time.js";
 
 const BUSY_RETRIES = 3;
 const BUSY_DELAY_MS = 400;
-const UNDO_FAILED = "Couldn't undo that. Try again from History.";
-const NO_SIGNAL = "No signal. That wasn't saved.";
+const UNDO_FAILED = "Couldn’t undo that. Try again from History.";
+const NO_SIGNAL = "No signal. That wasn’t saved.";
 const STALE = "That was changed again since. Undo the newer change first.";
 
 const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "sheetUrl"];
@@ -92,7 +92,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     status: "boot", online: true, rev: null, me: null,
     trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, sheetUrl: "",
     loadedAt: null, seenAt: null, lastChange: null, notice: null,
-    history: { entries: [], more: false, loading: false },
+    history: { entries: [], more: false, loading: false, error: null },
   };
 
   const subs = new Set();
@@ -685,10 +685,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     const args = older ? { before: h.entries[h.entries.length - 1].id } : {};
     try {
       const r = await call("history", args);
-      state.history = { entries: older ? h.entries.concat(r.data.entries) : r.data.entries, more: !!r.data.more, loading: false };
+      state.history = { entries: older ? h.entries.concat(r.data.entries) : r.data.entries, more: !!r.data.more, loading: false, error: null };
       historyLoaded = true;
-    } catch {
-      state.history = { ...state.history, loading: false };
+    } catch (err) {
+      state.history = { ...state.history, loading: false, error: codeOf(err) };
     }
     changed();
   }
@@ -732,6 +732,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       });
       state.history = { ...state.history, entries: top ? [top, ...rest] : rest };
       changed();
+      await loadHistory(); // the tape starts again from its first page, with whatever others did meanwhile
       return true;
     });
   }

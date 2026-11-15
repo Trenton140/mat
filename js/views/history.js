@@ -1,0 +1,194 @@
+// The History tape: a sheet listing every change anyone made, newest first,
+// with Undo on the newest change to each item.
+//
+// mountHistory(root, store) -> { open(), close(restoreFocus), isOpen() }
+// root is the phone. The tape draws from store.state.history and redraws on
+// every store change. It is fetched each time the sheet opens, never at boot.
+// Undo is store.undoEntry(id): the store handles a refused (stale) undo by
+// showing the notice and loading the first page again. Text from people or
+// the Sheet goes in with textContent only.
+
+import { clock, dayHead } from "../format.js";
+import { dateIn } from "../time.js";
+
+const LOADING = "…";
+const NO_HISTORY = "History needs a connection.";
+const HISTORY_FAILED = "Couldn’t load the history.";
+const NOTHING_YET = "Nothing has changed yet.";
+const INTRO = "Every change, newest first. Undo is on the latest change to each item.";
+
+const MARKUP = `
+<div class="hist-top"><span><i>履歴</i> History</span><button type="button" id="histDone">Done</button></div>
+<p class="hist-p">${INTRO}</p>
+<div class="tape" id="tape" tabindex="-1"></div>`;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+export function mountHistory(root, store) {
+  const scrim = el("div", "scrim");
+  scrim.id = "histScrim";
+  scrim.hidden = true;
+  const sheet = el("div", "hist");
+  sheet.id = "hist";
+  sheet.setAttribute("role", "dialog");
+  sheet.setAttribute("aria-modal", "true");
+  sheet.setAttribute("aria-label", "History");
+  sheet.inert = true;
+  sheet.innerHTML = MARKUP;
+  root.append(scrim, sheet);
+
+  const tape = sheet.querySelector("#tape");
+  const done = sheet.querySelector("#histDone");
+
+  let opened = false;
+  let phase = "loading"; // "loading" until this opening's fetch has answered, then "done" or "failed"
+  let openNo = 0;
+  const busy = new Set(); // entries whose Undo is on its way: no second tap
+
+  // The day a change was made, in the trip's own time zone, as a heading.
+  const dayOf = (ms, s) => (isFinite(ms) && s.trip && s.trip.tz ? dateIn(s.trip.tz, ms) : "");
+
+  function drawRow(en) {
+    const row = el("div", "tp-row" + (en.undoneBy ? " is-undone" : ""));
+    row.dataset.id = en.id;
+    const ms = Date.parse(en.at);
+    const when = el("time", "", isFinite(ms) ? clock(ms) : "");
+    const said = el("span", "tp-s");
+    said.append(el("b", "", en.who), " " + en.summary);
+    if (en.via === "claude") said.append(el("i", "", " (through Claude)"));
+    row.append(when, said);
+    if (en.canUndo && !en.undoneBy) {
+      const undo = el("button", "tp-undo", "Undo");
+      undo.type = "button";
+      undo.setAttribute("aria-label", "Undo: " + said.textContent);
+      undo.disabled = busy.has(en.id);
+      row.append(undo);
+    }
+    return row;
+  }
+
+  function draw(s) {
+    const h = s.history;
+    if (phase === "loading") {
+      tape.replaceChildren(el("p", "tp-msg", LOADING));
+      return;
+    }
+    // The fetch for this opening failed: whatever is left from an earlier opening is not shown.
+    if (phase === "failed") {
+      tape.replaceChildren(el("p", "tp-msg", h.error === "network" ? NO_HISTORY : HISTORY_FAILED));
+      return;
+    }
+    if (!h.entries.length) {
+      tape.replaceChildren(el("p", "tp-msg", NOTHING_YET));
+      return;
+    }
+    const nodes = [];
+    let last = null;
+    for (const en of h.entries) {
+      const day = dayOf(Date.parse(en.at), s);
+      if (day !== last) {
+        last = day;
+        if (day) {
+          const head = dayHead(day, []);
+          const d = el("div", "tp-day");
+          d.append(el("span", "", head.en), el("i", "", head.jp));
+          nodes.push(d);
+        }
+      }
+      nodes.push(drawRow(en));
+    }
+    if (h.more) {
+      const more = el("button", "tp-more", "Show older");
+      more.type = "button";
+      more.id = "histMore";
+      more.disabled = h.loading;
+      more.setAttribute("aria-busy", h.loading ? "true" : "false");
+      nodes.push(more);
+    }
+    if (h.error) nodes.push(el("p", "tp-msg", h.error === "network" ? NO_HISTORY : HISTORY_FAILED)); // older entries would not load
+    tape.replaceChildren(...nodes);
+  }
+
+  function render(s) {
+    if (!opened) return;
+    // A redraw replaces the buttons: keep the thumb's place when one had focus.
+    const hadFocus = tape.contains(document.activeElement) && document.activeElement !== tape;
+    draw(s);
+    if (hadFocus && !tape.contains(document.activeElement)) tape.focus({ preventScroll: true });
+  }
+
+  async function open() {
+    if (opened) return;
+    opened = true;
+    const mine = ++openNo;
+    phase = "loading";
+    busy.clear();
+    render(store.state);
+    sheet.classList.add("is-open");
+    sheet.inert = false;
+    scrim.hidden = false;
+    root.classList.add("hist-open");
+    tape.scrollTop = 0;
+    store.markSeen();
+    done.focus({ preventScroll: true });
+    await store.loadHistory();
+    if (mine !== openNo || !opened) return;
+    phase = store.state.history.error ? "failed" : "done";
+    render(store.state);
+  }
+
+  // restoreFocus: give focus back to the History button.
+  function close(restoreFocus = true) {
+    if (!opened) return;
+    opened = false;
+    openNo++;
+    sheet.classList.remove("is-open");
+    sheet.inert = true;
+    scrim.hidden = true;
+    root.classList.remove("hist-open");
+    if (sheet.contains(document.activeElement)) document.activeElement.blur();
+    if (restoreFocus === true) {
+      const btn = document.getElementById("histBtn");
+      if (btn && !btn.hidden) btn.focus({ preventScroll: true });
+    }
+  }
+
+  // ---- taps ----
+
+  done.addEventListener("click", () => close());
+  scrim.addEventListener("click", () => close());
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape") close();
+  });
+
+  tape.addEventListener("click", async (ev) => {
+    if (ev.target.closest("#histMore")) {
+      store.loadHistory({ older: true });
+      return;
+    }
+    const btn = ev.target.closest("button.tp-undo");
+    if (!btn) return;
+    const id = Number(btn.closest(".tp-row").dataset.id);
+    if (busy.has(id)) return;
+    busy.add(id);
+    tape.focus({ preventScroll: true }); // the button is about to go: keep the place
+    btn.disabled = true;
+    let ok = false;
+    try {
+      ok = await store.undoEntry(id);
+    } finally {
+      busy.delete(id);
+    }
+    if (ok) tape.scrollTop = 0; // the new "undid" row is on top
+    render(store.state);
+  });
+
+  store.subscribe(render);
+
+  return { open, close: (restoreFocus) => close(restoreFocus), isOpen: () => opened };
+}

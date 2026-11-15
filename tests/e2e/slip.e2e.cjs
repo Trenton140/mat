@@ -160,7 +160,7 @@ module.exports = [
       backend.failWith = "network";
       await page.click("#simp");
       await page.click("#simpOff");
-      await expectText(page, "#ubarT", "No signal. That wasn't saved.");
+      await expectText(page, "#ubarT", "No signal. That wasn’t saved.");
       await until(() => isOn(page), "the switch is back on");
       await waitRows(page, ["You → Trenton $10.00"]);
       backend.failWith = null;

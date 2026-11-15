@@ -6,7 +6,7 @@
 
 export const HOW_LINES = ["Ring up what you paid.", "The slip says who pays whom.", "Stamp it the moment you send."];
 const NO_KEY = "This link is missing its key. Ask Mo to send you the trip link again.";
-const NOT_CONNECTED = "This app isn't connected yet.";
+const NOT_CONNECTED = "This app isn’t connected yet.";
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
