@@ -229,14 +229,18 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   const mayHaveLanded = (op) => op.inFlight || op.lost || op.logId !== null;
 
   function saveQueue() {
-    const live = ops.filter(isLiveQueuedAdd).map((op) => ({
-      expense: op.args.expense,
-      addedAt: op.after.addedAt,
-      rate: op.after.rate,
-      addedBy: op.after.addedBy,
-      failed: op.status === "failed",
-      sent: op.inFlight || op.lost,
-    }));
+    const live = ops.filter(isLiveAdd).map((op) =>
+      op.kind === "payment"
+        ? { payment: op.args.payment, stampedAt: op.after.stampedAt, stampedBy: op.after.stampedBy, sent: op.inFlight || op.lost }
+        : {
+            expense: op.args.expense,
+            addedAt: op.after.addedAt,
+            rate: op.after.rate,
+            addedBy: op.after.addedBy,
+            failed: op.status === "failed",
+            sent: op.inFlight || op.lost,
+          },
+    );
     const undos = resolving.map((op) => ({ undo: true, kind: op.kind, args: op.args, logId: op.logId, actor: op.actor || null }));
     setItem("mat.queue", JSON.stringify(live.concat(undos)));
   }
@@ -405,6 +409,18 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         startResolving(op);
         continue;
       }
+      if (q.payment && typeof q.payment === "object" && typeof q.payment.id === "string") {
+        if (ops.some((o) => o.kind === "payment" && o.id === q.payment.id)) continue;
+        const op = stampOp(q.payment, {
+          stampedBy: typeof q.stampedBy === "string" ? q.stampedBy : myName,
+          stampedAt: typeof q.stampedAt === "string" ? q.stampedAt : undefined,
+        });
+        op.status = "queued";
+        op.lost = q.sent !== false;
+        writes.set(op.token, op);
+        ops.push(op);
+        continue;
+      }
       if (!q.expense || typeof q.expense.id !== "string") continue;
       if (ops.some((o) => o.kind === "expense" && o.id === q.expense.id)) continue;
       const op = addOp(q.expense, {
@@ -482,7 +498,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       track(checkRev());
       return op.token;
     }
-    if (op.api === "addExpense") saveQueue();
+    if (isAdd(op)) saveQueue();
     changed();
     send(op);
     return op.token;
@@ -497,7 +513,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     if (op.undone && isAdd(op)) return;
     op.status = "sending";
     op.inFlight = true;
-    if (op.api === "addExpense") saveQueue();
+    if (isAdd(op)) saveQueue();
     try {
       const r = await call(op.api, op.args, isAdd(op) && op.actor ? { actor: op.actor } : undefined);
       op.inFlight = false;
@@ -570,13 +586,30 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       rot: (rnd[1] % 201) / 10 - 13, // -13.0 to 7.0
     };
     payment.rot = Math.round(payment.rot * 10) / 10;
-    const after = { ...payment, stampedBy: myName, stampedAt: new Date(now()).toISOString(), removed: false };
-    return begin({
+    return begin(stampOp(payment, { stampedBy: myName }));
+  }
+
+  function stampOp(payment, { stampedBy, stampedAt } = {}) {
+    const after = { ...copy(payment), stampedBy: stampedBy || null, stampedAt: stampedAt || new Date(now()).toISOString(), removed: false };
+    return {
       token: newId(), kind: "payment", id: payment.id, action: "stamp", api: "addPayment",
-      args: { payment }, before: null, after,
+      args: { payment: copy(payment) }, before: null, after,
       view: (cur) => ({ ...(cur || {}), ...after }),
-      status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: myName,
-    });
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: after.stampedBy,
+    };
+  }
+
+  // Removing (or deleting) an item whose add the backend has not confirmed:
+  // never a request about an item it may not have. The add is taken back,
+  // as Undo does: forgotten if it provably never left, otherwise resent and
+  // undone on the next contact. null when there is no such add.
+  function takeBackLive(kind, id) {
+    const op = ops.find((o) => o.kind === kind && o.id === id && isLiveAdd(o));
+    if (!op) return null;
+    op.undone = true;
+    state.lastChange = { token: newId(), action: "undo", kind, item: bare(undoneView(op, bare(find(kind, id)))), canUndo: false };
+    takeBack(op);
+    return state.lastChange.token;
   }
 
   // What an item looks like once `op` is undone.
@@ -806,11 +839,11 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const unsavedAdd = (id) => ops.find((o) => isLiveQueuedAdd(o) && o.id === id);
 
-  // Lines rung up that the backend does not have yet: `unsent` counts every
+  // Lines and stamps the backend does not have yet: `unsent` counts every
   // one still to go (sending or waiting, not refused); `waiting` those held
   // on the phone for the next contact.
   function outbox() {
-    const live = ops.filter((o) => isLiveQueuedAdd(o) && o.status !== "failed");
+    const live = ops.filter((o) => isLiveAdd(o) && o.status !== "failed");
     return { unsent: live.length, waiting: live.filter((o) => o.status === "queued").length };
   }
 
@@ -930,7 +963,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
           await showBackendAfterRefusedUndo(err);
           return false;
         }
-        state.notice = UNDO_FAILED;
+        // No reply: it may have been undone; the next contact shows which.
+        state.notice = noReply(err) ? failNotice(err) : UNDO_FAILED;
         changed();
         return false;
       }
@@ -999,10 +1033,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     setMe, setPerson, markSeen, notify, clearNotice,
     addExpense,
     updateExpense: (id, patch) => change("expense", id, "edit", "updateExpense", patch),
-    deleteExpense: (id) => change("expense", id, "delete", "deleteExpense", { deleted: true }),
+    deleteExpense: (id) => takeBackLive("expense", id) || change("expense", id, "delete", "deleteExpense", { deleted: true }),
     restoreExpense: (id) => change("expense", id, "restore", "restoreExpense", { deleted: false }),
     addPayment,
-    removePayment: (id) => change("payment", id, "unstamp", "removePayment", { removed: true }),
+    removePayment: (id) => takeBackLive("payment", id) || change("payment", id, "unstamp", "removePayment", { removed: true }),
     restorePayment: (id) => change("payment", id, "restamp", "restorePayment", { removed: false }),
     retry, discard, unsaved: (id) => !!unsavedAdd(id), outbox, undo, undoEntry, loadHistory, historyFor,
   };

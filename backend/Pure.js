@@ -303,8 +303,6 @@ function setupSeedRows() {
 
 // ---- exchange rate ----
 
-// Whether to fetch today's rate: only when today's is not stored yet and the
-// last failed fetch (failAtIso) was not within the past hour.
 // Where the rate in use came from: today's stored rate is "live", an earlier
 // day's (RATE_LAST) is "last", none at all means the stand-in 111, "fallback".
 function rateSource(todayKeyValue, lastValue) {
@@ -322,6 +320,8 @@ function sameKey(given, key) {
   return diff === 0;
 }
 
+// Whether to fetch today's rate: only when today's is not stored yet and the
+// last failed fetch (failAtIso) was not within the past hour.
 function shouldFetchRate(todayKeyValue, failAtIso, nowIso) {
   if (Number(todayKeyValue) > 0) return false;
   var failAt = failAtIso ? Date.parse(failAtIso) : NaN;

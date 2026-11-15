@@ -1762,3 +1762,118 @@ test("an edit undone while its request is out, whose reply is then lost, is sett
   assert.equal(line.amount, 4200);
   assert.equal("pending" in line, false, "nothing left pending on the phone");
 });
+
+// ---------- fix-wave follow-up (N1, N2, N6) ----------
+
+const livePayments = (fake) => fake.tables.Settlements.filter((r) => !r.removed_at);
+
+for (const mode of ["failing", "lose"]) {
+  const how = mode === "failing" ? "never arrived" : "arrived but its reply was lost";
+  test("removing a stamp whose request " + how + " leaves no live payment, now or after contact (N1)", async () => {
+    const p = phone({ seed: LODGE, me: "Ajen" });
+    await p.store.boot();
+    p.net[mode].add("addPayment");
+    p.store.addPayment({ from: "Ajen", to: "Mo", cad: 150 });
+    const id = idOf(p.store);
+    await p.store.idle();
+    p.net[mode].clear();
+    p.store.removePayment(id);
+    await p.store.idle();
+    assert.equal(p.store.state.notice, null, "no refusal shown");
+    assert.equal(p.store.state.payments.filter((x) => !x.removed).length, 0, "gone from the slip");
+    await p.store.checkRev();
+    await p.store.idle();
+    await p.store.checkRev();
+    await p.store.idle();
+    assert.deepEqual(livePayments(p.fake), [], "the backend has no live payment");
+    assert.equal(p.store.state.payments.filter((x) => !x.removed).length, 0);
+    const adds = p.fake.requests.filter((r) => r.action === "addPayment").length;
+    await p.store.checkRev();
+    await p.store.idle();
+    assert.equal(p.fake.requests.filter((r) => r.action === "addPayment").length, adds, "a later contact creates nothing");
+  });
+
+  test("the bar's Undo on a stamp whose request " + how + " leaves no live payment (N1)", async () => {
+    const p = phone({ seed: LODGE, me: "Ajen" });
+    await p.store.boot();
+    p.net[mode].add("addPayment");
+    const t = p.store.addPayment({ from: "Ajen", to: "Mo", cad: 150 });
+    await p.store.idle();
+    p.net[mode].clear();
+    await p.store.undo(t);
+    await p.store.checkRev();
+    await p.store.idle();
+    assert.deepEqual(livePayments(p.fake), []);
+    assert.equal(p.store.state.payments.filter((x) => !x.removed).length, 0);
+  });
+
+  test("deleteExpense on a line whose add " + how + " leaves no live line (N1)", async () => {
+    const p = phone({ seed: SEED });
+    await p.store.boot();
+    p.net[mode].add("addExpense");
+    p.store.addExpense(draft({ title: "Gone" }));
+    const id = idOf(p.store);
+    await p.store.idle();
+    p.net[mode].clear();
+    p.store.deleteExpense(id);
+    await p.store.idle();
+    await p.store.checkRev();
+    await p.store.idle();
+    const server = byId((await backend(p.fake)).expenses, id);
+    assert.ok(!server || server.deleted, "not live on the backend");
+    const shown = byId(p.store.state.expenses, id);
+    assert.ok(!shown || shown.deleted, "not live on the phone");
+    assert.equal(sent(p.fake, "deleteExpense"), 0, "never sent as a delete of a line the backend may not have");
+  });
+}
+
+test("a stamp of unknown fate counts in the outbox, survives a reload in mat.queue, and is sent once (N2)", async () => {
+  const p = phone({ seed: LODGE, me: "Ajen" });
+  await p.store.boot();
+  p.net.lose.add("addPayment");
+  p.store.addPayment({ from: "Ajen", to: "Mo", cad: 150 });
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.deepEqual(p.store.outbox(), { unsent: 1, waiting: 1 });
+  assert.deepEqual(queueOf(p.storage).map((q) => q.payment && q.payment.id), [id]);
+  p.net.lose.clear();
+
+  const q = phone({ fake: p.fake, storage: p.storage, me: "Ajen" });
+  q.store.setMe("Mo"); // credited to whoever stamped it, not the phone's person now
+  await q.store.boot();
+  await q.store.idle();
+  assert.equal(p.fake.tables.Settlements.length, 1, "one payment, not two");
+  assert.equal(p.fake.tables.Settlements[0].stamped_by, "Ajen");
+  assert.deepEqual(q.store.state.payments.map((x) => [x.id, "pending" in x]), [[id, false]]);
+  assert.deepEqual(queueOf(q.storage), []);
+  assert.deepEqual(q.store.outbox(), { unsent: 0, waiting: 0 });
+});
+
+test("a stamp that never left, restored after a reload, is sent once (N2)", async () => {
+  const p = phone({ seed: LODGE, me: "Ajen" });
+  await p.store.boot();
+  p.net.knownOffline = true;
+  p.store.addPayment({ from: "Ajen", to: "Mo", cad: 150 });
+  await p.store.idle();
+  assert.equal(queueOf(p.storage)[0].sent, false);
+  const q = phone({ fake: p.fake, storage: p.storage, me: "Ajen" });
+  await q.store.boot();
+  await q.store.idle();
+  assert.equal(p.fake.tables.Settlements.length, 1);
+});
+
+test("an undo from History whose reply is lost says it is checking and reloads on the next contact (N6)", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.store.updateExpense("seedexp004", { amount: 4500 });
+  await p.store.idle();
+  await p.store.loadHistory();
+  const entry = p.store.state.history.entries.find((e) => e.ref === "seedexp004" && e.action === "edit");
+  p.net.lose.add("undo");
+  await p.store.undoEntry(entry.id);
+  assert.equal(p.store.state.notice, UNCONFIRMED);
+  p.net.lose.clear();
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200, "the backend's undone line is shown");
+});

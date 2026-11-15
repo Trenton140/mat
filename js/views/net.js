@@ -1,6 +1,6 @@
 // The "no signal" strip (#net), across the top of the phone, above the
 // sentence. It shows while the phone has no signal ("No signal." alone when
-// this phone has never loaded anything), or while a line rung up
+// this phone has never loaded anything), or while a line or a stamp
 // is held on the phone for the next contact, and says how many lines are
 // still to send. While it shows, the screens move down by its height (the
 // --net-h property on the phone), so it never covers the sentence, and it

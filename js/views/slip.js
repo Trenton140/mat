@@ -23,6 +23,7 @@ const FOLD = 2;
 const MAX_CENTS = 10000000; // $100,000, the backend's limit
 const ASK = "Pay each person directly? You’ll make more payments. The totals are the same.";
 const ENTER = "Enter what was sent.";
+const SENDING = "Sending…";
 
 // "250", "250.3", "250.30", "250,30" (a decimal comma, as some keypads type)
 // or ".5" -> cents; anything else, zero or too much -> null. Read on the
@@ -172,13 +173,13 @@ export function mountSlip(slip, store) {
   }
 
   function paidRow(v, p, hit) {
-    const row = el("div", "s-row is-paid");
+    // A stamp the backend has not confirmed yet is drawn faded, "Sending…".
+    const row = el("div", "s-row is-paid" + (p.pending ? " is-pending" : ""));
     row.dataset.pid = p.id;
     const left = el("div", "s-l");
     const amt = el("div", "s-amt");
     amt.innerHTML = pt(dollars(centsOf(p)));
-    const done = !v.open.some((t) => t.from === p.from && t.to === p.to);
-    left.append(el("div", "s-who", who(v, p.from, true) + " → " + who(v, p.to)), amt, el("div", "s-sub", paidDay(v, p) + (done ? " Nothing more to send." : "")));
+    left.append(el("div", "s-who", who(v, p.from, true) + " → " + who(v, p.to)), amt, el("div", "s-sub", paidSub(v, p)));
     const spot = button("spot");
     spot.dataset.pid = p.id;
     spot.setAttribute("aria-label", "Stamped paid. Remove this stamp?");
@@ -199,6 +200,25 @@ export function mountSlip(slip, store) {
       row.append(rm);
     }
     return row;
+  }
+
+  function paidSub(v, p) {
+    if (p.pending) return SENDING;
+    const done = !v.open.some((t) => t.from === p.from && t.to === p.to);
+    return paidDay(v, p) + (done ? " Nothing more to send." : "");
+  }
+
+  // A stamp going from sending to confirmed changes in place: redrawing the
+  // row would play its hit again, or cut it short.
+  function markPending(v) {
+    for (const row of slip.querySelectorAll(".s-row.is-paid[data-pid]")) {
+      const p = v.stamps.find((x) => x.id === row.dataset.pid);
+      if (!p) continue;
+      row.classList.toggle("is-pending", !!p.pending);
+      const sub = row.querySelector(".s-sub");
+      const want = paidSub(v, p);
+      if (sub && sub.textContent !== want) sub.textContent = want;
+    }
   }
 
   function simpBlock(v) {
@@ -259,7 +279,10 @@ export function mountSlip(slip, store) {
       { ...ui, amt: undefined },
     ]);
     fresh = new Set();
-    if (sig === shown && !force && !hits.size) return;
+    if (sig === shown && !force && !hits.size) {
+      markPending(v);
+      return;
+    }
     shown = sig;
 
     const focus = focusTarget();

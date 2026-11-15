@@ -121,6 +121,8 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 .rc-row.print{overflow:hidden;animation:print .4s steps(5,end) both}
 @keyframes print{from{max-height:0;min-height:0;padding:0}to{max-height:64px}}
 .rc-row.is-pending{opacity:.55}
+/* A stamp the backend has not confirmed: faded the same way until it is. */
+.s-row.is-paid.is-pending .s-l,.s-row.is-paid.is-pending .stamp{opacity:.55}
 .rc-row.is-failed small.rc-fail{color:var(--shu);opacity:1;font-weight:700}
 .rc-row.is-new .rc-amt::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--shu);margin-right:7px;vertical-align:.18em}
 .mini{width:30px;height:30px;border-radius:50%;border:1.7px solid var(--shu);color:var(--shu);display:grid;place-items:center;

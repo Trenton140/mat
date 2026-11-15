@@ -354,6 +354,8 @@ module.exports = [
       assert.notEqual(await ubar(page), "No signal. That wasn’t saved.");
       assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1, "the stamp stays on the slip");
       assert.deepEqual((await openRows(page)).map((r) => r.key), ["Trenton>Mo"], "the transfer is not offered again");
+      assert.deepEqual(await armed(page), [], "no row is left armed");
+      assert.equal(await page.locator("#stampAmt").count(), 0, "the amount field is gone");
       assert.equal(backend.fake.tables.Settlements.length, 0);
       backend.failWith = null;
       await page.evaluate(() => globalThis.__matTest.store.checkRev());
@@ -377,7 +379,11 @@ module.exports = [
       await page.click(spot("Ajen>Mo"));
       await idle(page);
       assert.equal(backend.fake.tables.Settlements.length, 1);
-      assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1, "still shown");
+      assert.equal(await page.locator("#slip .s-row.is-paid.is-pending").count(), 1, "still shown, as pending");
+      await expectText(page, "#slip .s-row.is-paid.is-pending .s-sub", "Sending…");
+      const faded = await page.evaluate(() => Number(getComputedStyle(document.querySelector("#slip .s-row.is-pending .s-l")).opacity));
+      assert.ok(faded < 1, "faded like a pending line: " + faded);
+      await expectText(page, "#net", /1 to send\.$/);
       assert.deepEqual((await openRows(page)).map((r) => r.key), ["Trenton>Mo"]);
       backend.handle = handle;
       await page.evaluate(() => globalThis.__matTest.store.checkRev());
@@ -387,6 +393,9 @@ module.exports = [
       assert.equal(sent[0], sent[1], "the same id both times");
       assert.equal(backend.fake.tables.Settlements.length, 1, "one payment, not two");
       assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1);
+      assert.equal(await page.locator("#slip .s-row.is-pending").count(), 0, "a normal paid row now");
+      await expectText(page, "#slip .s-row.is-paid .s-sub", /^Paid /);
+      assert.equal(await visible(page, "#net"), false);
     },
   },
   {
