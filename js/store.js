@@ -616,6 +616,14 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const unsavedAdd = (id) => ops.find((o) => isLiveQueuedAdd(o) && o.id === id);
 
+  // Lines rung up that the backend does not have yet: `unsent` counts every
+  // one still to go (sending or waiting, not refused); `waiting` those held
+  // on the phone for the next contact.
+  function outbox() {
+    const live = ops.filter((o) => isLiveQueuedAdd(o) && o.status !== "failed");
+    return { unsent: live.length, waiting: live.filter((o) => o.status === "queued").length };
+  }
+
   // A line that is still pending or failed, with no way forward: take it back
   // and say "Undone." on the undo bar, as undo does. A confirmed line is left
   // alone (false).
@@ -678,30 +686,37 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   // ---- history ----
 
   let historySeq = 0; // numbers each first-page load
+  // Resolves with what this load itself fetched, { entries, more, error },
+  // even when a newer load has since replaced state.history (null when an
+  // older page was asked for and there is none).
   async function loadHistory({ older = false } = {}) {
     const h = state.history;
-    if (older && (!h.more || !h.entries.length)) return;
+    if (older && (!h.more || !h.entries.length)) return null;
     const seq = older ? historySeq : ++historySeq;
     state.history = { ...h, loading: true };
     emit();
     const args = older ? { before: h.entries[h.entries.length - 1].id } : {};
+    let got;
     try {
       const r = await call("history", args);
+      got = { entries: r.data.entries, more: !!r.data.more, error: null };
       // A first-page load started after this one has the newer say.
       if (seq !== historySeq) {
         changed();
-        return;
+        return got;
       }
       state.history = { entries: older ? h.entries.concat(r.data.entries) : r.data.entries, more: !!r.data.more, loading: false, error: null };
       historyLoaded = true;
     } catch (err) {
+      got = { entries: [], more: false, error: codeOf(err) };
       if (seq !== historySeq) {
         changed();
-        return;
+        return got;
       }
       state.history = { ...state.history, loading: false, error: codeOf(err) };
     }
     changed();
+    return got;
   }
 
   async function historyFor(ref) {
@@ -799,6 +814,6 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     addPayment,
     removePayment: (id) => change("payment", id, "unstamp", "removePayment", { removed: true }),
     restorePayment: (id) => change("payment", id, "restamp", "restorePayment", { removed: false }),
-    retry, discard, unsaved: (id) => !!unsavedAdd(id), undo, undoEntry, loadHistory, historyFor,
+    retry, discard, unsaved: (id) => !!unsavedAdd(id), outbox, undo, undoEntry, loadHistory, historyFor,
   };
 }

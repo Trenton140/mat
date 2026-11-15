@@ -29,11 +29,22 @@ i{font-style:normal}
 @media (max-width:480px){ .phone{width:100%;height:100%;border-radius:0;box-shadow:none} }
 .views{position:absolute;inset:0}
 .view{position:absolute;inset:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;padding-bottom:96px;
-  padding-top:env(safe-area-inset-top, 0px);
+  padding-top:calc(env(safe-area-inset-top, 0px) + var(--net-h, 0px));
   opacity:0;pointer-events:none;transition:opacity .16s ease-out;scrollbar-width:none}
 .view::-webkit-scrollbar{display:none}
 .view.is-active{opacity:1;pointer-events:auto}
 .note{padding:0 var(--gr) 0 var(--gl);color:var(--dim);font-size:12px}
+
+/* ---------- no signal (#net) ---------- */
+/* A strip of the dark ground across the top, under the status bar: the
+   screens move down by its height (--net-h, set by js/views/net.js), so it
+   never covers the sentence; every sheet and the undo bar pass over it. */
+.net{position:absolute;left:0;right:0;top:0;z-index:7;display:flex;align-items:center;gap:9px;min-height:40px;
+  padding:calc(8px + env(safe-area-inset-top, 0px)) var(--gr) 8px var(--gl);background:var(--key);border-bottom:1.5px dashed var(--key-hi);
+  color:var(--text);font-weight:700;font-size:13.5px;line-height:1.35}
+.net::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;border:1.7px solid var(--shu)}
+.net span:empty{display:none}
+.net b{font-weight:900;font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* ---------- sheets ---------- */
 .sheet{position:absolute;left:0;right:0;bottom:0;z-index:24;max-height:90%;overflow-y:auto;overscroll-behavior:contain;

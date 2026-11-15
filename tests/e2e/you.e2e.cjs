@@ -320,4 +320,19 @@ module.exports = [
       backend.failWith = null;
     },
   },
+  {
+    name: "Report a problem says it couldn’t copy when the note cannot be built",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      await page.evaluate(() => navigator.clipboard.writeText("before"));
+      await page.evaluate(() => {
+        globalThis.__matTest.store.loadHistory = () => Promise.reject(new Error("test"));
+      });
+      await page.click("#setReport");
+      await expectText(page, "#ubarT", "Couldn’t copy. Try again.");
+      await until(async () => !(await page.isDisabled("#setReport")), "the button comes back");
+      assert.equal(await clipboard(page), "before", "nothing was copied");
+    },
+  },
 ];

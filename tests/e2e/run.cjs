@@ -1,15 +1,19 @@
 // Runs the click-through tests: every tests/e2e/*.e2e.cjs, or only those
 // whose file name contains one of the words given (npm run e2e -- receipt).
 //
-// An e2e file exports an array of cases, { name, run(ctx), timezoneId? } (timezoneId: open the
-// case's pages in that zone instead of Asia/Tokyo), or one async
+// An e2e file exports an array of cases, { name, run(ctx), timezoneId?, serviceWorkers? }
+// (timezoneId: open the case's pages in that zone instead of Asia/Tokyo;
+// serviceWorkers: "allow" lets the app's service worker register, which every
+// other case blocks), or one async
 // function (a single case named after the file). ctx = { page, context,
 // browser, newPhone() }; newPhone() opens a second page in a context of its
 // own (another phone: its own storage), watched the same way.
 //
 // Each case gets a fresh browser context: 390x844, mobile, touch, Japan time,
-// clipboard allowed. Every request to a host other than localhost is answered
+// clipboard allowed, service workers blocked unless the case allows them. Every request to a host other than localhost is answered
 // here (Google Fonts get an empty stylesheet), so nothing needs the network.
+// That holds for a case that allows the service worker too: this Playwright
+// routes a service worker's own requests through context.route as well.
 // A case fails on a thrown error, a console error or an uncaught page error;
 // a failure prints its message and saves a screenshot.
 
@@ -63,6 +67,7 @@ const CONTEXT = {
   hasTouch: true,
   timezoneId: "Asia/Tokyo",
   permissions: ["clipboard-read", "clipboard-write"],
+  serviceWorkers: "block",
 };
 
 async function hermetic(context) {
@@ -104,7 +109,11 @@ async function runCase(browser, fileBase, c) {
   const contexts = [];
   const pages = [];
   const newPage = async () => {
-    const context = await browser.newContext({ ...CONTEXT, timezoneId: c.timezoneId || CONTEXT.timezoneId });
+    const context = await browser.newContext({
+      ...CONTEXT,
+      timezoneId: c.timezoneId || CONTEXT.timezoneId,
+      serviceWorkers: c.serviceWorkers || CONTEXT.serviceWorkers,
+    });
     contexts.push(context);
     await hermetic(context);
     const page = await context.newPage();

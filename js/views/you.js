@@ -72,13 +72,19 @@ async function copyText(text) {
   try {
     if (typeof text !== "string" && globalThis.ClipboardItem && navigator.clipboard.write) {
       const blob = Promise.resolve(text).then((t) => new Blob([t], { type: "text/plain" }));
+      blob.catch(() => {}); // a text that cannot be built is answered below, not left unhandled
       await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
       return true;
     }
   } catch {
     // fall through to the plain copy below
   }
-  const plain = await text;
+  let plain;
+  try {
+    plain = await text;
+  } catch {
+    return false; // the text could not be built: nothing to copy
+  }
   try {
     await navigator.clipboard.writeText(plain);
     return true;
@@ -283,10 +289,10 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   });
 
   // The note needs the latest history, so it is built while the copy waits.
+  // It uses what its own load fetched: another load may replace the tape.
   async function reportNote() {
-    await store.loadHistory();
-    const h = store.state.history;
-    const sentences = h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
+    const h = await store.loadHistory();
+    const sentences = !h || h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
     return reportText({ me: store.state.me, screen, version: APP_VERSION, when: whenText(Date.now()), sentences });
   }
   report.addEventListener("click", async () => {

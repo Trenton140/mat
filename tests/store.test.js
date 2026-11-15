@@ -869,10 +869,12 @@ test("two overlapping first-page loads: the older request answering last never r
   const b = p.store.loadHistory(); // sees eleven
   await until(() => sent(p.fake, "history") === 2);
   releaseB();
-  await b;
+  assert.equal((await b).entries.length, 11, "each load resolves with what it fetched");
   assert.equal(p.store.state.history.entries.length, 11);
   releaseA();
-  await a;
+  const gotA = await a;
+  assert.equal(gotA.entries.length, 10, "the older load still resolves with its own answer");
+  assert.equal(gotA.error, null);
   assert.equal(p.store.state.history.entries.length, 11, "the older answer is dropped");
   assert.equal(p.store.state.history.entries[0].action, "edit");
   assert.equal(p.store.state.history.loading, false);
@@ -900,7 +902,7 @@ test("a failed History load says why: no connection, or any other trouble", asyn
   const p = phone({ seed: SEED });
   await p.store.boot();
   p.net.failing.add("history");
-  await p.store.loadHistory();
+  assert.deepEqual(await p.store.loadHistory(), { entries: [], more: false, error: "network" });
   assert.equal(p.store.state.history.error, "network");
   p.net.failing.clear();
   p.net.override = (body) => (body.action === "history" ? { ok: false, error: "server", message: "Boom" } : null);
@@ -1315,4 +1317,31 @@ test("js modules reach the outside world only through their arguments", () => {
     const s = fs.readFileSync(path.join(HERE, "..", "js", f), "utf8");
     assert.equal(/from\s+["'][^"']*(backend|tests)\//.test(s), false, f + " imports backend/ or tests/");
   }
+});
+
+test("outbox counts lines not yet on the backend: sending or waiting, never refused ones", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  assert.deepEqual(p.store.outbox(), { unsent: 0, waiting: 0 });
+  const draft = (title) => ({ day: "2026-12-11", title, amount: 500, currency: "JPY", paidBy: "Mo", split: ALL.slice() });
+
+  const release = p.net.hold("addExpense");
+  p.store.addExpense(draft("Sending"));
+  assert.deepEqual(p.store.outbox(), { unsent: 1, waiting: 0 }, "in flight: to send, not waiting");
+  release();
+  await p.store.idle();
+  assert.deepEqual(p.store.outbox(), { unsent: 0, waiting: 0 });
+
+  p.net.offline = true;
+  await p.store.checkRev();
+  p.store.addExpense(draft("One"));
+  p.store.addExpense(draft("Two"));
+  await p.store.idle();
+  assert.deepEqual(p.store.outbox(), { unsent: 2, waiting: 2 });
+
+  p.net.offline = false;
+  p.net.override = (body) => (body.action === "addExpense" ? { ok: false, error: "bad_input", message: "No" } : null);
+  await p.store.flush();
+  await p.store.idle();
+  assert.deepEqual(p.store.outbox(), { unsent: 0, waiting: 0 }, "refused lines are not counted");
 });

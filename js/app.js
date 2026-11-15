@@ -12,6 +12,10 @@ import { mountLine } from "./views/line.js";
 import { mountHistory } from "./views/history.js";
 import { mountYou } from "./views/you.js";
 import { mountUndoBar } from "./views/ubar.js";
+import { mountNet } from "./views/net.js";
+
+// How often a visible phone asks the backend whether anything changed.
+const CHECK_MS = 20000;
 
 // localStorage, or a stand-in in memory when the browser will not give it.
 function phoneStorage() {
@@ -123,6 +127,7 @@ function start() {
     },
   });
   mountUndoBar(phone, store);
+  mountNet(phone, store);
   mountFirst(phone, store, { connected, storage });
 
   document.getElementById("ring").addEventListener("click", () => {
@@ -138,11 +143,50 @@ function start() {
     you.open();
   });
 
+  // Staying in step with the other phones: ask whether anything changed
+  // every 20 seconds while the app is on screen, at once when it comes back
+  // on screen, and when signal returns (after sending what was waiting).
+  let checking = null;
+  const check = () => {
+    const st = store.state.status;
+    if (st === "ready" || st === "error") store.checkRev();
+  };
+  const startChecking = () => {
+    if (connected && !checking) checking = setInterval(check, CHECK_MS);
+  };
+  const stopChecking = () => {
+    clearInterval(checking);
+    checking = null;
+  };
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") store.markSeen();
+    if (document.visibilityState === "hidden") {
+      store.markSeen();
+      stopChecking();
+    } else {
+      check();
+      startChecking();
+    }
+  });
+  window.addEventListener("online", () => {
+    if (!connected) return;
+    store.flush().then(check);
   });
 
   if (connected) store.boot();
+  if (document.visibilityState !== "hidden") startChecking();
+}
+
+// The offline shell (sw.js). Quietly does nothing where service workers are
+// missing or blocked. A new worker takes over at once, but this page is not
+// reloaded for it (someone may be mid-entry): the next open gets the new shell.
+function registerWorker() {
+  try {
+    if (!("serviceWorker" in navigator)) return;
+    Promise.resolve(navigator.serviceWorker.register("sw.js")).catch(() => {});
+  } catch {
+    // not allowed here
+  }
 }
 
 start();
+registerWorker();
