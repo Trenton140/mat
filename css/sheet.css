@@ -83,6 +83,43 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:scale(.97)
 /* An open Days sheet (the hotel card, the all-days list) sits a layer above
    every other sheet, so the shadow a closed sheet casts up from below the
    phone never shades its ticket stock. */
-#stay.is-open,#allDays.is-open{z-index:26}
+#stay.is-open,#allDays.is-open,#stop.is-open{z-index:26}
 /* While a Days sheet is open the undo bar sits at the top. */
-.phone.stay-open .ubar,.phone.days-open .ubar{top:calc(12px + env(safe-area-inset-top, 0px));bottom:auto}
+.phone.stay-open .ubar,.phone.days-open .ubar,.phone.stop-open .ubar{top:calc(12px + env(safe-area-inset-top, 0px));bottom:auto}
+
+/* ---------- the stop sheet (#stop) ----------
+   A form cut from the ticket stock: each field is a blank on the ticket,
+   filled in black print. It sits on top of the phone's keyboard (--kb, set
+   by js/views/stopsheet.js while the keyboard is up). */
+.sheet.stop{background:var(--stock) var(--mat-pattern);color:var(--print);border-top:0;padding-top:14px;
+  bottom:var(--kb, 0px);max-height:calc(90% - var(--kb, 0px))}
+.stop .sheet-top button{color:var(--print);height:44px}
+.st{display:grid;gap:10px;padding-bottom:4px}
+.st-day{display:flex;align-items:baseline;gap:8px;padding-bottom:9px;border-bottom:2px dashed rgba(21,18,15,.38);font-size:15px}
+.st-day b{font-weight:900}
+.st-day i{font-size:13px;font-weight:500}
+.st-f{display:grid;gap:4px;font-size:12.5px;font-weight:700}
+.st-f input,.st-f textarea{width:100%;min-height:46px;padding:10px 12px;border:1.5px solid rgba(21,18,15,.4);border-radius:4px;background:var(--paper);
+  color:var(--print);font:inherit;font-size:16px;font-weight:700;line-height:1.3;outline:none;-webkit-appearance:none;appearance:none}
+.st-f textarea{resize:none;display:block}
+.st-f input:focus,.st-f textarea:focus{border-color:var(--print);box-shadow:0 0 0 1px var(--print)}
+.st-f #stWhat{font-size:18px;font-weight:900}
+.st-time{max-width:12em}
+.st-time input{font-variant-numeric:tabular-nums}
+/* The time can't slip: a switch, 指定 boxed as on the ticket. */
+.st-sw{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:48px;font-size:15px;font-weight:900}
+.st-sw i{border:1.5px solid var(--print);border-radius:2px;padding:0 4px 1px;margin-left:8px;font-size:12.5px;font-weight:900}
+.st-sw input{flex:none;position:relative;width:50px;height:30px;margin:0;border:1.5px solid var(--print);border-radius:15px;background:var(--paper);
+  -webkit-appearance:none;appearance:none;cursor:pointer;transition:background .15s}
+.st-sw input::after{content:"";position:absolute;top:3px;left:3px;width:21px;height:21px;border-radius:50%;background:var(--print);transition:transform .15s ease-out}
+.st-sw input:checked{background:var(--print)}
+.st-sw input:checked::after{background:var(--stock);transform:translateX(20px)}
+.st-msg{margin:0;font-size:14.5px;font-weight:900}
+.st-msg:empty{display:none}
+.st-msg::before{content:"";display:inline-block;width:9px;height:9px;margin-right:8px;border-radius:50%;border:1.7px solid var(--shu)}
+.st-btns{display:flex;gap:8px;margin-top:2px}
+.st-btns button{height:52px;border-radius:6px;font-weight:900;font-size:16px;transition:transform .12s ease-out}
+.st-btns button:active{transform:scale(.97)}
+.st-btns button:disabled{opacity:.3;transform:none}
+#stSave{flex:1;border:0;background:var(--print);color:var(--stock)}
+#stDel{flex:none;padding:0 18px;border:1.5px solid var(--shu);background:none;color:var(--shu)}

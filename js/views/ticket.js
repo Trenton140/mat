@@ -18,6 +18,9 @@
 //   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1.
 // - stay: the night's stay (stayFor), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
+// After the stops (before the stay) every ticket has ＋ Add a stop, a button
+// .tk-add[data-date]; each open stop has an Edit button, .r-edit, beside its
+// links. Both open the stop sheet (the Days view sees to the taps).
 // Every row is drawn closed: the Days view opens one (.is-open on the .r, and
 // aria-expanded on its [role=button], and un-inerts its .r-more).
 // A used day's gate stamp is made once per day, place and mark, and reused.
@@ -138,7 +141,11 @@ function more(stop, origin) {
   if (map) btns.append(link("r-map", "地図 Directions ↗", map));
   const own = safeHref(stop.link);
   if (own) btns.append(link("r-map alt", "Ticket or booking ↗", own));
-  if (btns.childElementCount) inner.append(btns);
+  // Opens the stop sheet on this stop (js/views/stopsheet.js).
+  const edit = el("button", "r-edit", "Edit");
+  edit.type = "button";
+  btns.append(edit);
+  inner.append(btns);
   wrap.append(inner);
   return wrap;
 }
@@ -263,6 +270,11 @@ export function ticketEl(model) {
   tk.append(band(h, number), head, perf, rows);
   // A stay typed into the Sheet by hand with no id cannot be opened: no row.
   const stay = model.stay;
+  // ＋ Add a stop: after the day's stops, before the night's stay.
+  const add = el("button", "tk-add", "＋ Add a stop");
+  add.type = "button";
+  add.dataset.date = date;
+  tk.append(add);
   if (stay && typeof stay.id === "string" && stay.id) tk.append(stayRow(stay));
   tk.append(foot);
   return tk;

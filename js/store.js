@@ -15,7 +15,8 @@
 // - Adds of expenses are kept in mat.queue from the moment they are made
 //   until the backend has them, and resent on the next contact. A stamp whose
 //   reply never came is kept too (in memory only: a reload fetches the truth)
-//   and resent with the same id on the next contact. Any other write that
+//   and resent with the same id on the next contact. (A stop add is not
+//   queued: stop writes need a connection.) Any other write that
 //   gets no reply is rolled back, said to be unconfirmed, and the next contact
 //   reloads, so the screen shows whatever the backend holds. Only a write the
 //   phone knows never left (it said it had no network) is said not saved.
@@ -42,10 +43,19 @@ const UNCONFIRMED = "Couldn’t confirm that. Checking…";
 const STALE = "That was changed again since. Undo the newer change first.";
 
 const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl"];
-const LIST = { expense: "expenses", payment: "payments", person: "people" };
-const KEY_FIELD = { expense: "id", payment: "id", person: "name" };
-const FLAG = { expense: "deleted", payment: "removed" };
+// Every kind of item the store keeps, the field it is found by and the flag
+// that marks it gone. Stays and day headers only ever change here through an
+// undo from History (their writes come in later tasks).
+const LIST = { expense: "expenses", payment: "payments", person: "people", stop: "stops", stay: "stays", day: "days" };
+const KEY_FIELD = { expense: "id", payment: "id", person: "name", stop: "id", stay: "id", day: "date" };
+const FLAG = { expense: "deleted", payment: "removed", stop: "deleted", stay: "deleted" };
+// Adds kept in mat.queue and resent with the same id until the backend has
+// them. A stop add is not one of them: stop writes need a connection, so
+// with no reply it is rolled back like any other write (and never resent).
 const ADD_API = { expense: "addExpense", payment: "addPayment" };
+
+// A stop as the backend gives it back, before the fields are filled in.
+const STOP_BLANK = { date: "", time: "", title: "", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "" };
 
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const defaultWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -166,7 +176,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   function derive() {
     if (base) for (const k of DATA_KEYS) state[k] = base[k];
     const lists = {};
-    for (const kind of Object.keys(LIST)) lists[kind] = base ? base[LIST[kind]].slice() : [];
+    // A cache kept before the plan existed has no stops, stays or days.
+    for (const kind of Object.keys(LIST)) lists[kind] = base && Array.isArray(base[LIST[kind]]) ? base[LIST[kind]].slice() : [];
     // Rows from the Sheet the money maths cannot read (a hand edit with a
     // name the app does not know, say) are kept out of it and listed.
     const names = lists.person.map((x) => x.name);
@@ -194,9 +205,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       if (i >= 0) list[i] = shown;
       else list.push(shown);
     }
-    state.expenses = lists.expense;
-    state.payments = lists.payment;
-    state.people = lists.person;
+    for (const kind of Object.keys(LIST)) state[LIST[kind]] = lists[kind];
     state.me = myName && state.people.some((p) => p.name === myName) ? myName : null;
   }
 
@@ -299,7 +308,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   function putBase(kind, item) {
     if (!base) return;
-    const list = base[LIST[kind]].slice();
+    const list = Array.isArray(base[LIST[kind]]) ? base[LIST[kind]].slice() : [];
     const field = KEY_FIELD[kind];
     const i = list.findIndex((x) => x[field] === item[field]);
     if (i >= 0) list[i] = item;
@@ -577,6 +586,19 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return begin(addOp(expense, { addedBy: myName }));
   }
 
+  // A new stop, shown at once and sent as addStop. Not queued: with no
+  // signal, or no reply, it is rolled back like an edit (see runWrite).
+  function addStop(draft) {
+    const stop = { id: newId(), ...copy(draft) };
+    const after = { ...STOP_BLANK, ...copy(stop), deleted: false };
+    return begin({
+      token: newId(), kind: "stop", id: stop.id, action: "add", api: "addStop",
+      args: { stop: copy(stop) }, before: null, after,
+      view: (cur) => ({ ...(cur || {}), ...after }),
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: myName,
+    });
+  }
+
   function addPayment({ from, to, cad }) {
     const rnd = new Uint32Array(2);
     globalThis.crypto.getRandomValues(rnd);
@@ -771,11 +793,15 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       unsureUndos.push(op);
       return;
     }
-    const item = base ? base[LIST[op.kind]].find((x) => x.id === op.id) : null;
-    const landed = !!item && sameAs(item, op.patch);
-    if (item && !landed && sameAs(item, pick(op.before, op.patch))) {
+    const item = base ? (base[LIST[op.kind]] || []).find((x) => x[KEY_FIELD[op.kind]] === op.id) || null : null;
+    // A stop add (the only add that comes here: it is not resent like a
+    // queued one) has no patch: it landed when the backend has its id, which
+    // only this phone could have made.
+    const isNew = !op.before;
+    const landed = !!item && (isNew || sameAs(item, op.patch));
+    if (isNew ? !item : item && !landed && sameAs(item, pick(op.before, op.patch))) {
       // The change is not on the backend: there is nothing to undo.
-      done(item);
+      done(item || { ...op.after, [FLAG[op.kind]]: true });
       return;
     }
     let entries;
@@ -968,7 +994,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         changed();
         return false;
       }
-      const kind = r.data.expense ? "expense" : "payment";
+      // The kind the reply names: an expense, a payment, a stop, a stay or a day.
+      const kind = r.data.entry && LIST[r.data.entry.kind] ? r.data.entry.kind : Object.keys(LIST).find((k) => r.data[k]);
       const item = r.data[kind];
       confirm(kind, item);
       stepRev(r.rev);
@@ -977,7 +1004,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       const top = r.data.entry;
       const rest = state.history.entries.map((e) => {
         if (e.id === logId) return { ...e, undoneBy: r.data.logId, canUndo: false };
-        if (e.kind === kind && e.ref === item.id) return { ...e, canUndo: false };
+        if (e.kind === kind && e.ref === item[KEY_FIELD[kind]]) return { ...e, canUndo: false };
         return e;
       });
       state.history = { ...state.history, entries: top ? [top, ...rest] : rest };
@@ -1038,6 +1065,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     addPayment,
     removePayment: (id) => takeBackLive("payment", id) || change("payment", id, "unstamp", "removePayment", { removed: true }),
     restorePayment: (id) => change("payment", id, "restamp", "restorePayment", { removed: false }),
+    addStop,
+    updateStop: (id, patch) => change("stop", id, "edit", "updateStop", patch),
+    deleteStop: (id) => change("stop", id, "delete", "deleteStop", { deleted: true }),
+    restoreStop: (id) => change("stop", id, "restore", "restoreStop", { deleted: false }),
     retry, discard, unsaved: (id) => !!unsavedAdd(id), outbox, undo, undoEntry, loadHistory, historyFor,
   };
 }

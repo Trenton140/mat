@@ -1,7 +1,8 @@
 /* Days: the day counter, the squares and a rail of day tickets.
    Ported from the mockup; the day title (.tk-title), the neutral band, the
    one-name route (.tk-route.is-one), the empty day (.r-none), the fixed-time
-   mark (.r-fx), the leave-by line (.r-lv), the stay row (.tk-stay), the
+   mark (.r-fx), the leave-by line (.r-lv), Edit (.r-edit), ＋ Add a stop
+   (.tk-add), the stay row (.tk-stay), the
    hotel card (#stay) and the day stubs of the all-days list (#allDays) are
    drawn here in the ticket's own print. */
 
@@ -94,6 +95,14 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 /* A day with no stops: one line in plain print where the rows would be. */
 .r-none{padding:14px 0 12px calc(3.7em + 8px);font-size:15px;font-weight:700}
 .tk-foot{display:flex;justify-content:space-between;gap:8px;padding:9px 14px 12px;font-size:10.5px;font-weight:500;border-top:1px solid rgba(21,18,15,.17)}
+
+/* Edit on an open stop: outlined, like the stop's own link. */
+.r-edit{margin:9px 0 2px;border:1.5px solid var(--print);border-radius:3px;background:none;color:var(--print);font-size:13px;font-weight:700;padding:6.5px 13px}
+.r-edit:active{transform:scale(.97)}
+/* ＋ Add a stop: a blank line after the day's stops, in the stop's print. */
+.tk-add{display:block;width:calc(100% - 28px);min-height:44px;margin:0 14px;padding:10px 0 11px calc(3.7em + 8px);border:0;border-top:1px solid rgba(21,18,15,.17);
+  background:none;color:var(--print);text-align:left;font-size:15px;font-weight:900}
+.tk-add:active{background:rgba(21,18,15,.06)}
 
 /* Tonight's stay: the last line of the ticket, after the stops. A button that
    opens the hotel card; 宿泊 boxed like 指定, the name in the stop's print. */

@@ -79,3 +79,12 @@ test("dayShort is the register's day: weekday and date, or Before", () => {
   assert.equal(dayShort("2027-01-01"), "Fri 1");
   assert.equal(dayShort("pre"), "Before");
 });
+
+test("changeText for a stop", () => {
+  const sky = { title: "Shibuya Sky", date: "2026-12-12" };
+  assert.equal(changeText({ action: "add", kind: "stop", item: sky }), "Added Shibuya Sky.");
+  assert.equal(changeText({ action: "edit", kind: "stop", item: sky }), "Changed Shibuya Sky.");
+  assert.equal(changeText({ action: "delete", kind: "stop", item: sky }), "Removed Shibuya Sky.");
+  assert.equal(changeText({ action: "restore", kind: "stop", item: sky }), "Put back Shibuya Sky.");
+  assert.equal(changeText({ action: "undo", kind: "stop", item: sky }), "Undone.");
+});

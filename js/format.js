@@ -98,6 +98,15 @@ export function sentence(s) {
 // The undo bar's line for the store's lastChange.
 export function changeText(c) {
   const item = c.item || {};
+  if (c.kind === "stop") {
+    switch (c.action) {
+      case "add": return "Added " + item.title + ".";
+      case "edit": return "Changed " + item.title + ".";
+      case "delete": return "Removed " + item.title + ".";
+      case "restore": return "Put back " + item.title + ".";
+      default: return "Undone.";
+    }
+  }
   switch (c.action) {
     case "add": return "Rang up " + item.title + " " + typed(item) + ".";
     case "edit": return "Changed " + item.title + ".";

@@ -15,6 +15,7 @@ import { mountHistory } from "./views/history.js";
 import { mountYou } from "./views/you.js";
 import { mountStayCard } from "./views/staycard.js";
 import { mountAllDays } from "./views/alldays.js";
+import { mountStopSheet } from "./views/stopsheet.js";
 import { mountUndoBar } from "./views/ubar.js";
 import { mountNet } from "./views/net.js";
 
@@ -181,12 +182,14 @@ function start() {
   });
   // One sheet at a time: opening one closes the others.
   const history = mountHistory(phone, store);
-  // The two Days sheets: the hotel card and the list of every day.
+  // The Days sheets: the hotel card, the list of every day and the stop sheet.
   const stayCard = mountStayCard(phone, store);
   const allDays = mountAllDays(phone, store, { clock, onPick: (i) => days.goDay(i) });
+  const stopSheet = mountStopSheet(phone, store, { clock });
   const closeDaySheets = () => {
     stayCard.close(false);
     allDays.close(false);
+    stopSheet.close(false);
   };
   // A tab switch closes them (they belong to Days).
   document.getElementById("nav").addEventListener("click", (ev) => {
@@ -221,7 +224,7 @@ function start() {
     register.open(day);
   };
   // Opening a Days sheet closes the register, the line sheet, History,
-  // Settings and the other Days sheet.
+  // Settings and the other Days sheets.
   const closeForDays = () => {
     register.close();
     line.close(false);
@@ -239,6 +242,16 @@ function start() {
       closeForDays();
       allDays.open();
     },
+    onAddStop: (date) => {
+      closeForDays();
+      stopSheet.add(date);
+    },
+    onStop: (id) => {
+      closeForDays();
+      stopSheet.edit(id);
+    },
+    // A stop being added or changed is being looked at: the rail stays put.
+    held: () => stopSheet.isOpen(),
   });
   mountMoney(document.getElementById("vMoney"), store, {
     onRing: ring,

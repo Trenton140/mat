@@ -8,7 +8,10 @@
 // - clock: the trip's clock (js/clock.js). Every "now" here comes from
 //   clock.now(), never Date.now(), and is judged in the trip's time zone.
 // - onAllDays(): the counter was tapped. onStay(stayId): a ticket's stay row
-//   was tapped. onStop, onAddStop are for the stop parts of the ticket.
+//   was tapped. onAddStop(date): a ticket's ＋ Add a stop was tapped.
+//   onStop(stopId): an open stop's Edit was tapped.
+// - held(): true while a sheet over Days is in use (the stop sheet): coming
+//   back to the screen then does not move the rail (R32).
 // - goDay(index, smooth): bring that day's ticket into view. day(): the date
 //   of the ticket in view.
 // It opens on today (js/plan.js openDayIndex).
@@ -100,8 +103,7 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-// onStop and onAddStop are taken now and called once the ticket has those parts.
-export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {} } = {}) {
+export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, held = () => false } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
@@ -216,6 +218,17 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       onStay(stay.dataset.stay);
       return;
     }
+    const add = ev.target.closest(".tk-add");
+    if (add) {
+      onAddStop(add.dataset.date);
+      return;
+    }
+    const edit = ev.target.closest(".r-edit");
+    if (edit) {
+      const r = edit.closest(".r[data-id]");
+      if (r) onStop(r.dataset.id);
+      return;
+    }
     if (ev.target.closest("a, button")) return;
     toggle(ev.target.closest(".r[data-id]"));
   });
@@ -235,8 +248,10 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     const a = document.activeElement;
     if (!a || !rail.contains(a)) return null;
     const r = a.closest(".r[data-id]");
-    const pg = a.classList.contains("tk-stay") ? a.closest(".pg") : null;
-    return { node: a, id: r ? r.dataset.id : null, cls: a.className, stayOn: pg ? pg.dataset.date : null };
+    // A ticket's own buttons, found again by their day.
+    const own = ["tk-stay", "tk-add"].find((c) => a.classList.contains(c));
+    const pg = own ? a.closest(".pg") : null;
+    return { node: a, id: r ? r.dataset.id : null, cls: a.className, on: pg ? pg.dataset.date : null, own };
   }
   function restoreFocus(spot) {
     if (!spot || document.activeElement === spot.node) return;
@@ -245,7 +260,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       const r = rail.querySelector('.r[data-id="' + CSS.escape(spot.id) + '"]');
       target = r && ((spot.cls && r.getElementsByClassName(spot.cls.split(" ")[0])[0]) || r.querySelector(".r-b"));
     }
-    if (!target && spot.stayOn) target = rail.querySelector('.pg[data-date="' + CSS.escape(spot.stayOn) + '"] .tk-stay');
+    if (!target && spot.on) target = rail.querySelector('.pg[data-date="' + CSS.escape(spot.on) + '"] .' + spot.own);
     if (target) target.focus({ preventScroll: true });
   }
 
@@ -367,7 +382,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       tick();
       const back = leftOn;
       leftOn = null;
-      if (back && tripReady(s) && dates.length) {
+      // A sheet over Days still in use counts as being looked at.
+      if (back && tripReady(s) && dates.length && !held()) {
         const nowMs = clock.now();
         if (nowIn(tzOf(s), nowMs).date > back) goDay(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), nowMs));
       }

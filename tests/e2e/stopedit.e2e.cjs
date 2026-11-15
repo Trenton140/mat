@@ -1,0 +1,375 @@
+// Adding, changing and removing stops: the ＋ Add a stop row on each ticket,
+// the Edit button on an open stop, the stop sheet (#stop) they open, the undo
+// bar and History. The plan is tests/fixtures/plan.json over the seed; the
+// clock is 13:20 on Dec 12 in Japan, Day 3 (Shibuya Sky at 14:00 is next).
+
+const assert = require("node:assert/strict");
+const { WITH_PLAN, open, advance, until, text, expectText } = require("./helpers.cjs");
+
+const D12 = "2026-12-12";
+const SKY = "planstop1203";
+const DINNER = "planstop1204";
+
+async function ready(page, opts = {}) {
+  const backend = await open(page, { seed: WITH_PLAN, tab: "days", ...opts });
+  await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
+  return backend;
+}
+
+const tk = (date) => '#rail .pg[data-date="' + date + '"]';
+const row = (id) => '.r[data-id="' + id + '"]';
+const isOpen = (page, id) => page.evaluate((i) => {
+  const el = document.getElementById(i);
+  return !!el && el.classList.contains("is-open");
+}, id);
+// The sheet is open and has risen all the way (it slides up over 500 ms).
+const waitSheet = (page) =>
+  until(
+    () => page.evaluate(() => {
+      const s = document.getElementById("stop");
+      return !!s && s.classList.contains("is-open") && Math.abs(s.getBoundingClientRect().bottom - innerHeight) < 1;
+    }),
+    "the stop sheet opens",
+  );
+const waitSheetClosed = (page) => until(async () => !(await isOpen(page, "stop")), "the stop sheet closes");
+const idle = (page) => page.evaluate(() => globalThis.__matTest.store.idle());
+
+// The stop names on a ticket, without the こんど tag the next stop carries.
+const rowTitles = (page, date) => page.evaluate((sel) => [...document.querySelectorAll(sel + " .r[data-id] .r-n")].map((n) => n.lastChild.textContent), tk(date));
+const value = (page, sel) => page.evaluate((s) => document.querySelector(s).value, sel);
+const disabled = (page, sel) => page.evaluate((s) => document.querySelector(s).disabled, sel);
+
+async function openAdd(page, date = D12) {
+  await page.click(tk(date) + " .tk-add");
+  await waitSheet(page);
+}
+
+async function openEdit(page, id) {
+  const opened = await page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row(id));
+  if (!opened) await page.click(row(id) + " .r-b");
+  await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row(id)), "the stop opens");
+  await page.click(row(id) + " .r-edit");
+  await waitSheet(page);
+}
+
+async function addTower(page, more = {}) {
+  await openAdd(page);
+  await page.fill("#stWhat", "Tower Records");
+  await page.fill("#stTime", "16:00");
+  for (const [sel, v] of Object.entries(more)) await page.fill(sel, v);
+  await page.click("#stSave");
+  await waitSheetClosed(page);
+}
+
+// The app goes to the background (hidden true) or comes back.
+const setHidden = (page, hidden) => page.evaluate((h) => {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+  document.dispatchEvent(new Event("visibilitychange"));
+}, hidden);
+
+// History's rows, newest first.
+const tape = (page) => page.$$eval("#tape .tp-row", (rows) => rows.map((r) => ({
+  id: r.dataset.id,
+  sentence: r.querySelector(".tp-s").textContent,
+  undo: r.querySelector("button.tp-undo") !== null,
+})));
+async function openHistory(page) {
+  await page.click('#nav button[data-tab="money"]');
+  await page.click("#histBtn");
+  await until(async () => (await tape(page)).length > 0, "History shows its entries");
+}
+
+// "ok", or why the element is not on screen and tappable (as in small.e2e.cjs).
+function reach(page, selector, scroll = false) {
+  return page.evaluate(
+    ([sel, scroll]) => {
+      const el = document.querySelector(sel);
+      if (!el) return "missing";
+      if (scroll) el.scrollIntoView({ block: "center", inline: "nearest" });
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return "not drawn";
+      if (r.top < -0.5 || r.left < -0.5 || r.bottom > innerHeight + 0.5 || r.right > innerWidth + 0.5) {
+        return "off screen: top " + Math.round(r.top) + ", bottom " + Math.round(r.bottom) + " of " + innerHeight;
+      }
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (!hit || !(hit === el || el.contains(hit))) return "covered by " + (hit ? hit.tagName.toLowerCase() + (hit.id ? "#" + hit.id : "") + "." + hit.className : "nothing");
+      return "ok";
+    },
+    [selector, scroll],
+  );
+}
+
+module.exports = [
+  {
+    name: "add a stop",
+    async run({ page }) {
+      const backend = await ready(page);
+      await expectText(page, tk(D12) + " .tk-add", "＋ Add a stop");
+      const rows = backend.fake.tables.Stops.length;
+      await addTower(page);
+      await until(async () => (await rowTitles(page, D12)).includes("Tower Records"), "Tower Records is on the ticket");
+      assert.deepEqual(await rowTitles(page, D12), ["Meiji Shrine", "Lunch in Harajuku", "Shibuya Sky", "Tower Records", "Dinner", "Buy gloves"]);
+      await expectText(page, "#ubarT", "Added Tower Records.");
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.length, rows + 1);
+      const added = backend.fake.tables.Stops.at(-1);
+      assert.equal(added.date, D12);
+      assert.equal(added.title, "Tower Records");
+      assert.equal(added.time, "16:00");
+    },
+  },
+  {
+    name: "undo from the bar",
+    async run({ page }) {
+      const backend = await ready(page);
+      await addTower(page);
+      await idle(page);
+      await until(async () => (await rowTitles(page, D12)).includes("Tower Records"), "Tower Records is on the ticket");
+      await page.click("#ubarU");
+      await until(async () => !(await rowTitles(page, D12)).includes("Tower Records"), "the row is gone");
+      await expectText(page, "#ubarT", "Undone.");
+      await idle(page);
+      const added = backend.fake.tables.Stops.find((r) => r.title === "Tower Records");
+      assert.ok(added, "the Sheet row is still there");
+      assert.ok(added.deleted_at, "marked deleted: " + JSON.stringify(added));
+    },
+  },
+  {
+    name: "edit a stop",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openEdit(page, SKY);
+      assert.equal(await value(page, "#stWhat"), "Shibuya Sky");
+      assert.equal(await page.evaluate(() => document.getElementById("stFixed").checked), true, "the time can’t slip is on");
+      assert.equal(await text(page, "#stSave"), "Save");
+      assert.equal(await text(page, "#stDel"), "Remove");
+      await page.fill("#stTime", "15:00");
+      await page.fill("#stMin", "20");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await expectText(page, row(SKY) + " .r-t", "15:00");
+      await expectText(page, row(SKY) + " .r-lv", "Leave by 14:40, in 1 h 20 min.");
+      await expectText(page, "#ubarT", "Changed Shibuya Sky.");
+      await idle(page);
+      const saved = backend.fake.tables.Stops.find((r) => r.id === SKY);
+      assert.deepEqual([saved.time, Number(saved.travel_min), saved.title], ["15:00", 20, "Shibuya Sky"]);
+      assert.equal(backend.requests.filter((r) => r.action === "updateStop").length, 1);
+      assert.deepEqual(Object.keys(backend.requests.find((r) => r.action === "updateStop").args.patch).sort(), ["time", "travelMin"], "only what changed is sent");
+    },
+  },
+  {
+    name: "remove a stop, and bring it back from History",
+    async run({ page }) {
+      await ready(page);
+      await openEdit(page, DINNER);
+      await page.click("#stDel");
+      await waitSheetClosed(page);
+      await until(async () => !(await rowTitles(page, D12)).includes("Dinner"), "Dinner is gone");
+      await expectText(page, "#ubarT", "Removed Dinner.");
+      await idle(page);
+      await openHistory(page);
+      const top = (await tape(page))[0];
+      assert.equal(top.sentence, "Mo removed Dinner from Sat Dec 12");
+      assert.equal(top.undo, true);
+      await page.click('#tape .tp-row[data-id="' + top.id + '"] button.tp-undo');
+      await until(async () => (await tape(page)).some((r) => r.sentence.startsWith("Mo undid")), "the undo is on the tape");
+      await page.click("#histDone");
+      await page.click('#nav button[data-tab="days"]');
+      await until(async () => (await rowTitles(page, D12)).includes("Dinner"), "Dinner is back on the ticket");
+    },
+  },
+  {
+    name: "a stop added by Claude says so in History",
+    async run({ page }) {
+      const backend = await ready(page);
+      const env = await backend.handle({ key: "test-key", actor: "Mo", via: "claude", action: "addStop", args: { stop: { id: "claudestop01", date: D12, time: "16:30", title: "Tokyu Hands" } } });
+      assert.equal(env.ok, true, JSON.stringify(env));
+      await openHistory(page);
+      const top = (await tape(page))[0];
+      assert.ok(top.sentence.endsWith("(through Claude)"), top.sentence);
+      assert.ok(top.sentence.startsWith("Mo added Tokyu Hands"), top.sentence);
+    },
+  },
+  {
+    name: "no name, no save",
+    async run({ page }) {
+      await ready(page);
+      await openAdd(page);
+      assert.equal(await text(page, "#stSave"), "Add stop");
+      assert.equal(await page.evaluate(() => !!document.getElementById("stDel") && !document.getElementById("stDel").hidden), false, "no Remove when adding");
+      assert.equal(await disabled(page, "#stSave"), true);
+      await page.fill("#stWhat", "   ");
+      assert.equal(await disabled(page, "#stSave"), true);
+      await page.fill("#stWhat", "Tower Records");
+      assert.equal(await disabled(page, "#stSave"), false);
+      await page.fill("#stWhat", "");
+      assert.equal(await disabled(page, "#stSave"), true);
+      // The keyboard's Next moves on to the next field; nothing is saved.
+      await page.fill("#stWhat", "Tower Records");
+      await page.press("#stWhat", "Enter");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "stTime");
+      assert.equal(await isOpen(page, "stop"), true);
+    },
+  },
+  {
+    name: "no signal",
+    async run({ page }) {
+      const backend = await ready(page);
+      backend.failWith = "network";
+      await advance(page, backend, 20000);
+      await until(() => page.evaluate(() => globalThis.__matTest.store.state.online === false), "the app learns it is offline");
+      await openAdd(page);
+      await page.fill("#stWhat", "Tower Records");
+      assert.equal(await disabled(page, "#stSave"), true);
+      assert.ok((await text(page, "#stop")).includes("No signal. Stops need a connection."), await text(page, "#stop"));
+      // Signal back: Save comes on, and the words go.
+      backend.failWith = null;
+      await advance(page, backend, 20000);
+      await until(async () => !(await disabled(page, "#stSave")), "Save comes on with signal");
+      assert.equal((await text(page, "#stop")).includes("No signal."), false);
+    },
+  },
+  {
+    name: "a bad link is refused in the backend's words",
+    async run({ page }) {
+      const backend = await ready(page);
+      const rows = backend.fake.tables.Stops.length;
+      await addTower(page, { "#stLink": "javascript:alert(1)" });
+      await expectText(page, "#ubarT", "That link has to start with https://.");
+      await idle(page);
+      assert.equal((await rowTitles(page, D12)).includes("Tower Records"), false);
+      assert.equal(backend.fake.tables.Stops.length, rows);
+      assert.equal(await page.evaluate(() => [...document.querySelectorAll("#rail a")].some((a) => /^javascript:/i.test(a.getAttribute("href") || ""))), false);
+    },
+  },
+  {
+    name: "a sync does not wipe what you are typing",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openAdd(page);
+      await page.fill("#stWhat", "Half a na");
+      await page.focus("#stWhat");
+      const env = await backend.handle({ key: "test-key", actor: "Ajen", via: "app", action: "addStop", args: { stop: { id: "ajenstop0001", date: D12, time: "16:00", title: "Tower Records" } } });
+      assert.equal(env.ok, true, JSON.stringify(env));
+      await advance(page, backend, 20000);
+      await until(() => page.evaluate(() => !!document.querySelector('.r[data-id="ajenstop0001"]')), "Ajen’s stop is on the ticket");
+      assert.equal(await value(page, "#stWhat"), "Half a na");
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "stWhat", "the field keeps focus");
+      await expectText(page, "#dayCount", /^Day 3 of 11/);
+    },
+  },
+  {
+    name: "editing: another phone's change to the same stop does not wipe what you typed",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openEdit(page, SKY);
+      await page.fill("#stDetail", "Booked for 14:00, gate B");
+      const env = await backend.handle({ key: "test-key", actor: "Ajen", via: "app", action: "updateStop", args: { id: SKY, patch: { note: "Bring the QR code." } } });
+      assert.equal(env.ok, true, JSON.stringify(env));
+      await advance(page, backend, 20000);
+      await idle(page);
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await value(page, "#stDetail"), "Booked for 14:00, gate B");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await idle(page);
+      const saved = backend.fake.tables.Stops.find((r) => r.id === SKY);
+      assert.equal(saved.detail, "Booked for 14:00, gate B");
+      assert.equal(saved.note, "Bring the QR code.", "Ajen’s note is kept: only the changed field was sent");
+    },
+  },
+  {
+    name: "another phone sees it",
+    async run(ctx) {
+      const { page } = ctx;
+      const backend = await ready(page);
+      const b = await ctx.newPhone();
+      await ready(b, { backend, me: "Ajen" });
+      await addTower(page);
+      await idle(page);
+      await advance(b, backend, 20000);
+      await until(async () => (await rowTitles(b, D12)).includes("Tower Records"), "the other phone shows Tower Records");
+    },
+  },
+  {
+    name: "closing gives focus back, and one sheet at a time",
+    async run({ page }) {
+      await ready(page);
+      await openAdd(page);
+      assert.equal(await page.evaluate(() => document.getElementById("vDays").contains(document.activeElement)), false, "focus is in the sheet");
+      await page.click("#stDone");
+      await waitSheetClosed(page);
+      assert.equal(await page.evaluate((sel) => document.activeElement === document.querySelector(sel + " .tk-add"), tk(D12)), true, "focus back on ＋ Add a stop");
+      await openAdd(page);
+      await page.keyboard.press("Escape");
+      await waitSheetClosed(page);
+      // The hotel card closes the stop sheet, and the stop sheet the hotel card.
+      await page.click(tk(D12) + " .tk-stay");
+      await until(() => isOpen(page, "stay"), "the hotel card opens");
+      await page.click("#stayDone");
+      await until(async () => !(await isOpen(page, "stay")), "the hotel card closes");
+      await openAdd(page);
+      await page.evaluate(() => document.getElementById("dayCount").click());
+      await until(() => isOpen(page, "allDays"), "the all-days list opens");
+      assert.equal(await isOpen(page, "stop"), false, "the stop sheet closed for it");
+    },
+  },
+  {
+    name: "the add row and Edit are kept as the minute moves on",
+    async run({ page }) {
+      const backend = await ready(page);
+      await page.evaluate(([t, s]) => {
+        document.querySelector(t + " .tk-add").__kept = 1;
+        document.querySelector(s).__kept = 1;
+        document.querySelector(s + " .r-edit").__kept = 1;
+      }, [tk(D12), row(SKY)]);
+      await advance(page, backend, 60000);
+      await until(async () => (await text(page, row(SKY) + " .r-lv")) === "Leave by 13:30, in 9 min.", "the line moves on");
+      const kept = await page.evaluate(([t, s]) => ({
+        add: document.querySelectorAll(t + " .tk-add").length === 1 && document.querySelector(t + " .tk-add").__kept === 1,
+        row: document.querySelector(s).__kept === 1,
+        edit: document.querySelectorAll(s + " .r-edit").length === 1 && document.querySelector(s + " .r-edit").__kept === 1,
+      }), [tk(D12), row(SKY)]);
+      assert.deepEqual(kept, { add: true, row: true, edit: true });
+      assert.equal(await page.evaluate(() => document.querySelectorAll("#rail .tk-add").length), 11, "one add row per ticket");
+    },
+  },
+  {
+    name: "back after a night away with the stop sheet open: the rail and the sheet stay (R32)",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: Date.parse("2026-12-12T23:40:00+09:00") });
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?today$/);
+      await openAdd(page);
+      await page.fill("#stWhat", "Late ramen");
+      await setHidden(page, true);
+      await advance(page, backend, 50 * 60000);
+      await setHidden(page, false);
+      await advance(page, backend, 1000);
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?used$/);
+      assert.equal(await page.evaluate(() => document.querySelector("#pager .sq.is-cur").dataset.i), "2", "Dec 12 is still the day in view");
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await value(page, "#stWhat"), "Late ramen");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.at(-1).date, D12, "added to the day it was opened on");
+    },
+  },
+  {
+    name: "reachable in a Safari tab",
+    viewport: { width: 390, height: 664 },
+    async run({ page }) {
+      await ready(page);
+      await openEdit(page, SKY);
+      let got;
+      try {
+        await until(async () => (got = await reach(page, "#stSave", true)) === "ok", "");
+      } catch {
+        throw new Error("#stSave is not on screen and tappable at 390x664: " + got);
+      }
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+    },
+  },
+];

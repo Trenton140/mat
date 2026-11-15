@@ -1894,3 +1894,269 @@ test("an undo from History whose reply is lost says it is checking and reloads o
   await p.store.idle();
   assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200, "the backend's undone line is shown");
 });
+
+// ---------- stops (Plan 2, Task 7) ----------
+
+const SKY = { id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky", time: "14:00" };
+const stopOf = (store, id) => byId(store.state.stops, id);
+const stopRows = (fake) => fake.tables.Stops.length;
+
+test("a stop: added, shown at once, confirmed, undone", async () => {
+  const { store, fake } = phone({ seed: {} });
+  await store.boot();
+  const token = store.addStop({ date: "2026-12-12", title: "Shibuya Sky", time: "14:00" });
+  assert.equal(store.state.stops.at(-1).pending, true);
+  await store.idle();
+  assert.equal(store.state.stops.at(-1).pending, undefined);
+  assert.equal(fake.tables.Stops.length, 1);
+  assert.deepEqual([store.state.lastChange.kind, store.state.lastChange.action], ["stop", "add"]);
+  await store.undo(token);
+  await store.idle();
+  assert.equal(store.state.stops.at(-1).deleted, true);
+  assert.equal(fake.tables.Stops.length, 1);
+});
+
+test("a stop edit the phone knows never left is rolled back and said not saved; nothing is queued", async () => {
+  const { store, net, storage } = phone({ seed: { stops: [SKY] } });
+  await store.boot();
+  net.knownOffline = true;
+  store.updateStop(SKY.id, { time: "15:30" });
+  await store.idle();
+  assert.equal(store.state.stops[0].time, "14:00");
+  assert.equal(store.state.notice, "No signal. That wasn’t saved.");
+  assert.deepEqual(JSON.parse(storage.getItem("mat.queue") || "[]"), []);
+});
+
+test("a stop add whose reply is lost is not sent twice, and the next contact shows the truth", async () => {
+  const { store, fake, net } = phone({ seed: {} });
+  await store.boot();
+  net.lose.add("addStop"); // the backend saves it; the reply never arrives
+  store.addStop({ date: "2026-12-12", title: "Shibuya Sky" });
+  await store.idle();
+  assert.equal(store.state.notice, "Couldn’t confirm that. Checking…");
+  net.lose.clear();
+  await store.checkRev();
+  await store.idle();
+  assert.equal(store.state.stops.filter((s) => s.title === "Shibuya Sky" && !s.deleted).length, 1);
+  assert.equal(fake.tables.Stops.length, 1);
+  assert.equal(net.sent.filter((b) => b.action === "addStop").length, 1);
+});
+
+test("undo from History works on a stop and a day header", async () => {
+  const { store, fake } = phone({ seed: { stops: [SKY] } });
+  await store.boot();
+  await backend(fake, "updateStop", { id: SKY.id, patch: { time: "15:30" } });
+  await backend(fake, "setDay", { date: "2026-12-12", patch: { city: "Tokyo" } });
+  await store.refresh();
+  await store.loadHistory();
+  const [day, stop] = store.state.history.entries;
+  assert.equal(await store.undoEntry(stop.id), true);
+  assert.equal(store.state.stops[0].time, "14:00");
+  assert.equal(await store.undoEntry(day.id), true);
+  assert.equal(store.state.days.find((d) => d.date === "2026-12-12").city, "");
+});
+
+test("a stop add whose reply is lost, then Undo: the backend ends with it removed, sent once, nothing queued", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.lose.add("addStop");
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" });
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(p.store.state.notice, UNCONFIRMED);
+  assert.equal(stopOf(p.store, id), undefined, "rolled back meanwhile");
+  assert.deepEqual(queueOf(p.storage), [], "a stop add is never kept in mat.queue");
+  p.net.lose.clear();
+  p.store.clearNotice();
+  await p.store.undo(t);
+  await p.store.idle();
+  assert.equal(stopRows(p.fake), 1);
+  assert.equal(byId((await backend(p.fake)).stops, id).deleted, true);
+  assert.equal(stopOf(p.store, id).deleted, true);
+  assert.equal(sent(p.fake, "addStop"), 1, "never sent twice");
+  assert.equal(sent(p.fake, "undo"), 1);
+  assert.deepEqual([p.store.state.lastChange.kind, p.store.state.lastChange.action], ["stop", "undo"]);
+  assert.equal(p.store.state.notice, null);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("a stop add whose reply is lost, then Undo with still no signal: it waits and finishes on the next contact", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.lose.add("addStop");
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" });
+  const id = idOf(p.store);
+  await p.store.idle();
+  p.net.lose.clear();
+  p.net.offline = true;
+  const before = p.store.state.lastChange.token;
+  await p.store.undo(t);
+  await p.store.idle();
+  assert.equal(p.store.state.lastChange.token, before, "no Undone. while nothing has happened");
+  assert.deepEqual(queueOf(p.storage), []);
+  p.net.offline = false;
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).stops, id).deleted, true);
+  assert.equal(stopOf(p.store, id).deleted, true);
+  assert.equal(sent(p.fake, "addStop"), 1);
+  assert.equal(p.store.state.lastChange.action, "undo");
+});
+
+test("a stop add that never reached the backend, then Undo: nothing is sent and it is gone", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.failing.add("addStop"); // dropped before the backend; the phone cannot know that
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" });
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(p.store.state.notice, UNCONFIRMED);
+  p.net.failing.clear();
+  p.store.clearNotice();
+  await p.store.undo(t);
+  await p.store.idle();
+  assert.equal(stopRows(p.fake), 0);
+  assert.equal(sent(p.fake, "undo"), 0);
+  assert.equal(stopOf(p.store, id), undefined);
+  assert.equal(p.store.state.lastChange.action, "undo");
+  assert.equal(p.store.state.notice, null);
+});
+
+test("Undo of a stop add while it is still on its way: one stop on the backend, removed", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  const release = p.net.hold("addStop");
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" });
+  const id = idOf(p.store);
+  const undone = p.store.undo(t);
+  assert.equal(stopOf(p.store, id).deleted, true, "shown gone at once");
+  release();
+  await undone;
+  await p.store.idle();
+  assert.equal(stopRows(p.fake), 1);
+  assert.equal(byId((await backend(p.fake)).stops, id).deleted, true);
+  assert.equal(stopOf(p.store, id).deleted, true);
+  assert.equal(sent(p.fake, "addStop"), 1);
+});
+
+test("a stop edit whose reply is lost: shown after contact, and Undo takes it back", async () => {
+  const p = phone({ seed: { stops: [SKY] } });
+  await p.store.boot();
+  p.net.lose.add("updateStop");
+  const t = p.store.updateStop(SKY.id, { time: "15:30", travelMin: 20 });
+  await p.store.idle();
+  assert.equal(p.store.state.notice, UNCONFIRMED);
+  assert.equal(stopOf(p.store, SKY.id).time, "14:00", "rolled back meanwhile");
+  assert.deepEqual(queueOf(p.storage), []);
+  p.net.lose.clear();
+  p.store.clearNotice();
+  await p.store.undo(t);
+  await p.store.idle();
+  const server = byId((await backend(p.fake)).stops, SKY.id);
+  assert.deepEqual([server.time, server.travelMin], ["14:00", 0]);
+  assert.deepEqual([stopOf(p.store, SKY.id).time, stopOf(p.store, SKY.id).travelMin], ["14:00", 0]);
+  assert.equal(sent(p.fake, "updateStop"), 1);
+  assert.equal(p.store.state.lastChange.action, "undo");
+  assert.equal(p.store.state.notice, null);
+});
+
+test("a stop removed, undone from the bar, removed again and put back", async () => {
+  const p = phone({ seed: { stops: [SKY] } });
+  await p.store.boot();
+  const t = p.store.deleteStop(SKY.id);
+  assert.equal(stopOf(p.store, SKY.id).deleted, true, "shown removed at once");
+  await p.store.idle();
+  assert.deepEqual([p.store.state.lastChange.kind, p.store.state.lastChange.action], ["stop", "delete"]);
+  assert.equal(byId((await backend(p.fake)).stops, SKY.id).deleted, true);
+  await p.store.undo(t);
+  await p.store.idle();
+  assert.equal(byId((await backend(p.fake)).stops, SKY.id).deleted, false);
+  assert.equal(stopOf(p.store, SKY.id).deleted, false);
+  p.store.deleteStop(SKY.id);
+  await p.store.idle();
+  p.store.restoreStop(SKY.id);
+  assert.equal(stopOf(p.store, SKY.id).deleted, false, "shown back at once");
+  await p.store.idle();
+  assert.deepEqual([p.store.state.lastChange.kind, p.store.state.lastChange.action], ["stop", "restore"]);
+  assert.equal(byId((await backend(p.fake)).stops, SKY.id).deleted, false);
+  assert.equal(stopRows(p.fake), 1);
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("a stop removed and put back from History", async () => {
+  const p = phone({ seed: { stops: [SKY] } });
+  await p.store.boot();
+  p.store.deleteStop(SKY.id);
+  await p.store.idle();
+  await p.store.loadHistory();
+  const top = p.store.state.history.entries[0];
+  assert.deepEqual([top.kind, top.action, top.canUndo], ["stop", "delete", true]);
+  assert.equal(await p.store.undoEntry(top.id), true);
+  assert.equal(stopOf(p.store, SKY.id).deleted, false);
+  assert.deepEqual([p.store.state.lastChange.kind, p.store.state.lastChange.action], ["stop", "undo"]);
+  assert.equal(byId((await backend(p.fake)).stops, SKY.id).deleted, false);
+});
+
+test("stop writes while the phone knows it has no signal: nothing sent, nothing queued, said not saved", async () => {
+  const p = phone({ seed: { stops: [SKY] } });
+  await p.store.boot();
+  p.net.knownOffline = true;
+  const before = p.net.sent.length;
+  p.store.addStop({ date: "2026-12-12", title: "Tower Records" });
+  await p.store.idle();
+  assert.equal(p.store.state.notice, NOT_SAVED);
+  assert.equal(p.store.state.stops.some((s) => s.title === "Tower Records"), false);
+  p.store.clearNotice();
+  p.store.deleteStop(SKY.id);
+  await p.store.idle();
+  assert.equal(p.store.state.notice, NOT_SAVED);
+  assert.equal(stopOf(p.store, SKY.id).deleted, false);
+  assert.equal(p.net.sent.length, before, "nothing left the phone");
+  assert.deepEqual(queueOf(p.storage), []);
+  assert.deepEqual(p.store.outbox(), { unsent: 0, waiting: 0 });
+  // signal back: nothing is sent on contact either
+  p.net.knownOffline = false;
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(sent(p.fake, "addStop") + sent(p.fake, "deleteStop"), 0);
+  assert.equal(stopRows(p.fake), 1);
+});
+
+test("a stop in a saved queue from before a reload is never sent; the expense beside it still is", async () => {
+  const storage = memStorage({ "mat.key": KEY, "mat.me": "Mo" });
+  const stop = { id: "stopBBBB0001", date: "2026-12-12", title: "Tower Records", time: "", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "" };
+  const expense = { id: "expQQQQ0001", ...draft() };
+  storage.setItem("mat.queue", JSON.stringify([
+    { stop, sent: true },
+    { undo: true, kind: "stop", args: { stop }, logId: 1, actor: "Mo" },
+    { expense, addedAt: "2026-12-11T03:00:00.000Z", rate: 111, addedBy: "Mo", failed: false, sent: false },
+  ]));
+  const p = phone({ seed: { stops: [SKY] }, storage });
+  await p.store.boot();
+  await p.store.idle();
+  assert.equal(sent(p.fake, "addStop"), 0);
+  assert.equal(sent(p.fake, "undo"), 0);
+  assert.equal(sent(p.fake, "addExpense"), 1);
+  assert.deepEqual(p.store.state.stops.map((s) => [s.id, s.deleted]), [[SKY.id, false]]);
+  assert.equal(stopOf(p.store, SKY.id).deleted, false, "the logged add the queue named is not undone");
+  assert.deepEqual(queueOf(p.storage), []);
+});
+
+test("a cache from before the plan existed still paints, and the load fills in the stops", async () => {
+  const storage = memStorage({ "mat.key": KEY, "mat.me": "Mo" });
+  const p0 = phone({ seed: { stops: [SKY] } });
+  const data = (await backend(p0.fake)).valueOf();
+  const old = { ...data };
+  delete old.stops;
+  delete old.stays;
+  delete old.days;
+  storage.setItem("mat.cache", JSON.stringify({ data: old, rev: 0, loadedAt: 1 }));
+  const p = phone({ fake: p0.fake, storage });
+  const hold = p.net.hold("load");
+  const booting = p.store.boot();
+  await until(() => p.store.state.status === "ready");
+  assert.deepEqual(p.store.state.stops, []);
+  hold();
+  await booting;
+  assert.equal(stopOf(p.store, SKY.id).title, "Shibuya Sky");
+});
