@@ -2,7 +2,8 @@
 // number pad, quick chips, payer and split seals, a day stepper, and the
 // uneven split panel (js/views/uneven.js).
 //
-// mountRegister(root, store, { now, storage }) -> { open(day?), edit(id), close(), isOpen() }
+// mountRegister(root, store, { now, storage, onClose }) -> { open(day?), edit(id), close(), isOpen() }
+// onClose(): called each time the register closes.
 // root is the phone; the register sits at its bottom over the Money view.
 // storage keeps mat.cur, the currency last used on this phone.
 
@@ -93,7 +94,7 @@ function splitDiffers(a, b) {
 }
 const calm = () => globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-export function mountRegister(root, store, { now = () => Date.now(), storage = defaultStorage() } = {}) {
+export function mountRegister(root, store, { now = () => Date.now(), storage = defaultStorage(), onClose = () => {} } = {}) {
   const reg = el("div", "reg");
   reg.id = "reg";
   reg.setAttribute("role", "dialog");
@@ -371,6 +372,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     const v = view();
     if (v) v.style.paddingBottom = "";
     if (reg.contains(document.activeElement)) document.activeElement.blur();
+    onClose();
   }
 
   // ---- taps ----

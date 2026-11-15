@@ -1,19 +1,22 @@
 /* Days: the day counter, the squares and a rail of day tickets.
    Ported from the mockup; the day title (.tk-title), the neutral band, the
-   one-name route (.tk-route.is-one) and the empty day (.r-none) are drawn
-   here in the ticket's own print. */
+   one-name route (.tk-route.is-one), the empty day (.r-none), the fixed-time
+   mark (.r-fx) and the leave-by line (.r-lv) are drawn here in the ticket's
+   own print. */
 
 .bar{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:16px var(--gr) 6px var(--gl)}
 .bar-t{font-weight:900;font-size:19px}
-.bar-t i{color:var(--dim);font-weight:700;font-size:14px;margin-left:6px}
+.bar-t i{color:var(--dim);font-weight:700;font-size:14px}
 /* The counter is a button (it lists the days); it still reads as the heading. */
-button.bar-t{border:0;background:none;padding:0;min-height:36px;color:var(--text);text-align:left;white-space:nowrap}
-.pager{display:flex}
+/* "Day 1 of 11" never breaks; the word after it may go under it on a narrow phone. */
+button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;color:var(--text);text-align:left}
+.bar-t span,.bar-t i{white-space:nowrap}
+.pager{display:flex;flex:none}
 .sq{width:17px;height:30px;border:0;background:none;padding:0;display:grid;place-items:center}
 .sq::before{content:"";width:10px;height:10px;border:1.5px solid var(--dim);border-radius:1px;transition:transform .2s ease-out,background .2s,border-color .2s}
 .sq.is-done::before{background:var(--dim)}
 .sq.is-cur::before{background:var(--text);border-color:var(--text);transform:scale(1.35)}
-@media (max-width:350px){ .sq{width:14px} .sq::before{width:9px;height:9px} }
+@media (max-width:350px){ .sq{width:12.5px} .sq::before{width:9px;height:9px} }
 
 .rail{display:flex;gap:10px;align-items:flex-start;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;
   padding:8px 22px 30px;scrollbar-width:none}
@@ -51,17 +54,42 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;color:var(--text
 .arr{width:40px;height:20px;flex:none;margin-bottom:22px;fill:var(--print)}
 /* The day's own name, printed under the route like a service name. */
 .tk-title{margin-top:12px;padding-top:9px;border-top:1px solid rgba(21,18,15,.17);font-size:15px;font-weight:900;line-height:1.25}
-.tk-date{display:flex;justify-content:space-between;gap:8px;margin-top:13px;font-size:12.5px}
+.tk-date{display:flex;flex-wrap:wrap;justify-content:space-between;gap:2px 8px;margin-top:13px;font-size:12.5px}
 .tk-date i{font-weight:500;margin-left:4px}
-.tk-perf{margin:0 9px;border-top:2px dashed rgba(21,18,15,.38)}
+.tk-perf{position:relative;margin:0 9px;border-top:2px dashed rgba(21,18,15,.38)}
 .rows{padding:3px 14px 2px}
-.r{display:grid;grid-template-columns:48px minmax(0,1fr) auto;column-gap:8px;padding:10px 0;border-bottom:1px solid rgba(21,18,15,.17)}
+/* A used day: the gate stamp over the header, a hole punched in the perforation. */
+.insp{position:absolute;left:50%;margin-left:-39px;top:34px;width:78px;height:78px;transform:rotate(var(--rot));mix-blend-mode:multiply;pointer-events:none}
+.punch{position:absolute;right:22px;top:-6px;width:10px;height:10px;border-radius:50%;background:var(--ground);box-shadow:inset 0 1px 2px #000}
+.r{display:grid;grid-template-columns:48px minmax(0,1fr) auto;column-gap:8px;padding:10px 0;border-bottom:1px solid rgba(21,18,15,.17);cursor:pointer}
 .r:last-child{border-bottom:0}
 .r-t{font-size:15px;font-weight:900;padding-top:1px;font-variant-numeric:tabular-nums}
 .r-n{font-size:15.5px;font-weight:900;line-height:1.25;overflow-wrap:anywhere}
 .r-s{font-size:12.5px;font-weight:500;margin-top:1px;overflow-wrap:anywhere}
 .r-j{font-size:13px;white-space:nowrap;padding-top:2px}
 .r-j:empty{display:none}
+.r-b{min-width:0;border-radius:2px}
+.r.is-done{opacity:.4}
+.tag{display:inline-block;background:var(--print);color:var(--stock);font-size:11px;padding:1px 6px 2px;border-radius:2px;margin-right:6px;vertical-align:2px}
+/* Leave by: the line a person reads first on the next stop. */
+.r-lv{font-weight:900}
+/* 指定: a time that cannot slip, boxed under the time like a reserved seat. */
+.r-c{min-width:0}
+.r-fx{margin-top:5px;line-height:1.1}
+.r-fx b{display:inline-block;border:1.5px solid var(--print);border-radius:2px;padding:0 3px 1px;font-size:11.5px;font-weight:900}
+.r-fx i{display:block;margin-top:3px;font-size:10.5px;font-weight:700}
+/* The open stop: a 200 ms height change, nothing else moves. */
+.r-more{grid-column:2 / -1;display:grid;grid-template-rows:0fr;transition:grid-template-rows .2s ease-out}
+.r.is-open .r-more{grid-template-rows:1fr}
+.r-more>div{overflow:hidden;min-height:0}
+@media (prefers-reduced-motion: reduce){ .r-more{transition:none} }
+.r-go{font-size:13.5px;font-weight:500;padding-top:8px;overflow-wrap:anywhere}
+.r-map{display:inline-block;margin:9px 0 2px;background:var(--print);color:var(--stock);font-size:13px;padding:8px 13px;border-radius:3px;text-decoration:none}
+.r-map:active{transform:scale(.97)}
+.r-map.alt{background:none;color:var(--print);border:1.5px solid var(--print);font-weight:700;padding:6.5px 13px}
+.r-btns{display:flex;flex-wrap:wrap;gap:0 8px}
+.r-ph{display:block;width:100%;height:158px;object-fit:cover;border-radius:3px;margin-top:10px;background:var(--stock-mark)}
+.r-note{font-size:13.5px;font-weight:500;padding-top:5px;overflow-wrap:anywhere}
 /* A day with no stops: one line in plain print where the rows would be. */
 .r-none{padding:14px 0 12px 56px;font-size:15px;font-weight:700}
 .tk-foot{display:flex;justify-content:space-between;gap:8px;padding:9px 14px 12px;font-size:10.5px;font-weight:500;border-top:1px solid rgba(21,18,15,.17)}

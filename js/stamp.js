@@ -74,3 +74,30 @@ export function paidStampSVG(seed) {
     '<text x="' + f1(tx) + '" y="70" text-anchor="middle" font-family="Zen Antique, Hiragino Mincho ProN, Yu Mincho, serif" font-size="58">済</text>' +
     "</g></svg>";
 }
+
+const ESC = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const esc = (v) => String(v).replace(/[&<>"']/g, (c) => ESC[c]);
+
+// The round red gate stamp on a used day's ticket: the place, the date and
+// the issuer's mark between two rules, speckled where the ink did not take.
+// The same seed draws the same stamp on every phone. place, date and mark are
+// escaped, so the string may be set with innerHTML.
+export function gateStampSVG(seed, place, date, mark) {
+  const n = Number.parseInt(seed, 10);
+  const id = n >= 1 && n <= 0xffffffff ? n : 1;
+  const r = rng(id);
+  let speckle = "";
+  for (let i = 0; i < 60; i++) {
+    speckle += '<circle cx="' + f1(r() * 100) + '" cy="' + f1(r() * 100) + '" r="' + f1(0.5 + r() * 2.2) + '" fill="#000" opacity="' + f2(0.45 + r() * 0.55) + '"/>';
+  }
+  const p = String(place);
+  const size = [...p].length > 3 ? 13 : 17;
+  return '<svg viewBox="0 0 100 100" width="100%" height="100%" aria-hidden="true" focusable="false"><defs>' +
+    '<mask id="gm' + id + '" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="#fff"/>' + speckle + "</mask></defs>" +
+    '<g mask="url(#gm' + id + ')" fill="' + INK + '" font-family="Zen Kaku Gothic New, Hiragino Sans, sans-serif" font-weight="900" text-anchor="middle">' +
+    '<circle cx="50" cy="50" r="45" fill="none" stroke="' + INK + '" stroke-width="3.5"/>' +
+    '<path d="M9 36h82M9 64h82" stroke="' + INK + '" stroke-width="2.5"/>' +
+    '<text x="50" y="29" font-size="' + size + '">' + esc(p) + '</text>' +
+    '<text x="50" y="58" font-size="21">' + esc(date) + '</text>' +
+    '<text x="50" y="82" font-size="13">' + esc(mark) + "</text></g></svg>";
+}

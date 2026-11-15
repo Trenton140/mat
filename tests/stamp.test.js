@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rng, paidStampSVG } from "../js/stamp.js";
+import { rng, paidStampSVG, gateStampSVG } from "../js/stamp.js";
 import { remindText, sentCents } from "../js/views/slip.js";
 
 test("a stamp is drawn from its seed: the same seed, the same stamp", () => {
@@ -24,6 +24,22 @@ test("the stamp SVG is built only from numbers and constants", () => {
   const svg = paidStampSVG(123456);
   assert.equal(/[<>]\s*script/i.test(svg), false);
   assert.equal(paidStampSVG("1<x>"), paidStampSVG(1), "a seed is read as a number");
+});
+
+test("the gate stamp prints its place, date and mark, the same from the same seed", () => {
+  const svg = gateStampSVG(1211, "渋谷", "12.11", "MAT");
+  for (const s of ["渋谷", "12.11", "MAT"]) assert.ok(svg.includes(s), s);
+  assert.ok(svg.startsWith("<svg"));
+  assert.equal(gateStampSVG(1211, "渋谷", "12.11", "MAT"), svg);
+  assert.notEqual(gateStampSVG(1212, "渋谷", "12.11", "MAT"), svg);
+});
+
+test("the gate stamp escapes what it prints", () => {
+  const svg = gateStampSVG(1, "<b>", "x", "y");
+  assert.ok(svg.includes("&lt;b&gt;"));
+  assert.equal(svg.includes("<b>"), false);
+  const quoted = gateStampSVG(1, "a", '"&', "'");
+  assert.ok(quoted.includes("&quot;&amp;") && quoted.includes("&#39;"));
 });
 
 test("Remind says who, how much and where to send it", () => {

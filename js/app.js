@@ -122,7 +122,7 @@ function mountTabs(store, storage) {
   function opening(trip) {
     if (!keptTab) return "days";
     if (trip && trip.start) {
-      const today = tripDay(trip, Date.now());
+      const today = tripDay({ ...trip, tz: trip.tz || "Asia/Tokyo" }, Date.now());
       if (today !== "pre" && today !== "post" && keptDay !== today) return "days";
     }
     return keptTab;
@@ -165,7 +165,21 @@ function start() {
   const tabs = mountTabs(store, raw);
 
   const phone = document.getElementById("phone");
-  const register = mountRegister(phone, store, { storage: raw });
+  // Ring up on Days shows Money while the register is open, so each line is
+  // seen printing onto the receipt, and goes back to Days when it closes.
+  // Borrowed: mat.tab is left as it was.
+  let borrowed = false;
+  const register = mountRegister(phone, store, {
+    storage: raw,
+    onClose: () => {
+      if (!borrowed) return;
+      borrowed = false;
+      tabs.showTab("days", false);
+    },
+  });
+  document.getElementById("nav").addEventListener("click", (ev) => {
+    if (ev.target.closest("button[data-tab]")) borrowed = false;
+  });
   // One sheet at a time: opening one closes the others.
   const history = mountHistory(phone, store);
   const you = mountYou(phone, store, {
@@ -187,6 +201,10 @@ function start() {
     line.close(false);
     history.close(false);
     you.close(false);
+    if (tabs.tab() === "days") {
+      borrowed = true;
+      tabs.showTab("money", false);
+    }
     register.open(day);
   };
   mountDays(document.getElementById("vDays"), store, { clock });

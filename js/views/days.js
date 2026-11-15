@@ -1,6 +1,7 @@
 // The Days screen: a rail of day tickets (js/views/ticket.js), one per trip
 // day, swiped with the browser's own scroll snapping; a counter ("Day 3 of
-// 11") and a row of squares, one per day, that jump to a day.
+// 11", then "today", "used" or how long until that day) and a row of squares,
+// one per day, filled for used days, that jump to a day.
 //
 // mountDays(root, store, { clock, onStop, onAddStop, onStay, onAllDays })
 //   -> { goDay(index, smooth), day() }
@@ -10,12 +11,24 @@
 //   the stop and stay parts of the ticket.
 // - goDay(index, smooth): bring that day's ticket into view. day(): the date
 //   of the ticket in view.
-// It opens on today (js/plan.js openDayIndex). When the store changes the
-// tickets are redrawn in place and the day in view stays in view.
+// It opens on today (js/plan.js openDayIndex).
+//
+// Redrawing while someone is reading: the store changes on every sync and
+// the clock is asked again every 15 seconds while the screen is in use. Only
+// a ticket whose drawing changed is touched, and in it only the parts that
+// changed (a stop row that is the same is kept as it is), so the stop that
+// is open, the row that has focus, a height change under way and the gate
+// stamp all survive. The day in view stays in view.
+//
+// The open stop: today's next stop is open by default. Once a person opens
+// or closes a stop by hand, that choice holds (the next stop no longer opens
+// itself) until the day in view changes.
 
-import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, header, dayTotalYen } from "../plan.js";
+import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen } from "../plan.js";
 import { issuer, dayShort } from "../format.js";
 import { ticketEl } from "./ticket.js";
+
+const TICK_MS = 15000;
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -26,6 +39,48 @@ function el(tag, cls, text) {
 
 const list = (v) => (Array.isArray(v) ? v : []);
 const calm = () => typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// A row's markup as it was drawn (before it was opened or closed), to tell
+// whether a redrawn row is the same as the one on screen.
+const drawn = new WeakMap();
+
+// Puts the fresh rows into `rows` in order, keeping each old row that is
+// drawn the same. Only rows that changed or moved are touched.
+function patchRows(rows, fresh) {
+  const old = new Map();
+  for (const r of rows.children) if (r.dataset.id) old.set(r.dataset.id, r);
+  const want = [...fresh.children].map((r) => {
+    const keep = r.dataset.id ? old.get(r.dataset.id) : null;
+    return keep && drawn.get(keep) === drawn.get(r) ? keep : r;
+  });
+  want.forEach((node, i) => {
+    const at = rows.children[i];
+    if (at !== node) rows.insertBefore(node, at || null);
+  });
+  while (rows.children.length > want.length) rows.lastElementChild.remove();
+}
+
+// Brings the ticket on screen (`old`) in line with a freshly drawn one,
+// part by part. Returns the ticket now on screen.
+function patchTicket(old, fresh) {
+  const a = [...old.children];
+  const b = [...fresh.children];
+  const sameShape = a.length === b.length && a.every((n, i) => n.className === b[i].className && n.tagName === b[i].tagName);
+  if (!sameShape) {
+    old.replaceWith(fresh);
+    return fresh;
+  }
+  if (old.getAttribute("style") !== fresh.getAttribute("style")) {
+    const style = fresh.getAttribute("style");
+    if (style === null) old.removeAttribute("style");
+    else old.setAttribute("style", style);
+  }
+  a.forEach((n, i) => {
+    if (n.classList.contains("rows")) patchRows(n, b[i]);
+    else if (n.outerHTML !== b[i].outerHTML) n.replaceWith(b[i]);
+  });
+  return old;
+}
 
 // onStop, onAddStop and onStay are taken now and called once the ticket has
 // those parts.
@@ -42,8 +97,15 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
   root.replaceChildren(bar, rail);
 
   let dates = []; // the dates of the drawn tickets, in order
+  let states = []; // each one's dayState
+  let ahead = []; // before the trip: days until each one, else 0
+  const sigs = new Map(); // date -> what its ticket was drawn from
   let cur = -1; // the index of the day in view
   let opened = false; // has it been put on today yet
+  let seen = null; // { date, minutes } in the trip's zone when last drawn
+  let autoId = null; // today's next stop: open unless a person chose
+  let chosen = false; // a person has opened or closed a stop by hand
+  let openId = null; // the stop they left open, or null
 
   const step = () => {
     const pg = rail.firstElementChild;
@@ -53,11 +115,39 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
   };
   const clamp = (i) => Math.max(0, Math.min(dates.length - 1, i));
 
+  function applyOpen() {
+    const id = chosen ? openId : autoId;
+    for (const r of rail.querySelectorAll(".r[data-id]")) {
+      const on = r.dataset.id === id;
+      if (r.classList.contains("is-open") !== on) r.classList.toggle("is-open", on);
+      const b = r.querySelector(".r-b");
+      if (b) b.setAttribute("aria-expanded", String(on));
+      const more = r.querySelector(".r-more");
+      if (more) more.inert = !on;
+    }
+  }
+
+  // The day in view changed: a choice made by hand no longer holds.
+  function setCur(i) {
+    if (i === cur) return;
+    cur = i;
+    if (chosen) {
+      chosen = false;
+      openId = null;
+      applyOpen();
+    }
+  }
+
   function showDay() {
-    count.textContent = dates.length ? "Day " + (cur + 1) + " of " + dates.length : "";
+    const word = !dates.length ? "" : states[cur] === "today" ? "today" : states[cur] === "used" ? "used" : ahead[cur] === 1 ? "tomorrow" : ahead[cur] > 1 ? "in " + ahead[cur] + " days" : "";
+    const parts = [];
+    if (dates.length) parts.push(el("span", "", "Day " + (cur + 1) + " of " + dates.length));
+    if (word) parts.push(" ", el("i", "", word));
+    count.replaceChildren(...parts);
     count.hidden = !dates.length;
     pager.querySelectorAll(".sq").forEach((b, i) => {
       b.classList.toggle("is-cur", i === cur);
+      b.classList.toggle("is-done", states[i] === "used");
       if (i === cur) b.setAttribute("aria-current", "date");
       else b.removeAttribute("aria-current");
     });
@@ -65,10 +155,9 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
 
   function goDay(index, smooth = false) {
     if (!dates.length) return;
-    const i = clamp(index);
-    cur = i;
+    setCur(clamp(index));
     showDay();
-    rail.scrollTo({ left: i * step(), behavior: smooth && !calm() ? "smooth" : "auto" });
+    rail.scrollTo({ left: cur * step(), behavior: smooth && !calm() ? "smooth" : "auto" });
   }
 
   // The day in view follows the rail as it is swiped.
@@ -76,7 +165,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
     if (!dates.length) return;
     const i = clamp(Math.round(rail.scrollLeft / step()));
     if (i !== cur) {
-      cur = i;
+      setCur(i);
       showDay();
     }
   }, { passive: true });
@@ -87,8 +176,26 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
   count.addEventListener("click", () => onAllDays());
   root.addEventListener("keydown", (ev) => {
     if (ev.target.closest("input, textarea, select")) return;
+    if ((ev.key === "Enter" || ev.key === " ") && ev.target.classList.contains("r-b")) {
+      ev.preventDefault();
+      toggle(ev.target.closest(".r"));
+      return;
+    }
     if (ev.key === "ArrowRight") goDay(cur + 1, true);
     if (ev.key === "ArrowLeft") goDay(cur - 1, true);
+  });
+
+  // Opening a stop closes the one that was open; tapping the open one closes it.
+  function toggle(r) {
+    if (!r || !r.dataset.id) return;
+    const was = chosen ? openId : autoId;
+    chosen = true;
+    openId = was === r.dataset.id ? null : r.dataset.id;
+    applyOpen();
+  }
+  rail.addEventListener("click", (ev) => {
+    if (ev.target.closest("a, button")) return;
+    toggle(ev.target.closest(".r[data-id]"));
   });
 
   function drawPager() {
@@ -99,6 +206,23 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
       b.setAttribute("aria-label", dayShort(date));
       return b;
     }));
+  }
+
+  // Where focus is in the rail, to put it back if a redraw took it away.
+  function focusSpot() {
+    const a = document.activeElement;
+    if (!a || !rail.contains(a)) return null;
+    const r = a.closest(".r[data-id]");
+    return { node: a, id: r ? r.dataset.id : null, cls: a.className };
+  }
+  function restoreFocus(spot) {
+    if (!spot || document.activeElement === spot.node) return;
+    let target = spot.node.isConnected ? spot.node : null;
+    if (!target && spot.id) {
+      const r = rail.querySelector('.r[data-id="' + CSS.escape(spot.id) + '"]');
+      target = r && ((spot.cls && r.getElementsByClassName(spot.cls.split(" ")[0])[0]) || r.querySelector(".r-b"));
+    }
+    if (target) target.focus({ preventScroll: true });
   }
 
   function render(s) {
@@ -115,16 +239,21 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
     const tz = s.trip.tz || "Asia/Tokyo";
     const nowMs = clock.now();
     const now = nowIn(tz, nowMs);
+    seen = now;
     const toGo = daysToGo({ ...s.trip, tz }, nowMs);
     const mark = issuer(list(s.people));
-    const stops = list(s.stops);
-    const expenses = list(s.expenses);
+    // A row typed into the Sheet by hand may be blank or have no id.
+    const stops = list(s.stops).filter((x) => x && typeof x.id === "string" && x.id && typeof x.date === "string");
+    const stays = list(s.stays).filter((x) => x && typeof x === "object");
+    const expenses = list(s.expenses).filter((x) => x && typeof x === "object");
     const inView = cur >= 0 ? dates[cur] : null;
     const left = rail.scrollLeft;
+    const spot = focusSpot();
 
     const sameDays = days.length === dates.length && days.every((d, i) => d.date === dates[i]);
     if (!sameDays) {
       dates = days.map((d) => d.date);
+      sigs.clear();
       rail.replaceChildren(...dates.map((date) => {
         const pg = el("div", "pg");
         pg.dataset.date = date;
@@ -132,26 +261,44 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
       }));
       drawPager();
     }
+    states = days.map((d) => dayState(d.date, now.date));
+    ahead = days.map((d) => (toGo > 0 ? daysToGo({ start: d.date, tz }, nowMs) : 0));
 
+    autoId = null;
     days.forEach((day, i) => {
+      const state = states[i];
+      const dayStops = stopsFor(stops, day.date);
+      const nextId = state === "today" ? nextStopId(dayStops, now.minutes) : null;
+      if (nextId) autoId = nextId;
       const model = {
         day,
         number: i + 1,
         count: days.length,
-        state: dayState(day.date, now.date),
+        state,
         header: header(day),
-        stops: stopsFor(stops, day.date),
+        stops: dayStops,
+        stays,
         total: dayTotalYen(expenses, day.date),
         mark,
         stay: null,
-        nextId: null,
-        minutes: now.minutes,
-        toGo,
-        openId: null,
+        nextId,
+        // Only today's ticket changes with the minute; only Day 1 counts down.
+        minutes: state === "today" ? now.minutes : null,
+        toGo: i === 0 ? toGo : 0,
         tripName: s.trip.name,
       };
-      rail.children[i].replaceChildren(ticketEl(model));
+      const sig = JSON.stringify(model);
+      if (sigs.get(day.date) === sig) return;
+      sigs.set(day.date, sig);
+      const fresh = ticketEl(model);
+      for (const r of fresh.querySelectorAll(".r[data-id]")) drawn.set(r, r.outerHTML);
+      const pg = rail.children[i];
+      const old = pg.firstElementChild;
+      if (old) patchTicket(old, fresh);
+      else pg.append(fresh);
     });
+    applyOpen();
+    restoreFocus(spot);
 
     if (!opened) {
       opened = true;
@@ -165,8 +312,34 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
     else showDay();
   }
 
+  // Ask the clock again: redraw when the trip zone's minute or day moved on.
+  function tick() {
+    const s = store.state;
+    if (!(s.status === "ready" && s.trip && s.trip.start)) return;
+    const now = nowIn(s.trip.tz || "Asia/Tokyo", clock.now());
+    if (!seen || now.date !== seen.date || now.minutes !== seen.minutes) render(s);
+  }
+
+  // The clock is asked only while the app is on screen and Days is the
+  // screen showing; at once when either comes back.
+  let timer = null;
+  function wake() {
+    const live = document.visibilityState !== "hidden" && root.classList.contains("is-active");
+    if (live && !timer) {
+      timer = setInterval(tick, TICK_MS);
+      tick();
+    } else if (!live && timer) {
+      clearInterval(timer);
+      timer = null;
+    }
+  }
+  document.addEventListener("visibilitychange", wake);
+  new MutationObserver(wake).observe(root, { attributes: true, attributeFilter: ["class"] });
+
   render(store.state);
   store.subscribe(render);
+  if (clock.subscribe) clock.subscribe(() => render(store.state));
+  wake();
 
   return {
     goDay,

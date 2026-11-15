@@ -1,0 +1,362 @@
+// Today on the ticket: used days, the faded and the next stop, leave-by,
+// fixed times, the open stop, and the countdown before the trip.
+// The plan is tests/fixtures/plan.json over the seed; the clock is 13:20 on
+// Dec 12 in Japan (Day 3) unless a case says otherwise.
+
+const assert = require("node:assert/strict");
+const path = require("path");
+const { pathToFileURL } = require("url");
+const { WITH_PLAN, SEED, NOON12, makeBackend, open, advance, until, text, expectText } = require("./helpers.cjs");
+
+const jp = (iso) => Date.parse(iso + "+09:00");
+
+async function ready(page, opts = {}) {
+  const backend = await open(page, { seed: WITH_PLAN, tab: "days", ...opts });
+  await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
+  return backend;
+}
+
+const tk = (date) => '#rail .pg[data-date="' + date + '"]';
+const row = (id) => '.r[data-id="' + id + '"]';
+const SKY = "planstop1203";
+const MEIJI = "planstop1201";
+const LUNCH = "planstop1202";
+const DINNER = "planstop1204";
+const GLOVES = "planstop1205";
+
+const classes = (page, sel) => page.evaluate((s) => {
+  const el = document.querySelector(s);
+  return el ? [...el.classList] : null;
+}, sel);
+const has = async (page, sel, cls) => ((await classes(page, sel)) || []).includes(cls);
+const count = (page, sel) => page.evaluate((s) => document.querySelectorAll(s).length, sel);
+const openRows = (page) => page.evaluate(() => [...document.querySelectorAll("#rail .r.is-open")].map((r) => r.dataset.id));
+// Taps a stop's name, which opens or closes it.
+const tap = (page, id) => page.click(row(id) + " .r-n");
+
+// The rail's day in view, once it sits squarely there.
+function inView(page) {
+  return page.evaluate(() => {
+    const rail = document.getElementById("rail").getBoundingClientRect();
+    const mid = rail.left + rail.width / 2;
+    let best = null;
+    for (const pg of document.querySelectorAll("#rail .pg")) {
+      const r = pg.getBoundingClientRect();
+      const off = Math.abs(r.left + r.width / 2 - mid);
+      if (!best || off < best.off) best = { date: pg.dataset.date, off };
+    }
+    return best && best.off < 2 ? best.date : null;
+  });
+}
+
+async function seedWithSky(patch) {
+  const seed = JSON.parse(JSON.stringify(WITH_PLAN));
+  Object.assign(seed.stops.find((s) => s.id === SKY), patch);
+  return seed;
+}
+
+module.exports = [
+  {
+    name: "past, next and later",
+    async run({ page }) {
+      await ready(page);
+      for (const id of [MEIJI, LUNCH]) assert.equal(await has(page, row(id), "is-done"), true, id + " is done");
+      await until(async () => (await has(page, row(SKY), "is-next")) && (await has(page, row(SKY), "is-open")), "Sky is next and open");
+      const sky = await text(page, row(SKY));
+      assert.ok(sky.includes("こんど"), sky);
+      assert.ok(sky.includes("Leave by 13:30, in 10 min."), sky);
+      const dinner = await classes(page, row(DINNER));
+      assert.equal(dinner.includes("is-done") || dinner.includes("is-next") || dinner.includes("is-open"), false, dinner.join(" "));
+      // An untimed stop is neither past nor next.
+      const gloves = await classes(page, row(GLOVES));
+      assert.equal(gloves.includes("is-done") || gloves.includes("is-next"), false, gloves.join(" "));
+      assert.equal(await count(page, "#rail .tag"), 1, "one こんど on the rail");
+    },
+  },
+  {
+    name: "a fixed time says so",
+    async run({ page }) {
+      await ready(page);
+      const sky = await text(page, row(SKY));
+      assert.ok(sky.includes("指定") && sky.includes("Fixed time"), sky);
+      const others = await page.evaluate(() => [...document.querySelectorAll("#rail .r[data-id]")].filter((r) => r.dataset.id !== "planstop1203").map((r) => r.textContent));
+      for (const t of others) assert.equal(/指定|Fixed time/.test(t), false, t);
+    },
+  },
+  {
+    name: "the open stop",
+    async run({ page }) {
+      await ready(page);
+      await until(() => has(page, row(SKY), "is-open"), "Sky is open");
+      const sky = await text(page, row(SKY));
+      assert.ok(sky.includes("Yamanote Line, Harajuku to Shibuya. One stop."), sky);
+      assert.ok(sky.includes("Entrance is on floor 14."), sky);
+      const links = await page.evaluate((sel) => [...document.querySelectorAll(sel + " a")].map((a) => ({
+        text: a.textContent, href: a.getAttribute("href"), target: a.getAttribute("target"), rel: a.getAttribute("rel"),
+      })), row(SKY));
+      assert.deepEqual(links, [
+        { text: "地図 Directions ↗", href: "https://www.google.com/maps/dir/?api=1&travelmode=transit&origin=Lunch%20in%20Harajuku&destination=Shibuya%20Sky", target: "_blank", rel: "noopener" },
+        { text: "Ticket or booking ↗", href: "https://example.test/sky-ticket", target: "_blank", rel: "noopener" },
+      ]);
+      // The open stop's links are on screen and can be reached.
+      const box = await page.evaluate((sel) => document.querySelector(sel + " .r-map").getBoundingClientRect().height, row(SKY));
+      assert.ok(box > 20, "the Directions button is drawn: " + box);
+      // A closed stop's links cannot be tabbed to.
+      assert.equal(await page.evaluate((sel) => document.querySelector(sel + " .r-more").inert, row(DINNER)), true);
+    },
+  },
+  {
+    name: "the first stop of a day starts from the hotel",
+    async run({ page }) {
+      await ready(page);
+      await tap(page, MEIJI);
+      await until(() => has(page, row(MEIJI), "is-open"), "Meiji Shrine opens");
+      const href = await page.evaluate((sel) => document.querySelector(sel + " a.r-map").getAttribute("href"), row(MEIJI));
+      assert.ok(href.includes("origin=Asakusa%20hotel%20Tokyo&destination=Meiji%20Jingu"), href);
+    },
+  },
+  {
+    name: "one stop open at a time",
+    async run({ page }) {
+      await ready(page);
+      await until(() => has(page, row(SKY), "is-open"), "Sky is open");
+      await tap(page, DINNER);
+      await until(async () => JSON.stringify(await openRows(page)) === JSON.stringify([DINNER]), "only Dinner is open");
+      assert.equal(await page.evaluate((sel) => document.querySelector(sel + " [aria-expanded]").getAttribute("aria-expanded"), row(DINNER)), "true");
+      await tap(page, DINNER);
+      await until(async () => (await openRows(page)).length === 0, "none is open");
+      assert.equal(await page.evaluate((sel) => document.querySelector(sel + " [aria-expanded]").getAttribute("aria-expanded"), row(DINNER)), "false");
+    },
+  },
+  {
+    name: "a stop opens from the keyboard",
+    async run({ page }) {
+      await ready(page);
+      await page.focus(row(DINNER) + ' [role="button"]');
+      await page.keyboard.press("Enter");
+      await until(() => has(page, row(DINNER), "is-open"), "Enter opens Dinner");
+      await page.keyboard.press(" ");
+      await until(async () => !(await has(page, row(DINNER), "is-open")), "Space closes it");
+    },
+  },
+  {
+    name: "the minute moves on",
+    async run({ page }) {
+      const backend = await ready(page);
+      await advance(page, backend, 11 * 60000);
+      await until(async () => (await text(page, row(SKY) + " .r-s")).includes("Leave now."), "Sky says Leave now.");
+      await advance(page, backend, 30 * 60000); // 14:01
+      await until(() => has(page, row(SKY), "is-done"), "Sky is done");
+      await until(() => has(page, row(DINNER), "is-next"), "Dinner is next");
+      const dinner = await text(page, row(DINNER));
+      assert.ok(dinner.includes("Next, in 4 h 59 min."), dinner);
+      assert.equal(await has(page, row(DINNER), "is-open"), true, "the next stop opens itself");
+    },
+  },
+  {
+    name: "a stop closed by hand stays closed until the day in view changes",
+    async run({ page }) {
+      const backend = await ready(page);
+      await until(() => has(page, row(SKY), "is-open"), "Sky is open");
+      await tap(page, SKY);
+      await until(async () => (await openRows(page)).length === 0, "Sky is closed");
+      await advance(page, backend, 41 * 60000); // 14:01
+      await until(() => has(page, row(DINNER), "is-next"), "Dinner is next");
+      assert.deepEqual(await openRows(page), [], "Dinner does not open itself");
+      await page.click("#pager .sq:nth-child(4)");
+      await until(async () => (await inView(page)) === "2026-12-13", "Dec 13 is in view");
+      await page.click("#pager .sq:nth-child(3)");
+      await until(async () => (await inView(page)) === "2026-12-12", "Dec 12 is back");
+      await until(async () => JSON.stringify(await openRows(page)) === JSON.stringify([DINNER]), "Dinner opens itself again");
+    },
+  },
+  {
+    name: "a sync does not close what you opened",
+    async run({ page }) {
+      const backend = await ready(page);
+      await tap(page, MEIJI);
+      await until(() => has(page, row(MEIJI), "is-open"), "Meiji Shrine opens");
+      await page.focus(row(MEIJI) + ' [role="button"]');
+      await advance(page, backend, 20000);
+      const env = await backend.handle({ key: "test-key", actor: "Ajen", via: "app", action: "addStop", args: { stop: { id: "ajenstop0001", date: "2026-12-12", time: "16:00", title: "Tower Records" } } });
+      assert.equal(env.ok, true, JSON.stringify(env));
+      await advance(page, backend, 20000);
+      await until(() => page.evaluate(() => !!document.querySelector('.r[data-id="ajenstop0001"]')), "Ajen’s stop is on the ticket");
+      assert.deepEqual(await openRows(page), [MEIJI]);
+      await expectText(page, "#dayCount", /^Day 3 of 11/);
+      assert.equal(await page.evaluate(() => !!document.activeElement.closest('.r[data-id="planstop1201"]')), true, "focus stays on Meiji Shrine");
+    },
+  },
+  {
+    name: "yesterday is used",
+    async run({ page }) {
+      await ready(page);
+      const d11 = tk("2026-12-11");
+      assert.equal(await count(page, d11 + " .insp"), 1);
+      assert.equal(await count(page, d11 + " .punch"), 1);
+      const rows = await page.evaluate((sel) => [...document.querySelectorAll(sel + " .r[data-id]")].map((r) => r.classList.contains("is-done")), d11);
+      assert.ok(rows.length > 0 && rows.every(Boolean), JSON.stringify(rows));
+      const { jpyOf } = await import(pathToFileURL(path.join(__dirname, "..", "..", "js", "money.js")).href);
+      const { yen } = await import(pathToFileURL(path.join(__dirname, "..", "..", "js", "format.js")).href);
+      const total = SEED.expenses.filter((e) => e.day === "2026-12-11" && !e.deleted).reduce((a, e) => a + jpyOf(e), 0);
+      assert.ok(total > 0);
+      await expectText(page, d11 + " .fare", yen(total));
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?today$/);
+      await page.click("#pager .sq:nth-child(2)");
+      await expectText(page, "#dayCount", /^Day 2 of 11 ?used$/);
+      const done = await page.evaluate(() => [...document.querySelectorAll("#pager .sq")].map((b) => b.classList.contains("is-done")));
+      assert.deepEqual(done, [true, true, false, false, false, false, false, false, false, false, false]);
+    },
+  },
+  {
+    name: "the gate stamp is kept across redraws",
+    async run({ page }) {
+      const backend = await ready(page);
+      await page.evaluate(() => { document.querySelector('#rail .pg[data-date="2026-12-11"] .insp').__kept = 1; });
+      await advance(page, backend, 61000);
+      await until(async () => (await text(page, row(SKY) + " .r-s")).includes("in 9 min."), "the minute ticks");
+      assert.equal(await page.evaluate(() => document.querySelector('#rail .pg[data-date="2026-12-11"] .insp').__kept), 1);
+    },
+  },
+  {
+    name: "tomorrow is untouched",
+    async run({ page }) {
+      await ready(page);
+      const d13 = tk("2026-12-13");
+      assert.equal(await count(page, d13 + " .insp"), 0);
+      assert.equal(await count(page, d13 + " .is-done"), 0);
+      assert.equal((await text(page, d13)).includes("こんど"), false);
+    },
+  },
+  {
+    name: "the same gate stamp on every phone",
+    async run({ page, newPhone }) {
+      const backend = await ready(page);
+      const other = await newPhone();
+      await ready(other, { backend });
+      const insp = (p) => p.evaluate(() => document.querySelector('#rail .pg[data-date="2026-12-11"] .insp').outerHTML);
+      const a = await insp(page);
+      assert.ok(a.includes("渋谷") && a.includes("12.11") && a.includes("MAT"), a.slice(0, 200));
+      assert.equal(await insp(other), a);
+    },
+  },
+  {
+    name: "Japan time on a phone in Toronto",
+    timezoneId: "America/Toronto",
+    async run({ page }) {
+      await ready(page);
+      await expectText(page, "#dayCount", /^Day 3 of 11/);
+      await until(() => has(page, row(SKY), "is-next"), "Sky is next");
+      assert.ok((await text(page, row(SKY))).includes("Leave by 13:30, in 10 min."));
+    },
+  },
+  {
+    name: "midnight",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: jp("2026-12-12T23:40:00") });
+      assert.equal(await has(page, row(DINNER), "is-done"), true);
+      await expectText(page, "#dayCount", /^Day 3 of 11/);
+      assert.equal(await count(page, tk("2026-12-12") + " .insp"), 0);
+      await advance(page, backend, 50 * 60000);
+      await until(async () => (await count(page, tk("2026-12-12") + " .insp")) === 1, "Dec 12 is used without a reload");
+      await page.reload();
+      await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw again");
+      await expectText(page, "#dayCount", /^Day 4 of 11/);
+    },
+  },
+  {
+    name: "before the trip",
+    async run({ page, newPhone }) {
+      await ready(page, { nowMs: jp("2026-11-15T12:00:00") });
+      await expectText(page, "#dayCount", /^Day 1 of 11 ?in 25 days$/);
+      const d10 = await text(page, tk("2026-12-10") + " .tk-date");
+      assert.ok(d10.includes("あと25日") && d10.includes("Valid in 25 days"), d10);
+      assert.equal(d10.includes("当日限り有効"), false, d10);
+      assert.equal(await count(page, "#rail .insp"), 0);
+      assert.equal(await count(page, "#rail .is-done"), 0);
+      assert.equal((await text(page, "#rail")).includes("こんど"), false);
+      assert.ok((await text(page, tk("2026-12-11") + " .tk-date")).includes("当日限り有効"), "later days keep their line");
+
+      const eve = await newPhone();
+      await ready(eve, { nowMs: jp("2026-12-09T12:00:00") });
+      await expectText(eve, "#dayCount", /^Day 1 of 11 ?tomorrow$/);
+      const d10eve = await text(eve, tk("2026-12-10") + " .tk-date");
+      assert.ok(d10eve.includes("あと1日"), d10eve);
+    },
+  },
+  {
+    name: "after the trip",
+    async run({ page }) {
+      await ready(page, { nowMs: jp("2026-12-25T12:00:00") });
+      await expectText(page, "#dayCount", /^Day 11 of 11/);
+      assert.equal(await count(page, "#rail .tk .insp"), 11);
+    },
+  },
+  {
+    name: "a hand-edited Sheet",
+    async run({ page }) {
+      const backend = makeBackend(WITH_PLAN, { now: NOON12 });
+      const stop = backend.fake.tables.Stops[2];
+      assert.equal(stop.id, MEIJI);
+      Object.assign(stop, { link: "javascript:alert(1)", photo: "javascript:alert(2)", time: "25:00" });
+      Object.assign(backend.fake.tables.Days.find((d) => d.date === "2026-12-12"), { line_colour: "green" });
+      await ready(page, { backend });
+      await page.reload();
+      await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw again");
+      await expectText(page, row(MEIJI) + " .r-t", "—");
+      await tap(page, MEIJI);
+      await until(() => has(page, row(MEIJI), "is-open"), "Meiji Shrine opens");
+      const bad = await page.evaluate(() => [...document.querySelectorAll("[href], [src]")]
+        .map((n) => n.getAttribute("href") || n.getAttribute("src") || "")
+        .filter((v) => /^\s*javascript:/i.test(v)));
+      assert.deepEqual(bad, []);
+      const titles = await page.evaluate((sel) => [...document.querySelectorAll(sel + " .r[data-id] .r-n")].map((n) => n.lastChild.textContent), tk("2026-12-12"));
+      assert.deepEqual(titles, ["Lunch in Harajuku", "Shibuya Sky", "Dinner", "Meiji Shrine", "Buy gloves"]);
+      const band = await page.evaluate((sel) => {
+        const css = (el, p) => getComputedStyle(el).getPropertyValue(p).trim();
+        return { line: css(document.querySelector(sel + " .tk"), "--line"), keyHi: css(document.documentElement, "--key-hi") };
+      }, tk("2026-12-12"));
+      assert.equal(band.line, band.keyHi, "a neutral band");
+    },
+  },
+  {
+    name: "a photo that fails to load is not shown",
+    async run({ page }) {
+      await ready(page, { seed: await seedWithSky({ photo: "https://example.test/missing.jpg" }) });
+      await until(() => has(page, row(SKY), "is-open"), "Sky is open");
+      await until(() => page.evaluate((sel) => {
+        const img = document.querySelector(sel + " img");
+        if (!img) return true;
+        const r = img.getBoundingClientRect();
+        return getComputedStyle(img).display === "none" || r.height === 0;
+      }, row(SKY)), "no broken image box");
+    },
+  },
+  {
+    name: "a photo that loads is shown on the open stop",
+    async run({ page, context }) {
+      // A 1x1 PNG in place of a real photo.
+      const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+      await context.route("https://example.test/sky.png", (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+      await ready(page, { seed: await seedWithSky({ photo: "https://example.test/sky.png" }) });
+      await until(() => has(page, row(SKY), "is-open"), "Sky is open");
+      await until(() => page.evaluate((sel) => {
+        const img = document.querySelector(sel + " img.r-ph");
+        return !!img && img.complete && img.naturalWidth > 0 && img.getBoundingClientRect().height > 100;
+      }, row(SKY)), "the photo shows");
+    },
+  },
+  {
+    name: "the clock rests while Money is showing",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: jp("2026-12-12T13:20:50") });
+      await until(async () => (await text(page, row(SKY) + " .r-s")).includes("in 10 min."), "Sky reads 10 min");
+      await page.click('[data-tab="money"]');
+      await until(() => page.evaluate(() => document.getElementById("vMoney").classList.contains("is-active")), "Money shows");
+      await advance(page, backend, 15000); // 13:21:05, before the first sync
+      assert.ok((await text(page, row(SKY) + " .r-s")).includes("in 10 min."), "no tick off screen");
+      await page.click('[data-tab="days"]');
+      await until(async () => (await text(page, row(SKY) + " .r-s")).includes("in 9 min."), "back on Days it catches up at once");
+    },
+  },
+];

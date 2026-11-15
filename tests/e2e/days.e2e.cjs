@@ -29,7 +29,8 @@ function inView(page) {
   });
 }
 
-const rowTitles = (page, date) => page.evaluate((sel) => [...document.querySelectorAll(sel + " .r[data-id] .r-n")].map((n) => n.textContent), tk(date));
+// The stop names, without the こんど tag the next stop carries.
+const rowTitles = (page, date) => page.evaluate((sel) => [...document.querySelectorAll(sel + " .r[data-id] .r-n")].map((n) => n.lastChild.textContent), tk(date));
 const rowText = (page, id) => text(page, '.r[data-id="' + id + '"]');
 
 module.exports = [
@@ -100,7 +101,8 @@ module.exports = [
       assert.deepEqual(await rowTitles(page, "2026-12-12"), ["Meiji Shrine", "Lunch in Harajuku", "Shibuya Sky", "Dinner", "Buy gloves"]);
       await expectText(page, '.r[data-id="planstop1203"] .r-t', "14:00");
       await expectText(page, '.r[data-id="planstop1203"] .r-j', "渋谷");
-      await expectText(page, '.r[data-id="planstop1203"] .r-s', "Booked for 14:00");
+      // On today's ticket the next stop's leave-by line comes first.
+      await expectText(page, '.r[data-id="planstop1203"] .r-s', /(^|\. )Booked for 14:00$/);
       await expectText(page, '.r[data-id="planstop1205"] .r-t', "—");
       assert.equal(/undefined/.test(await rowText(page, "planstop1205")), false);
     },

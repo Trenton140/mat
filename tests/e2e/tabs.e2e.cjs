@@ -108,6 +108,33 @@ module.exports = [
     },
   },
   {
+    name: "Ring up from Days shows the receipt while the register is open, then goes back to Days",
+    async run({ page }) {
+      await open(page, { seed: WITH_PLAN, tab: "days" });
+      await showing(page, "#vDays");
+      await page.click("#ring");
+      await until(() => page.evaluate(() => document.getElementById("reg").classList.contains("is-open")), "the register opens");
+      await showing(page, "#vMoney");
+      assert.equal(await stored(page, "mat.tab"), "days");
+      await page.click("#regDone");
+      await until(() => page.evaluate(() => !document.getElementById("reg").classList.contains("is-open")), "the register closes");
+      await showing(page, "#vDays");
+      assert.equal(await stored(page, "mat.tab"), "days");
+    },
+  },
+  {
+    name: "Ring up from Money stays on Money",
+    async run({ page }) {
+      await open(page, { seed: WITH_PLAN, tab: "money" });
+      await showing(page, "#vMoney");
+      await page.click("#ring");
+      await until(() => page.evaluate(() => document.getElementById("reg").classList.contains("is-open")), "the register opens");
+      await page.click("#regDone");
+      await until(() => page.evaluate(() => !document.getElementById("reg").classList.contains("is-open")), "the register closes");
+      await showing(page, "#vMoney");
+    },
+  },
+  {
     name: "the bar fits",
     run: ({ page }) => fits(page),
   },
