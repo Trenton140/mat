@@ -9,7 +9,6 @@
 // the Sheet goes in with textContent only.
 
 import { clock, dayHead } from "../format.js";
-import { dateIn } from "../time.js";
 
 const LOADING = "…";
 const NO_HISTORY = "History needs a connection.";
@@ -50,8 +49,12 @@ export function mountHistory(root, store) {
   let openNo = 0;
   const busy = new Set(); // entries whose Undo is on its way: no second tap
 
-  // The day a change was made, in the trip's own time zone, as a heading.
-  const dayOf = (ms, s) => (isFinite(ms) && s.trip && s.trip.tz ? dateIn(s.trip.tz, ms) : "");
+  // The day a change was made, in the phone's own time zone (like its clock time), as "YYYY-MM-DD".
+  const dayOf = (ms) => {
+    if (!isFinite(ms)) return "";
+    const d = new Date(ms);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  };
 
   function drawRow(en) {
     const row = el("div", "tp-row" + (en.undoneBy ? " is-undone" : ""));
@@ -90,7 +93,7 @@ export function mountHistory(root, store) {
     const nodes = [];
     let last = null;
     for (const en of h.entries) {
-      const day = dayOf(Date.parse(en.at), s);
+      const day = dayOf(Date.parse(en.at));
       if (day !== last) {
         last = day;
         if (day) {
@@ -181,6 +184,8 @@ export function mountHistory(root, store) {
     let ok = false;
     try {
       ok = await store.undoEntry(id);
+    } catch {
+      store.notify("Couldn’t undo that. Try again.");
     } finally {
       busy.delete(id);
     }

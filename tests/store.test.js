@@ -858,6 +858,44 @@ test("after an undo from History the tape is loaded again from the first page", 
   assert.equal(a.store.state.history.entries.find((e) => e.id === del.id).undoneBy, a.store.state.history.entries.find((e) => e.action === "undo").id);
 });
 
+test("two overlapping first-page loads: the older request answering last never replaces the newer", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  const releaseA = p.net.hold("history");
+  const a = p.store.loadHistory(); // reaches the backend now: sees ten entries
+  await until(() => sent(p.fake, "history") === 1);
+  await backend(p.fake, "updateExpense", { id: "seedexp004", patch: { amount: 4500 } });
+  const releaseB = p.net.hold("history");
+  const b = p.store.loadHistory(); // sees eleven
+  await until(() => sent(p.fake, "history") === 2);
+  releaseB();
+  await b;
+  assert.equal(p.store.state.history.entries.length, 11);
+  releaseA();
+  await a;
+  assert.equal(p.store.state.history.entries.length, 11, "the older answer is dropped");
+  assert.equal(p.store.state.history.entries[0].action, "edit");
+  assert.equal(p.store.state.history.loading, false);
+});
+
+test("an older-page append is ignored when a first-page load started after it", async () => {
+  const expenses = [];
+  for (let i = 0; i < 205; i++) expenses.push({ id: "bulk" + String(i).padStart(6, "0"), day: "pre", title: "Line " + i, amount: 100, currency: "JPY", paidBy: "Mo", split: ALL.slice(), addedAt: new Date(Date.UTC(2026, 10, 1) + i * 1000).toISOString() });
+  const p = phone({ seed: { expenses, payments: [] } });
+  await p.store.boot();
+  await p.store.loadHistory();
+  assert.equal(p.store.state.history.entries.length, 200);
+  const release = p.net.hold("history");
+  const older = p.store.loadHistory({ older: true });
+  await until(() => sent(p.fake, "history") === 2);
+  await p.store.loadHistory(); // first page again, started after
+  assert.equal(p.store.state.history.entries.length, 200);
+  release();
+  await older;
+  assert.equal(p.store.state.history.entries.length, 200, "the append is not added to the new first page");
+  assert.equal(p.store.state.history.more, true);
+});
+
 test("a failed History load says why: no connection, or any other trouble", async () => {
   const p = phone({ seed: SEED });
   await p.store.boot();

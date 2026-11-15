@@ -134,6 +134,29 @@ module.exports = [
     },
   },
   {
+    name: "on a phone in Toronto a change made at 13:20 Japan time reads 23:20 under Fri Dec 11, here and in the line sheet",
+    timezoneId: "America/Toronto",
+    async run({ page }) {
+      const backend = await ready(page);
+      // 13:20 on Sat Dec 12 in Japan is 23:20 on Fri Dec 11 in Toronto.
+      await otherPhone(backend, "addExpense", { expense: { ...SHARED(1), id: "torontoline1", title: "Tempura", day: "2026-12-11", paidBy: "Ajen", splitMode: "equal", splitVals: [], note: "", kind: "" } });
+      await page.evaluate(() => globalThis.__matTest.store.refresh());
+      await openTape(page, 11);
+      const rows = await tape(page);
+      assert.equal(rows[0].sentence, "Ajen rang up Tempura ¥101");
+      assert.equal(rows[0].time, "23:20");
+      assert.deepEqual(await days(page), ["Fri Dec 11 | 12月11日(金)", "Thu Nov 19 | 11月19日(木)"]);
+      await page.click("#histDone");
+      await waitHistClosed(page);
+
+      const id = await page.evaluate(() => [...document.querySelectorAll("#rc .rc-row")].find((r) => r.querySelector(".rc-t").firstChild.textContent === "Tempura").dataset.id);
+      await page.click('#rc .rc-row[data-id="' + id + '"]');
+      await until(() => isOpen(page, "line"), "the line sheet opens");
+      await expectText(page, "#lnBy", "Rung up by Ajen, Fri Dec 11");
+      await until(() => page.evaluate(() => /Fri Dec 11/.test(document.getElementById("lnLog").textContent)), "its history date");
+    },
+  },
+  {
     name: "only the newest change to an item has Undo",
     async run({ page }) {
       await ready(page);

@@ -677,17 +677,28 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   // ---- history ----
 
+  let historySeq = 0; // numbers each first-page load
   async function loadHistory({ older = false } = {}) {
     const h = state.history;
     if (older && (!h.more || !h.entries.length)) return;
+    const seq = older ? historySeq : ++historySeq;
     state.history = { ...h, loading: true };
     emit();
     const args = older ? { before: h.entries[h.entries.length - 1].id } : {};
     try {
       const r = await call("history", args);
+      // A first-page load started after this one has the newer say.
+      if (seq !== historySeq) {
+        changed();
+        return;
+      }
       state.history = { entries: older ? h.entries.concat(r.data.entries) : r.data.entries, more: !!r.data.more, loading: false, error: null };
       historyLoaded = true;
     } catch (err) {
+      if (seq !== historySeq) {
+        changed();
+        return;
+      }
       state.history = { ...state.history, loading: false, error: codeOf(err) };
     }
     changed();
