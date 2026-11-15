@@ -469,6 +469,18 @@ module.exports = [
     },
   },
   {
+    name: "opened on Money, Days first tapped the next day, on today's ticket",
+    async run({ page }) {
+      const backend = await open(page, { seed: WITH_PLAN, tab: "money", nowMs: jp("2026-12-12T23:40:00") });
+      await until(() => page.evaluate(() => document.getElementById("vMoney").classList.contains("is-active")), "Money shows");
+      await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
+      await advance(page, backend, 50 * 60000);
+      await page.click('[data-tab="days"]');
+      await expectText(page, "#dayCount", /^Day 4 of 11 ?today$/);
+      await until(async () => (await inView(page)) === "2026-12-13", "Dec 13 is in view");
+    },
+  },
+  {
     name: "back the same day, the ticket in view stays",
     async run({ page }) {
       const backend = await ready(page);

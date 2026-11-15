@@ -7,8 +7,8 @@
 //   -> { goDay(index, smooth), day() }
 // - clock: the trip's clock (js/clock.js). Every "now" here comes from
 //   clock.now(), never Date.now(), and is judged in the trip's time zone.
-// - onAllDays(): the counter was tapped. onStop, onAddStop, onStay are for
-//   the stop and stay parts of the ticket.
+// - onAllDays(): the counter was tapped. onStay(stayId): a ticket's stay row
+//   was tapped. onStop, onAddStop are for the stop parts of the ticket.
 // - goDay(index, smooth): bring that day's ticket into view. day(): the date
 //   of the ticket in view.
 // It opens on today (js/plan.js openDayIndex).
@@ -24,7 +24,7 @@
 // or closes a stop by hand, that choice holds (the next stop no longer opens
 // itself) until the day in view changes.
 
-import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen } from "../plan.js";
+import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayFor } from "../plan.js";
 import { issuer, dayShort } from "../format.js";
 import { ticketEl } from "./ticket.js";
 
@@ -100,9 +100,8 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-// onStop, onAddStop and onStay are taken now and called once the ticket has
-// those parts.
-export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
+// onStop and onAddStop are taken now and called once the ticket has those parts.
+export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {} } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
@@ -212,6 +211,11 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
     applyOpen();
   }
   rail.addEventListener("click", (ev) => {
+    const stay = ev.target.closest(".tk-stay");
+    if (stay) {
+      onStay(stay.dataset.stay);
+      return;
+    }
     if (ev.target.closest("a, button")) return;
     toggle(ev.target.closest(".r[data-id]"));
   });
@@ -231,7 +235,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
     const a = document.activeElement;
     if (!a || !rail.contains(a)) return null;
     const r = a.closest(".r[data-id]");
-    return { node: a, id: r ? r.dataset.id : null, cls: a.className };
+    const pg = a.classList.contains("tk-stay") ? a.closest(".pg") : null;
+    return { node: a, id: r ? r.dataset.id : null, cls: a.className, stayOn: pg ? pg.dataset.date : null };
   }
   function restoreFocus(spot) {
     if (!spot || document.activeElement === spot.node) return;
@@ -240,6 +245,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
       const r = rail.querySelector('.r[data-id="' + CSS.escape(spot.id) + '"]');
       target = r && ((spot.cls && r.getElementsByClassName(spot.cls.split(" ")[0])[0]) || r.querySelector(".r-b"));
     }
+    if (!target && spot.stayOn) target = rail.querySelector('.pg[data-date="' + CSS.escape(spot.stayOn) + '"] .tk-stay');
     if (target) target.focus({ preventScroll: true });
   }
 
@@ -298,7 +304,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
         stays,
         total: dayTotalYen(expenses, day.date),
         mark,
-        stay: null,
+        stay: stayFor(stays, day.date),
         nextId,
         // Only today's ticket changes with the minute; only Day 1 counts down.
         minutes: state === "today" ? now.minutes : null,
@@ -320,6 +326,10 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
 
     if (!opened) {
       opened = true;
+      // Put on today while Days is not the screen showing (the app opened on
+      // Money, or in the background): Days counts as last seen today, so
+      // coming to it on a later day moves the rail on (R32).
+      if (!timer) leftOn = now.date;
       goDay(openDayIndex({ ...s.trip, tz }, days, nowMs));
       return;
     }

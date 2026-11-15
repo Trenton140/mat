@@ -1,0 +1,250 @@
+// Where you sleep, and the shape of the trip: the stay row at the foot of a
+// ticket, the hotel card it opens (#stay), and the list of every day (#allDays)
+// opened from the day counter. The plan is tests/fixtures/plan.json over the
+// seed; the clock is 13:20 on Dec 12 in Japan, Day 3.
+
+const assert = require("node:assert/strict");
+const { WITH_PLAN, open, until, text, expectText } = require("./helpers.cjs");
+
+async function ready(page, opts = {}) {
+  const backend = await open(page, { seed: WITH_PLAN, tab: "days", ...opts });
+  await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
+  return backend;
+}
+
+const tk = (date) => '#rail .pg[data-date="' + date + '"]';
+const isOpen = (page, id) => page.evaluate((i) => {
+  const el = document.getElementById(i);
+  return !!el && el.classList.contains("is-open");
+}, id);
+
+// The text of each child of the ticket's last part before the footer.
+const lastPart = (page, date) => page.evaluate((sel) => {
+  const foot = document.querySelector(sel + " .tk-foot");
+  const before = foot && foot.previousElementSibling;
+  return before ? { cls: before.className, text: before.textContent.replace(/\s+/g, " ").trim() } : null;
+}, tk(date));
+
+async function openCard(page, date) {
+  await page.click(tk(date) + " .tk-stay");
+  await until(() => isOpen(page, "stay"), "the hotel card opens");
+}
+
+const cardText = (page) => text(page, "#stay");
+const size = (page, sel) => page.evaluate((s) => {
+  const el = document.querySelector(s);
+  return el ? parseFloat(getComputedStyle(el).fontSize) : 0;
+}, sel);
+const href = (page, sel) => page.evaluate((s) => {
+  const el = document.querySelector(s);
+  return el ? el.getAttribute("href") : null;
+}, sel);
+// The card's links by their words.
+const links = (page) => page.evaluate(() => [...document.querySelectorAll("#stay a")].map((a) => ({ text: a.textContent.trim(), href: a.getAttribute("href") })));
+
+async function expectFullCard(page) {
+  const t = await cardText(page);
+  for (const s of ["浅草ホテル", "Asakusa hotel", "東京都台東区浅草1-1-1", "ここまでお願いします", "Please take me here."]) {
+    assert.ok(t.includes(s), "the card reads " + s + ": " + t);
+  }
+  const ls = await links(page);
+  const map = ls.find((l) => l.text.startsWith("地図"));
+  assert.ok(map, "a map link: " + JSON.stringify(ls));
+  assert.equal(map.text, "地図 Map ↗");
+  assert.equal(map.href, "https://www.google.com/maps/search/?api=1&query=Asakusa%20hotel%20Tokyo");
+  const booking = ls.find((l) => l.text === "Booking ↗");
+  assert.ok(booking, "a booking link: " + JSON.stringify(ls));
+  assert.equal(booking.href, "https://example.test/booking");
+}
+
+// "ok", or why the element is not on screen and tappable (as in small.e2e.cjs).
+function reach(page, selector, scroll = false) {
+  return page.evaluate(
+    ([sel, scroll]) => {
+      const el = document.querySelector(sel);
+      if (!el) return "missing";
+      if (scroll) el.scrollIntoView({ block: "center", inline: "nearest" });
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 || r.height === 0) return "not drawn";
+      if (r.top < -0.5 || r.left < -0.5 || r.bottom > innerHeight + 0.5 || r.right > innerWidth + 0.5) {
+        return "off screen: top " + Math.round(r.top) + ", bottom " + Math.round(r.bottom) + " of " + innerHeight;
+      }
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      if (!hit || !(hit === el || el.contains(hit))) return "covered by " + (hit ? hit.tagName.toLowerCase() + (hit.id ? "#" + hit.id : "") + "." + hit.className : "nothing");
+      return "ok";
+    },
+    [selector, scroll],
+  );
+}
+
+async function expectReach(page, selector, scroll) {
+  let got;
+  try {
+    await until(async () => (got = await reach(page, selector, scroll)) === "ok", "");
+  } catch {
+    throw new Error(selector + " is not on screen and tappable at 390x664: " + got);
+  }
+}
+
+// Each all-days row's words.
+const dayRows = (page) => page.evaluate(() => [...document.querySelectorAll("#allDays .ad-row")].map((r) => r.textContent.replace(/\s+/g, " ").trim()));
+
+module.exports = [
+  {
+    name: "tonight's stay is on the ticket",
+    async run({ page }) {
+      await ready(page);
+      const d12 = await lastPart(page, "2026-12-12");
+      assert.ok(d12 && d12.cls.split(" ").includes("tk-stay"), "Dec 12 ends with the stay: " + JSON.stringify(d12));
+      for (const s of ["宿泊", "Tonight", "Asakusa hotel"]) assert.ok(d12.text.includes(s), "Dec 12's stay reads " + s + ": " + d12.text);
+      assert.equal(await page.evaluate((sel) => document.querySelector(sel + " .tk-stay").tagName, tk("2026-12-12")), "BUTTON");
+      assert.equal(await page.evaluate((sel) => document.querySelector(sel + " .tk-stay").dataset.stay, tk("2026-12-12")), "planstay0001");
+      const d13 = await lastPart(page, "2026-12-13");
+      assert.ok(d13 && d13.cls.split(" ").includes("tk-stay"), "Dec 13 ends with the stay");
+      assert.ok(d13.text.includes("Niseko lodge"), d13.text);
+      assert.equal(await page.evaluate((sel) => document.querySelectorAll(sel + " .tk-stay").length, tk("2026-12-20")), 0, "no stay on Dec 20");
+      assert.equal((await text(page, tk("2026-12-20") + " .tk")).includes("undefined"), false);
+    },
+  },
+  {
+    name: "the hotel card",
+    async run({ page }) {
+      await ready(page);
+      await openCard(page, "2026-12-12");
+      await expectFullCard(page);
+      assert.ok((await size(page, "#stay .sy-name")) >= 28, "the Japanese name is large: " + (await size(page, "#stay .sy-name")));
+      assert.equal(await text(page, "#stay .sy-name"), "浅草ホテル");
+      assert.ok((await size(page, "#stay .sy-ad")) >= 20, "the address is large: " + (await size(page, "#stay .sy-ad")));
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "stayDone", "focus on Done");
+      await page.click("#stayDone");
+      await until(async () => !(await isOpen(page, "stay")), "Done closes it");
+      assert.equal(await page.evaluate(() => document.getElementById("stay").inert), true);
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains("tk-stay")), true, "focus back on the stay row");
+    },
+  },
+  {
+    name: "a stay with almost nothing",
+    async run({ page }) {
+      await ready(page);
+      await page.click("#pager .sq:nth-child(4)");
+      await openCard(page, "2026-12-13");
+      assert.equal(await text(page, "#stay .sy-name"), "Niseko lodge");
+      assert.ok((await size(page, "#stay .sy-name")) >= 28);
+      assert.equal(await page.evaluate(() => document.querySelectorAll("#stay .sy-ad").length), 0, "no empty address line");
+      assert.equal(await page.evaluate(() => document.querySelectorAll("#stay .sy-en").length), 0, "the name is not printed twice");
+      const t = await cardText(page);
+      assert.ok(t.includes("ここまでお願いします") && t.includes("Please take me here."), t);
+      assert.equal(t.includes("undefined"), false);
+      const ls = await links(page);
+      assert.equal(ls.some((l) => l.text === "Booking ↗"), false, "no booking link");
+      const map = ls.find((l) => l.text === "地図 Map ↗");
+      assert.ok(map && map.href.endsWith("query=Niseko%20lodge"), JSON.stringify(ls));
+      const empty = await page.evaluate(() => [...document.querySelectorAll("#stay *")].filter((n) => !n.children.length && !n.textContent.trim() && n.tagName !== "BR").map((n) => n.tagName + "." + n.className));
+      assert.deepEqual(empty, [], "no empty lines on the card");
+    },
+  },
+  {
+    name: "works with no signal",
+    async run({ page }) {
+      const backend = await ready(page);
+      backend.failWith = "network";
+      await page.reload();
+      await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets paint from saved data");
+      await openCard(page, "2026-12-12");
+      await expectFullCard(page);
+    },
+  },
+  {
+    name: "the shape of the trip",
+    async run({ page }) {
+      await ready(page);
+      await page.click("#dayCount");
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      const rows = await dayRows(page);
+      assert.equal(rows.length, 11);
+      for (const s of ["D 03", "Sat Dec 12", "Tokyo", "today"]) assert.ok(rows[2].includes(s), "the third row reads " + s + ": " + rows[2]);
+      for (const s of ["Temples, then the view", "used"]) assert.ok(rows[1].includes(s), "the second row reads " + s + ": " + rows[1]);
+      assert.equal(/today|used/.test(rows[5]), false, "an ahead day is neither: " + rows[5]);
+      assert.equal(rows.some((r) => r.includes("undefined")), false);
+      assert.equal(await page.evaluate(() => document.querySelector("#allDays .ad-row").tagName), "BUTTON");
+      await page.click("#allDays .ad-row:nth-child(6)");
+      await until(async () => !(await isOpen(page, "allDays")), "the list closes");
+      await expectText(page, "#dayCount", /^Day 6 of 11/);
+    },
+  },
+  {
+    name: "the list's today and used follow the clock when it opens",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: Date.parse("2026-12-12T23:40:00+09:00") });
+      await page.click("#dayCount");
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      assert.ok((await dayRows(page))[2].includes("today"));
+      await page.click("#allDaysDone");
+      await until(async () => !(await isOpen(page, "allDays")), "the list closes");
+      await page.clock.fastForward(50 * 60000);
+      backend.now += 50 * 60000;
+      await page.evaluate(() => document.getElementById("dayCount").click());
+      await until(() => isOpen(page, "allDays"), "the list opens again");
+      const rows = await dayRows(page);
+      assert.ok(rows[2].includes("used"), rows[2]);
+      assert.ok(rows[3].includes("today"), rows[3]);
+    },
+  },
+  {
+    name: "one sheet at a time",
+    async run({ page }) {
+      await ready(page);
+      await page.click("#dayCount");
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      await page.evaluate(() => document.getElementById("youBtn").click());
+      await until(() => isOpen(page, "you"), "Settings opens");
+      await until(async () => !(await isOpen(page, "allDays")), "the list closed");
+
+      await page.click("#youDone");
+      await until(async () => !(await isOpen(page, "you")), "Settings closed");
+      await openCard(page, "2026-12-12");
+      await page.evaluate(() => document.getElementById("youBtn").click());
+      await until(() => isOpen(page, "you"), "Settings opens");
+      await until(async () => !(await isOpen(page, "stay")), "the card closed");
+
+      // Opening the card or the list closes Settings, and each closes the other.
+      await page.evaluate(() => document.querySelector('#rail .pg[data-date="2026-12-12"] .tk-stay').click());
+      await until(() => isOpen(page, "stay"), "the card opens");
+      await until(async () => !(await isOpen(page, "you")), "Settings closed");
+      await page.evaluate(() => document.getElementById("dayCount").click());
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      await until(async () => !(await isOpen(page, "stay")), "the card closed");
+      await page.evaluate(() => document.querySelector('#rail .pg[data-date="2026-12-12"] .tk-stay').click());
+      await until(() => isOpen(page, "stay"), "the card opens");
+      await until(async () => !(await isOpen(page, "allDays")), "the list closed");
+
+      // Ring up closes it; so does a tab switch.
+      await page.evaluate(() => document.getElementById("ring").click());
+      await until(() => isOpen(page, "reg"), "the register opens");
+      assert.equal(await isOpen(page, "stay"), false, "Ring up closed the card");
+      await page.evaluate(() => globalThis.__matTest.register.close());
+      await until(async () => !(await isOpen(page, "reg")), "the register closed");
+      await page.evaluate(() => document.getElementById("dayCount").click());
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      await page.evaluate(() => document.querySelector('#nav [data-tab="money"]').click());
+      await until(async () => !(await isOpen(page, "allDays")), "a tab switch closed the list");
+      assert.equal(await page.evaluate(() => document.getElementById("allDays").inert), true);
+    },
+  },
+  {
+    name: "reachable in a Safari tab",
+    viewport: { width: 390, height: 664 },
+    async run({ page }) {
+      await ready(page);
+      await openCard(page, "2026-12-12");
+      await expectReach(page, "#stayDone");
+      await expectReach(page, "#stay .sy-map", true);
+      await page.click("#stayDone");
+      await until(async () => !(await isOpen(page, "stay")), "the card closed");
+      await page.click("#dayCount");
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      await expectReach(page, "#allDaysDone");
+      await expectReach(page, "#allDays .ad-row:last-child", true);
+    },
+  },
+];

@@ -13,6 +13,8 @@ import { mountRegister } from "./views/register.js";
 import { mountLine } from "./views/line.js";
 import { mountHistory } from "./views/history.js";
 import { mountYou } from "./views/you.js";
+import { mountStayCard } from "./views/staycard.js";
+import { mountAllDays } from "./views/alldays.js";
 import { mountUndoBar } from "./views/ubar.js";
 import { mountNet } from "./views/net.js";
 
@@ -177,11 +179,21 @@ function start() {
       tabs.showTab("days", false);
     },
   });
-  document.getElementById("nav").addEventListener("click", (ev) => {
-    if (ev.target.closest("button[data-tab]")) borrowed = false;
-  });
   // One sheet at a time: opening one closes the others.
   const history = mountHistory(phone, store);
+  // The two Days sheets: the hotel card and the list of every day.
+  const stayCard = mountStayCard(phone, store);
+  const allDays = mountAllDays(phone, store, { clock, onPick: (i) => days.goDay(i) });
+  const closeDaySheets = () => {
+    stayCard.close(false);
+    allDays.close(false);
+  };
+  // A tab switch closes them (they belong to Days).
+  document.getElementById("nav").addEventListener("click", (ev) => {
+    if (!ev.target.closest("button[data-tab]")) return;
+    borrowed = false;
+    closeDaySheets();
+  });
   const you = mountYou(phone, store, {
     getKey: () => storage.getItem("mat.key"),
     screen: () => (tabs.tab() === "days" ? "Days" : "Money"),
@@ -201,25 +213,47 @@ function start() {
     line.close(false);
     history.close(false);
     you.close(false);
+    closeDaySheets();
     if (tabs.tab() === "days") {
       borrowed = true;
       tabs.showTab("money", false);
     }
     register.open(day);
   };
-  mountDays(document.getElementById("vDays"), store, { clock });
+  // Opening a Days sheet closes the register, the line sheet, History,
+  // Settings and the other Days sheet.
+  const closeForDays = () => {
+    register.close();
+    line.close(false);
+    history.close(false);
+    you.close(false);
+    closeDaySheets();
+  };
+  const days = mountDays(document.getElementById("vDays"), store, {
+    clock,
+    onStay: (id) => {
+      closeForDays();
+      stayCard.open(id);
+    },
+    onAllDays: () => {
+      closeForDays();
+      allDays.open();
+    },
+  });
   mountMoney(document.getElementById("vMoney"), store, {
     onRing: ring,
     onLine: (id) => {
       register.close();
       history.close(false);
       you.close(false);
+      closeDaySheets();
       line.open(id);
     },
     onHistory: () => {
       register.close();
       line.close(false);
       you.close(false);
+      closeDaySheets();
       history.open();
     },
   });
@@ -250,6 +284,7 @@ function start() {
     register.close();
     line.close(false);
     history.close(false);
+    closeDaySheets();
     you.open();
   });
 

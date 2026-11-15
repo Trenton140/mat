@@ -16,7 +16,8 @@
 //   minutes past midnight; nextId: today's next stop (nextStopId), else null;
 //   total: the day's logged yen (dayTotalYen), printed as the fare when above
 //   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1.
-// - stay: tonight's stay, drawn elsewhere.
+// - stay: the night's stay (stayFor), or null. Drawn after the stops as one
+//   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
 // Every row is drawn closed: the Days view opens one (.is-open on the .r, and
 // aria-expanded on its [role=button], and un-inerts its .r-more).
 // A used day's gate stamp is made once per day, place and mark, and reused.
@@ -211,6 +212,19 @@ function validity(number, toGo) {
   return el("span", "", "当日限り有効");
 }
 
+// 宿泊 Tonight and the stay's name: a button that opens the hotel card.
+function stayRow(stay) {
+  const b = el("button", "tk-stay");
+  b.type = "button";
+  b.dataset.stay = stay.id;
+  const label = el("span", "tk-stay-l");
+  label.append(el("b", "", "宿泊"), el("span", "", "Tonight"));
+  b.append(label);
+  const name = str(stay.name) || str(stay.nameJp);
+  if (name) b.append(el("span", "tk-stay-n", name));
+  return b;
+}
+
 export function ticketEl(model) {
   const { day, number, header: h, stops, mark, tripName, state, total, toGo } = model;
   const date = day.date;
@@ -246,6 +260,10 @@ export function ticketEl(model) {
   // A used day is punched on the perforation, clear of the print.
   const perf = el("div", "tk-perf");
   if (state === "used") perf.append(el("span", "punch"));
-  tk.append(band(h, number), head, perf, rows, foot);
+  tk.append(band(h, number), head, perf, rows);
+  // A stay typed into the Sheet by hand with no id cannot be opened: no row.
+  const stay = model.stay;
+  if (stay && typeof stay.id === "string" && stay.id) tk.append(stayRow(stay));
+  tk.append(foot);
   return tk;
 }
