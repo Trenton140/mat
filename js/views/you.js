@@ -36,6 +36,7 @@ const MARKUP = `
   <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh"></b></button>
   <button type="button" class="set-r" id="setHow" aria-expanded="false" aria-controls="setHowLines"><span>How this works</span><b id="setHowV">Show</b></button>
   <div class="how" id="setHowLines" hidden></div>
+  <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
   <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For Ajen and Trenton; keep it between you</small></span><b>Copy</b></button>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
   <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b>Copy</b></button>
@@ -106,6 +107,16 @@ async function copyText(text) {
   }
 }
 
+// Already opened from the Home Screen (or as an installed app).
+function standalone() {
+  try {
+    if (globalThis.navigator && navigator.standalone === true) return true;
+    return typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches;
+  } catch {
+    return false;
+  }
+}
+
 export function mountYou(root, store, { onHistory = () => {}, getKey = () => null, screen = "Money" } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "youScrim";
@@ -130,6 +141,9 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   const howLines = $("setHowLines");
   const sheetLink = $("setSheet");
   const report = $("setReport");
+  const install = $("setInstall");
+  const installHow = $("setInstallHow");
+  install.hidden = standalone();
   for (const text of HOW_LINES) howLines.append(el("div", "how-l", text)); // numbered by CSS
 
   let opened = false;
@@ -226,6 +240,7 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
     sheet.inert = true;
     scrim.hidden = true;
     root.classList.remove("you-open");
+    endInstall();
     if (sheet.contains(document.activeElement)) document.activeElement.blur();
     if (restoreFocus === true) {
       const btn = document.getElementById("youBtn");
@@ -278,14 +293,88 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   $("setFreshRow").addEventListener("click", () => store.refresh());
   how.addEventListener("click", () => setHow(howLines.hidden));
 
-  $("setInvite").addEventListener("click", async () => {
+  const inviteLink = (key) => location.origin + location.pathname + "#k=" + encodeURIComponent(key);
+
+  // Copies the invite link and says so; false when there is no key.
+  async function copyInvite() {
     const key = getKey();
     if (!key) {
       store.notify(NO_KEY);
-      return;
+      return false;
     }
-    const link = location.origin + location.pathname + "#k=" + encodeURIComponent(key);
-    store.notify((await copyText(link)) ? "Link copied." : COPY_FAILED);
+    store.notify((await copyText(inviteLink(key))) ? "Link copied." : COPY_FAILED);
+    return true;
+  }
+  $("setInvite").addEventListener("click", copyInvite);
+
+  // ---- Add to Home Screen ----
+  // An app on the iPhone Home Screen keeps storage of its own, without the key
+  // Safari kept. So while the steps show, the key is back in the address bar
+  // and the manifest's start_url carries it; closing Settings takes both away
+  // again (and so does the next load). The key is never drawn.
+  let shownManifest = null; // the page's own <link rel="manifest">, while a keyed one stands in
+  let keyedManifestUrl = null;
+
+  function stripKeyFromAddress() {
+    const parts = location.hash.replace(/^#/, "").split("&").filter(Boolean);
+    const rest = parts.filter((p) => !p.startsWith("k="));
+    if (rest.length === parts.length) return;
+    history.replaceState(history.state, "", location.pathname + location.search + (rest.length ? "#" + rest.join("&") : ""));
+  }
+
+  function endInstall() {
+    installHow.hidden = true;
+    install.setAttribute("aria-expanded", "false");
+    stripKeyFromAddress();
+    const keyed = document.querySelector('link[rel="manifest"][data-keyed]');
+    if (shownManifest && keyed) keyed.replaceWith(shownManifest);
+    shownManifest = null;
+    if (keyedManifestUrl) URL.revokeObjectURL(keyedManifestUrl);
+    keyedManifestUrl = null;
+  }
+
+  // A blob: manifest built from the real one, with absolute URLs and a
+  // start_url that opens with the key.
+  async function useKeyedManifest(key) {
+    const own = shownManifest || document.querySelector('link[rel="manifest"]:not([data-keyed])');
+    if (!own) return;
+    const base = new URL(own.getAttribute("href"), location.href).href;
+    let m;
+    try {
+      const res = await fetch(base);
+      m = await res.json();
+    } catch {
+      return; // the address bar still carries the key
+    }
+    if (!opened || installHow.hidden) return; // closed meanwhile
+    const abs = (u) => new URL(u, base).href;
+    const keyed = {
+      ...m,
+      id: abs(m.id || m.start_url || "./"),
+      start_url: inviteLink(key),
+      scope: abs(m.scope || "./"),
+      icons: (m.icons || []).map((i) => ({ ...i, src: abs(i.src) })),
+    };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(keyed)], { type: "application/manifest+json" }));
+    const link = document.createElement("link");
+    link.rel = "manifest";
+    link.href = url;
+    link.dataset.keyed = "1";
+    const current = document.querySelector('link[rel="manifest"][data-keyed]') || own;
+    if (!shownManifest) shownManifest = own;
+    current.replaceWith(link);
+    if (keyedManifestUrl) URL.revokeObjectURL(keyedManifestUrl);
+    keyedManifestUrl = url;
+  }
+
+  install.addEventListener("click", async () => {
+    const key = getKey();
+    const copying = copyInvite(); // first, while the tap still counts for the clipboard
+    if (!key) return;
+    history.replaceState(history.state, "", location.pathname + location.search + "#k=" + encodeURIComponent(key));
+    installHow.hidden = false;
+    install.setAttribute("aria-expanded", "true");
+    await Promise.all([copying, useKeyedManifest(key)]);
   });
 
   // The note needs the latest history, so it is built while the copy waits.

@@ -130,6 +130,29 @@ test("api rejects with the backend's error code, network when fetch fails, serve
   }
 });
 
+test("api gives up after its timeout: a request that never settles is a network failure", async () => {
+  let signal = null;
+  const never = (url, init) => { signal = init.signal; return new Promise(() => {}); }; // ignores the signal, never settles
+  const api = createApi({ url: URL, getKey: () => "sekret-key", getActor: () => "Mo", fetchImpl: never, timeoutMs: 20 });
+  const started = Date.now();
+  const err = await api("rev").then(() => null, (e) => e);
+  assert.ok(err instanceof Error);
+  assert.equal(err.code, "network");
+  assert.ok(Date.now() - started < 1000, "gave up at the timeout");
+  assert.ok(signal && signal.aborted, "the request was aborted");
+  assert.equal(String(err.message).includes("sekret"), false);
+
+  // A body that never finishes counts the same.
+  const slowBody = async () => ({ ok: true, status: 200, text: () => new Promise(() => {}) });
+  const err2 = await createApi({ url: URL, getKey: () => KEY, getActor: () => "Mo", fetchImpl: slowBody, timeoutMs: 20 })("rev").then(() => null, (e) => e);
+  assert.equal(err2.code, "network");
+});
+
+test("api waits 30 seconds by default before giving up", async () => {
+  const { API_TIMEOUT_MS } = await import("../js/api.js");
+  assert.equal(API_TIMEOUT_MS, 30000);
+});
+
 test("api uses MAT_FAKE_API in place of fetch, and a rejection from it is a network failure", async () => {
   const bodies = [];
   let fetched = 0;

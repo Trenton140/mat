@@ -11,7 +11,7 @@
 //
 // Each case gets a fresh browser context: 390x844, mobile, touch, Japan time,
 // clipboard allowed, service workers blocked unless the case allows them. Every request to a host other than localhost is answered
-// here (Google Fonts get an empty stylesheet), so nothing needs the network.
+// here (Google Fonts get a small stand-in stylesheet), so nothing needs the network.
 // That holds for a case that allows the service worker too: this Playwright
 // routes a service worker's own requests through context.route as well.
 // A case fails on a thrown error, a console error or an uncaught page error;
@@ -70,11 +70,19 @@ const CONTEXT = {
   serviceWorkers: "block",
 };
 
+// What the runner answers for the Google Fonts stylesheet: a marker a test can read.
+const FONT_CSS = ":root{--fonts-stand-in:1}";
+
 async function hermetic(context) {
   await context.route("**/*", (route) => {
     const url = new URL(route.request().url());
     if (url.hostname === "localhost") return route.continue();
-    if (url.hostname === "fonts.googleapis.com") return route.fulfill({ status: 200, contentType: "text/css", body: "" });
+    // A small CORS stylesheet in place of Google's (the app asks for it with
+    // crossorigin, so the service worker can keep it); no @font-face, so no
+    // font files are asked for.
+    if (url.hostname === "fonts.googleapis.com") {
+      return route.fulfill({ status: 200, contentType: "text/css", headers: { "Access-Control-Allow-Origin": "*" }, body: FONT_CSS });
+    }
     return route.fulfill({ status: 200, body: "" });
   });
 }

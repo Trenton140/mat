@@ -75,3 +75,7 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:scale(.97)
 
 /* While Settings is open the undo bar sits at the top, clear of the sheet. */
 .phone.you-open .ubar{top:calc(12px + env(safe-area-inset-top, 0px));bottom:auto}
+
+/* Add to Home Screen: the two steps show in the row once it is tapped. */
+.set-steps{display:grid;gap:4px;margin-top:8px}
+.set-steps span{display:block;color:var(--text);font-size:14.5px;font-weight:700;line-height:1.35}

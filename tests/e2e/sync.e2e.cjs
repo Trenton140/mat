@@ -85,6 +85,8 @@ module.exports = [
       await b.clock.fastForward(1000);
       const row = await waitRow(b, "Yakitori", () => true, "on B after 20 seconds");
       assert.ok(row.cls.includes("is-new"), "marked as new on B: " + row.cls);
+      const seedRow = await rowOf(b, "Skyliner");
+      assert.ok(seedRow && !seedRow.cls.includes("is-new"), "a line from before B last looked is not new: " + (seedRow && seedRow.cls));
     },
   },
   {
@@ -153,6 +155,35 @@ module.exports = [
     },
   },
   {
+    name: "one check at a time: a check that never answers is not joined by more",
+    async run({ page }) {
+      const backend = await ready(page);
+      let revs = 0;
+      const handle = backend.handle;
+      backend.handle = (body) => {
+        if (body.action !== "rev") return handle(body);
+        revs++;
+        return new Promise(() => {}); // the backend never answers
+      };
+      await advance(page, backend, 60000);
+      await until(() => revs >= 1, "the first check goes out");
+      await comeBack(page); // coming back while the check hangs adds none either
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(revs, 1, "one rev request in 60 seconds, not three");
+    },
+  },
+  {
+    name: "no signal on a phone that has never loaded anything: #net says just No signal.",
+    async run({ page }) {
+      const { makeBackend } = require("./helpers.cjs");
+      const backend = makeBackend(SEED, { now: NOON12 });
+      backend.failWith = "network";
+      await open(page, { backend, nowMs: NOON12 });
+      await expectText(page, "#net", "No signal.");
+      assert.equal(await rowCount(page), 0);
+    },
+  },
+  {
     name: "a reload with no signal paints the receipt from the cache, dated by the last good load",
     async run({ page }) {
       const backend = await ready(page);
@@ -176,12 +207,39 @@ module.exports = [
       await waitRows(page, 8);
       assert.equal(await page.evaluate(() => !!navigator.serviceWorker.controller), true, "controlled after one reload");
 
+      // The Google Fonts stylesheet is asked for with CORS, so the worker kept it.
+      const kept = await page.evaluate(async () => {
+        const cache = await caches.open("mat-fonts");
+        return (await cache.keys()).map((r) => new URL(r.url).hostname);
+      });
+      assert.ok(kept.includes("fonts.googleapis.com"), "the font stylesheet is kept: " + JSON.stringify(kept));
+      const marker = () => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--fonts-stand-in").trim());
+      assert.equal(await marker(), "1");
+
       // Nothing but the fake api (bridged, not on the network) gets through.
       await context.route("**/*", (route) => route.abort());
       await page.reload();
       await waitRows(page, 8);
       assert.ok(await text(page, "#say"), "the sentence draws");
       assert.equal(await visible(page, "#ring"), true);
+      assert.equal(await marker(), "1", "the font stylesheet still applies with no network");
+    },
+  },
+  {
+    name: "with nothing kept and no network, opening the app says so plainly",
+    serviceWorkers: "allow",
+    async run({ page, context }) {
+      await ready(page);
+      await page.evaluate(() => navigator.serviceWorker.ready.then(() => true));
+      await page.reload();
+      await waitRows(page, 8);
+      // The phone lost its kept shell (storage cleared) and has no signal.
+      await page.evaluate(async () => {
+        for (const name of await caches.keys()) if (name.startsWith("mat-shell-")) await caches.delete(name);
+      });
+      await context.route("**/*", (route) => route.abort());
+      await page.reload();
+      await expectText(page, "body", "No signal. Open again when you have some.");
     },
   },
 ];

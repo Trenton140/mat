@@ -4,18 +4,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SRC = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
+import { ROOT, readSw, shellList as listIn, shellHash, writtenVersion } from "../scripts/stamp-sw.mjs";
 
-// The strings inside `const SHELL = [ ... ];`.
-function shellList() {
-  const m = SRC.match(/const SHELL = \[([\s\S]*?)\];/);
-  assert.ok(m, "sw.js has const SHELL = [ ... ];");
-  return [...m[1].matchAll(/"([^"]*)"/g)].map((x) => x[1]);
-}
+const SRC = readSw();
+const shellList = () => listIn(SRC);
 
 function filesUnder(dir) {
   const out = [];
@@ -27,8 +22,28 @@ function filesUnder(dir) {
   return out;
 }
 
-test("SW_VERSION is \"1\"", () => {
-  assert.match(SRC, /^const SW_VERSION = "1";$/m);
+test("SW_VERSION is the hash of the shell files", () => {
+  const written = writtenVersion(SRC);
+  assert.ok(written, 'sw.js has const SW_VERSION = "...";');
+  assert.equal(written, shellHash(), "shell changed: run npm run stamp");
+});
+
+test("the hash changes when any shell file changes", () => {
+  const list = shellList();
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "mat-sw-"));
+  try {
+    for (const f of list) {
+      const file = f === "./" ? "index.html" : f;
+      fs.mkdirSync(path.join(tmp, path.dirname(file)), { recursive: true });
+      fs.copyFileSync(path.join(ROOT, file), path.join(tmp, file));
+    }
+    const before = shellHash(tmp, list);
+    assert.equal(before, shellHash(), "same files, same hash");
+    fs.appendFileSync(path.join(tmp, "css/money.css"), "\n");
+    assert.notEqual(shellHash(tmp, list), before, "one byte more in one file, a new hash");
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("the shell list names every file the app needs", () => {

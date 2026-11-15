@@ -6,7 +6,8 @@
   "scripts": {
     "serve": "node scripts/serve.mjs",
     "test": "node --test",
-    "e2e": "node tests/e2e/run.cjs"
+    "e2e": "node tests/e2e/run.cjs",
+    "stamp": "node scripts/stamp-sw.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.48.0"

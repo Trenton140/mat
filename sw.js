@@ -5,8 +5,10 @@
 //   SW_VERSION, and served cache-first. There is no build step, so SHELL is
 //   written by hand: tests/sw-list.test.js fails when a file under css/ or
 //   js/, index.html, the manifest or an icon is missing from it, or when it
-//   names a file that does not exist. Change SW_VERSION whenever a shell file
-//   changes, so phones fetch the new shell.
+//   names a file that does not exist. SW_VERSION is a short hash of every
+//   shell file, written by `npm run stamp` (scripts/stamp-sw.mjs); the same
+//   test fails when it no longer matches the files, so a changed shell always
+//   reaches the phones as a new worker.
 // - A new worker takes over at once (skipWaiting, then clients.claim) and
 //   deletes the older shells. The page is not reloaded for it: the next
 //   open gets the new shell.
@@ -16,7 +18,7 @@
 //   script.googleusercontent.com), and anything else not listed here.
 // - Only OK answers are ever kept.
 
-const SW_VERSION = "1";
+const SW_VERSION = "4cd5700a10";
 const SHELL_CACHE = "mat-shell-" + SW_VERSION;
 const FONT_CACHE = "mat-fonts";
 
@@ -25,6 +27,7 @@ const SHELL = [
   "index.html",
   "manifest.webmanifest",
   "icons/icon-180.png",
+  "icons/icon-192.png",
   "icons/icon-512.png",
   "css/base.css",
   "css/history.css",
@@ -99,11 +102,25 @@ async function font(event) {
   return (await fresh) || emptyFont(request);
 }
 
+// Opening the app with nothing kept and no signal: a plain page, not an error.
+function offlinePage() {
+  const html = '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' +
+    "<title>MAT</title><body style=\"margin:0;min-height:100vh;display:grid;place-items:center;background:#1A1614;color:#F4F0EA;" +
+    'font:700 17px/1.4 system-ui,sans-serif;text-align:center;padding:24px;box-sizing:border-box"><p>No signal. Open again when you have some.</p></body>';
+  return new Response(html, { status: 200, headers: { "Content-Type": "text/html; charset=utf-8" } });
+}
+
 async function shell(request) {
+  const navigate = request.mode === "navigate";
   const cache = await caches.open(SHELL_CACHE);
   // Opening the app is always the kept front page.
-  const kept = request.mode === "navigate" ? await cache.match("./") : await cache.match(request);
-  return kept || fetch(request);
+  const kept = navigate ? await cache.match("./") : await cache.match(request);
+  if (kept) return kept;
+  try {
+    return await fetch(request);
+  } catch {
+    return navigate ? offlinePage() : Response.error();
+  }
 }
 
 self.addEventListener("fetch", (event) => {

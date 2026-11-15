@@ -88,3 +88,16 @@ i{font-style:normal}
 @media (prefers-reduced-motion: reduce){
   *,*::before,*::after{animation-duration:.01ms !important;transition-duration:.01ms !important}
 }
+
+/* The no-key screen's way in: paste the trip link. */
+.gate{align-content:center;gap:14px}
+.gate-key{width:100%;max-width:300px;display:grid;gap:8px}
+.gate-key label{color:var(--text);font-weight:700;font-size:14.5px}
+.gate-key-r{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px}
+.gate-key input{width:100%;height:48px;padding:0 12px;border:1.5px solid var(--key-hi);border-radius:6px;background:var(--key);color:var(--text);
+  font-size:16px;font-weight:700;outline:none}
+.gate-key input:focus{border-color:var(--text)}
+.gate-key button{height:48px;padding:0 18px;border:0;border-radius:6px;background:var(--paper);color:var(--print);font-weight:900;font-size:15.5px;transition:transform .15s ease-out}
+.gate-key button:active{transform:scale(.97)}
+.gate-key-m{min-height:1.35em;color:var(--text);font-weight:700;font-size:14px}
+.gate-key-m:empty{min-height:0}

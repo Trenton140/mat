@@ -1,7 +1,8 @@
 // Draws the home-screen icons: the app's own vermilion 済 stamp
 // (paidStampSVG from js/stamp.js) centred on the dark ground #1A1614, and
-// writes icons/icon-180.png (iOS, no transparency) and icons/icon-512.png
-// (the stamp kept inside the middle 80%, so it is safe as a maskable icon).
+// writes icons/icon-180.png (iOS), icons/icon-192.png and icons/icon-512.png
+// (the stamp kept inside the middle 80%, so it is also safe as a maskable
+// icon). None has any transparency.
 //
 // Run once with: node scripts/make-icons.cjs   (needs local Chrome)
 // The seal face is Zen Antique when Google Fonts can be reached, else the
@@ -19,6 +20,7 @@ const ROT = -8; // degrees, as a stamp lands
 // size -> how wide the stamp is, as a share of the icon
 const ICONS = [
   { size: 180, file: "icon-180.png", stamp: 0.8 },
+  { size: 192, file: "icon-192.png", stamp: 0.8 },
   { size: 512, file: "icon-512.png", stamp: 0.7 },
 ];
 

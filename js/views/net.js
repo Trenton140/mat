@@ -1,5 +1,6 @@
 // The "no signal" strip (#net), across the top of the phone, above the
-// sentence. It shows while the phone has no signal, or while a line rung up
+// sentence. It shows while the phone has no signal ("No signal." alone when
+// this phone has never loaded anything), or while a line rung up
 // is held on the phone for the next contact, and says how many lines are
 // still to send. While it shows, the screens move down by its height (the
 // --net-h property on the phone), so it never covers the sentence, and it
@@ -8,6 +9,7 @@
 // mountNet(root, store) adds #net to root (the phone).
 
 const NO_SIGNAL = "No signal. Showing what this phone last saw.";
+const NOTHING_YET = "No signal.";
 
 export function mountNet(root, store) {
   const strip = document.createElement("div");
@@ -30,7 +32,8 @@ export function mountNet(root, store) {
   function render(s) {
     const { unsent, waiting } = store.outbox();
     const show = !s.online || waiting > 0;
-    words.textContent = s.online ? "" : NO_SIGNAL;
+    // With nothing loaded yet there is nothing being shown: just "No signal."
+    words.textContent = s.online ? "" : s.loadedAt === null ? NOTHING_YET : NO_SIGNAL;
     count.textContent = unsent > 0 ? (s.online ? "" : " ") + unsent + " to send." : "";
     if (strip.hidden === show) {
       strip.hidden = !show;

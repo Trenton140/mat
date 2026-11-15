@@ -11,9 +11,12 @@ function fail(code, message) {
 }
 
 const NO_SIGNAL = "Couldn’t reach the trip sheet.";
+// How long one request may take, reply included, before it counts as no
+// signal. Weak signal must not leave requests piling up.
+export const API_TIMEOUT_MS = 30000;
 const BAD_REPLY = "The trip sheet sent back something unexpected.";
 
-export function createApi({ url, getKey, getActor, fetchImpl }) {
+export function createApi({ url, getKey, getActor, fetchImpl, timeoutMs = API_TIMEOUT_MS }) {
   return async function api(action, args = {}) {
     const body = { key: getKey(), actor: getActor(), via: "app", action, args };
     let env;
@@ -28,15 +31,33 @@ export function createApi({ url, getKey, getActor, fetchImpl }) {
       const doFetch = fetchImpl || globalThis.fetch;
       if (!url || typeof doFetch !== "function") throw fail("network", NO_SIGNAL);
       let text;
+      const abort = typeof AbortController === "function" ? new AbortController() : null;
+      let timer;
+      // Gives up at the timeout even if the fetch ignores the abort.
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+          if (abort) abort.abort();
+          reject(new Error("timeout"));
+        }, timeoutMs);
+        // Under Node (the unit tests) a pending request must not hold the process open.
+        if (timer && typeof timer.unref === "function") timer.unref();
+      });
       try {
-        const res = await doFetch(url, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain;charset=utf-8" },
-          body: JSON.stringify(body),
-        });
-        text = await res.text();
+        const request = (async () => {
+          const res = await doFetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "text/plain;charset=utf-8" },
+            body: JSON.stringify(body),
+            signal: abort ? abort.signal : undefined,
+          });
+          return res.text();
+        })();
+        request.catch(() => {}); // when the timeout wins, its later failure is not news
+        text = await Promise.race([request, timeout]);
       } catch {
         throw fail("network", NO_SIGNAL);
+      } finally {
+        clearTimeout(timer);
       }
       try {
         env = JSON.parse(text);

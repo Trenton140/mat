@@ -58,7 +58,7 @@ function takeKey(storage) {
 }
 
 // The phone's storage, except that mat.key falls back to the key from this
-// visit's link when the phone could not keep it.
+// visit (its link, or a pasted one) when the phone could not keep it.
 function withKey(storage, keyHere) {
   return {
     getItem(k) {
@@ -68,7 +68,7 @@ function withKey(storage, keyHere) {
       } catch {
         v = null;
       }
-      return v === null && k === "mat.key" ? keyHere : v;
+      return v === null && k === "mat.key" ? keyHere() : v;
     },
     setItem: (k, v) => storage.setItem(k, v),
   };
@@ -76,7 +76,8 @@ function withKey(storage, keyHere) {
 
 function start() {
   const raw = phoneStorage();
-  const storage = withKey(raw, takeKey(raw));
+  let keyHere = takeKey(raw);
+  const storage = withKey(raw, () => keyHere);
 
   const connected = !!API_URL || typeof globalThis.MAT_FAKE_API === "function";
   let store;
@@ -128,7 +129,20 @@ function start() {
   });
   mountUndoBar(phone, store);
   mountNet(phone, store);
-  mountFirst(phone, store, { connected, storage });
+  mountFirst(phone, store, {
+    connected,
+    storage,
+    // A key pasted on the no-key screen: keep it and start, without a reload.
+    onKey: (key) => {
+      keyHere = key;
+      try {
+        raw.setItem("mat.key", key);
+      } catch {
+        // nowhere to keep it: it works for this visit only
+      }
+      store.boot();
+    },
+  });
 
   document.getElementById("ring").addEventListener("click", () => {
     if (store.state.trip && store.state.trip.start) ring(defaultRingDay(store.state.trip, Date.now()));
@@ -146,10 +160,17 @@ function start() {
   // Staying in step with the other phones: ask whether anything changed
   // every 20 seconds while the app is on screen, at once when it comes back
   // on screen, and when signal returns (after sending what was waiting).
+  // One check at a time: on weak signal a slow check is not joined by more.
   let checking = null;
+  let inFlight = null;
   const check = () => {
+    if (inFlight) return inFlight;
     const st = store.state.status;
-    if (st === "ready" || st === "error") store.checkRev();
+    if (st !== "ready" && st !== "error") return Promise.resolve();
+    inFlight = store.checkRev().finally(() => {
+      inFlight = null;
+    });
+    return inFlight;
   };
   const startChecking = () => {
     if (connected && !checking) checking = setInterval(check, CHECK_MS);
@@ -179,14 +200,30 @@ function start() {
 // The offline shell (sw.js). Quietly does nothing where service workers are
 // missing or blocked. A new worker takes over at once, but this page is not
 // reloaded for it (someone may be mid-entry): the next open gets the new shell.
+// An app on the Home Screen often comes back without loading again, so the
+// worker is also asked to look for a new version whenever the app comes back
+// on screen. Registered before start(), so a broken start still gets fixed.
 function registerWorker() {
   try {
     if (!("serviceWorker" in navigator)) return;
-    Promise.resolve(navigator.serviceWorker.register("sw.js")).catch(() => {});
+    let registration = null;
+    Promise.resolve(navigator.serviceWorker.register("sw.js"))
+      .then((r) => {
+        registration = r || null;
+      })
+      .catch(() => {});
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden" || !registration || typeof registration.update !== "function") return;
+      try {
+        Promise.resolve(registration.update()).catch(() => {});
+      } catch {
+        // nothing to do: the next open looks again
+      }
+    });
   } catch {
     // not allowed here
   }
 }
 
-start();
 registerWorker();
+start();

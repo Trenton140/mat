@@ -164,10 +164,67 @@ module.exports = [
     name: "no key: says so and loads nothing",
     async run({ page }) {
       const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null });
-      await expectText(page, "#gate", "This link is missing its key. Ask Mo to send you the trip link again.");
+      await expectText(page, "#gate p", "This link is missing its key. Ask Mo to send you the trip link again.");
       assert.ok(await visible(page, "#gate"));
       assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0, "#rc is empty");
       assert.equal(backend.requests.length, 0, "no calls without a key");
+    },
+  },
+  {
+    name: "no key: pasting the trip link opens the trip without a reload, and keeps the key off the screen and the address",
+    async run({ page }) {
+      const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null });
+      await expectText(page, "#gate p", "This link is missing its key. Ask Mo to send you the trip link again.");
+      assert.ok(await visible(page, "#keyPaste"));
+      assert.equal(await text(page, 'label[for="keyPaste"]'), "Or paste your trip link here");
+      assert.equal(await text(page, "#keyGo"), "Open");
+      const field = await page.evaluate(() => {
+        const f = document.getElementById("keyPaste");
+        return { cap: f.getAttribute("autocapitalize"), cor: f.getAttribute("autocorrect"), size: parseFloat(getComputedStyle(f).fontSize) };
+      });
+      assert.equal(field.cap, "none");
+      assert.equal(field.cor, "off");
+      assert.ok(field.size >= 16, "16 px or more, so Safari does not zoom: " + field.size);
+      await page.evaluate(() => {
+        globalThis.__marker = 1; // gone if the page reloads
+      });
+
+      for (const bad of ["", "   ", "hello there", "http://localhost:4173/", "http://localhost:4173/#x=1", "#k=", "abc"]) {
+        await page.fill("#keyPaste", bad);
+        await page.click("#keyGo");
+        await expectText(page, "#keyMsg", "That doesn’t look like a trip link.");
+      }
+      assert.equal(backend.requests.length, 0, "a bad paste calls nothing");
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), null);
+
+      await page.fill("#keyPaste", "  http://localhost:4173/#k=test-key  ");
+      await page.click("#keyGo");
+      await waitRows(page, 8);
+      assert.equal(await visible(page, "#gate"), false);
+      assert.equal(await page.evaluate(() => globalThis.__marker), 1, "no reload");
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), "test-key");
+      assert.equal(await page.evaluate(() => location.hash), "");
+      assert.equal(await page.evaluate(() => location.href.includes("test-key")), false);
+      assert.equal(await page.evaluate(() => document.body.innerText.includes("test-key")), false, "the key is not drawn");
+      assert.equal(await page.inputValue("#keyPaste"), "", "the field lets the key go");
+    },
+  },
+  {
+    name: "no key: a bare key works too; one the trip refuses comes back to the same screen",
+    async run({ page }) {
+      const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null });
+      await until(() => visible(page, "#keyPaste"), "the paste field");
+      await page.fill("#keyPaste", "wrong-key-123");
+      await page.click("#keyGo");
+      await until(() => backend.requests.some((r) => r.action === "load"), "it tries the key");
+      await expectText(page, "#gate p", "This link is missing its key. Ask Mo to send you the trip link again.");
+      assert.ok(await visible(page, "#keyPaste"));
+      assert.equal(await rowCount(page), 0);
+
+      await page.fill("#keyPaste", "test-key");
+      await page.press("#keyPaste", "Enter");
+      await waitRows(page, 8);
+      assert.equal(await visible(page, "#gate"), false);
     },
   },
   {
@@ -182,7 +239,8 @@ module.exports = [
         if (new URL(r.url()).hostname !== "localhost" && !r.url().includes("fonts.googleapis.com")) outside.push(r.url());
       });
       await page.goto(ORIGIN + "/");
-      await expectText(page, "#gate", "This app isn’t connected yet.");
+      await expectText(page, "#gate p", "This app isn’t connected yet.");
+      assert.equal(await visible(page, "#keyPaste"), false, "no paste field when the app is not connected");
       assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0);
       assert.deepEqual(outside, [], "no request to any other host (fonts aside)");
       assert.equal(backend.requests.length, 0, "the bridge received nothing");

@@ -54,7 +54,7 @@ module.exports = [
       assert.equal(await text(page, "#you .sheet-top span"), "You設定");
       assert.equal(await page.evaluate(() => document.getElementById("you").contains(document.activeElement)), true, "focus moves into the sheet");
       const order = await page.evaluate(() => {
-        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setHow", "setInvite", "setSheet", "setReport"];
+        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setHow", "setInstall", "setInvite", "setSheet", "setReport"];
         const all = [...document.querySelectorAll("#you *")];
         return ids.map((id) => all.indexOf(document.getElementById(id)));
       });
@@ -259,6 +259,79 @@ module.exports = [
       assert.equal(expected, "http://localhost:4173/#k=test-key");
       assert.equal(await page.evaluate(() => document.body.innerText.includes("test-key") || document.body.innerHTML.includes("test-key")), false, "the key is not drawn anywhere");
       assert.equal(await page.evaluate(() => location.hash), "", "and not in the address bar");
+    },
+  },
+  {
+    name: "Add to Home Screen copies the link, carries the key in the address and the manifest, shows two steps; closing takes it all back",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      assert.ok(await visible(page, "#setInstall"));
+      assert.equal(await page.evaluate(() => document.querySelector("#setInstall > span").firstChild.textContent), "Add to Home Screen");
+      assert.equal(await text(page, "#setInstall small"), "Opens like an app, full screen");
+      assert.equal(await visible(page, "#setInstallHow"), false, "the steps wait for the tap");
+      const original = await page.evaluate(() => {
+        const l = document.querySelector('link[rel="manifest"]');
+        return { href: l.getAttribute("href"), count: document.querySelectorAll('link[rel="manifest"]').length };
+      });
+      assert.deepEqual(original, { href: "manifest.webmanifest", count: 1 });
+
+      await page.click("#setInstall");
+      await expectText(page, "#ubarT", "Link copied.");
+      assert.equal(await clipboard(page), "http://localhost:4173/#k=test-key");
+      assert.equal(await page.evaluate(() => location.hash), "#k=test-key");
+      const steps = await page.$$eval("#setInstallHow > span", (els) => els.map((e) => e.textContent));
+      assert.deepEqual(steps, ["1. Tap Share, then Add to Home Screen.", "2. If it asks for your trip link, paste: it’s already copied."]);
+      assert.ok(await visible(page, "#setInstallHow"));
+      const m = await until(
+        () => page.evaluate(async () => {
+          const links = document.querySelectorAll('link[rel="manifest"]');
+          if (links.length !== 1 || !links[0].href.startsWith("blob:")) return null;
+          return (await fetch(links[0].href)).json();
+        }),
+        "a keyed manifest stands in",
+      );
+      assert.ok(m.start_url.endsWith("#k=test-key"), m.start_url);
+      assert.equal(m.start_url, "http://localhost:4173/#k=test-key");
+      assert.equal(m.scope, "http://localhost:4173/");
+      assert.equal(m.id, "http://localhost:4173/");
+      assert.equal(m.name, "MAT Japan 2026");
+      assert.ok(m.icons.length > 0 && m.icons.every((i) => i.src.startsWith("http://localhost:4173/icons/")), "absolute icon URLs");
+      assert.equal(await page.evaluate(() => document.body.innerText.includes("test-key")), false, "the key is not drawn");
+
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      assert.equal(await page.evaluate(() => location.hash), "", "the key leaves the address bar");
+      const after = await page.evaluate(() => {
+        const l = document.querySelectorAll('link[rel="manifest"]');
+        return { href: l[0].getAttribute("href"), count: l.length };
+      });
+      assert.deepEqual(after, original, "the page's own manifest is back");
+      await openYou(page);
+      assert.equal(await visible(page, "#setInstallHow"), false, "the steps are folded away again");
+    },
+  },
+  {
+    name: "Add to Home Screen is hidden when the app already runs from the Home Screen",
+    async run({ page, newPhone }) {
+      // This Chrome cannot emulate display-mode, so the page is told it runs
+      // standalone the two ways a phone says so: the media query, and iOS's
+      // navigator.standalone.
+      await page.addInitScript(() => {
+        const real = window.matchMedia.bind(window);
+        window.matchMedia = (q) => (/display-mode:\s*standalone/.test(q) ? { ...real(q), matches: true, media: q } : real(q));
+      });
+      await ready(page);
+      assert.equal(await page.evaluate(() => matchMedia("(display-mode: standalone)").matches), true, "standalone is emulated");
+      await openYou(page);
+      assert.equal(await visible(page, "#setInstall"), false);
+      assert.ok(await visible(page, "#setInvite"));
+
+      const ios = await newPhone();
+      await ios.addInitScript(() => Object.defineProperty(Navigator.prototype, "standalone", { get: () => true, configurable: true }));
+      await ready(ios);
+      await openYou(ios);
+      assert.equal(await visible(ios, "#setInstall"), false, "hidden on an iPhone Home Screen app too");
     },
   },
   {
