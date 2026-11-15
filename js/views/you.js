@@ -11,7 +11,8 @@
 import { APP_VERSION } from "../config.js";
 import { soundOn, setSound } from "../sound.js";
 import { clock, dayHead, localDay, freshText, historySentence } from "../format.js";
-import { HOW_LINES } from "./first.js";
+import { HOW_LINES, standalone } from "./first.js";
+import { copyText } from "../clip.js";
 
 const NOT_YET = "Not updated yet";
 const HISTORY_UNAVAILABLE = "history unavailable";
@@ -37,7 +38,7 @@ const MARKUP = `
   <button type="button" class="set-r" id="setHow" aria-expanded="false" aria-controls="setHowLines"><span>How this works</span><b id="setHowV">Show</b></button>
   <div class="how" id="setHowLines" hidden></div>
   <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
-  <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For Ajen and Trenton; keep it between you</small></span><b>Copy</b></button>
+  <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b>Copy</b></button>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
   <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b>Copy</b></button>
 </div>`;
@@ -51,9 +52,11 @@ function el(tag, cls, text) {
 
 // The note "Report a problem" copies. Pure: the view gathers the inputs.
 // sentences: the newest history sentences, newest first, or null when the
-// history could not be fetched. The trip key is never part of it.
-export function reportText({ me, screen, version, when, sentences }) {
+// history could not be fetched. setAside: the Sheet rows the app left out
+// (store.state.setAside). The trip key is never part of it.
+export function reportText({ me, screen, version, when, sentences, setAside = [] }) {
   const lines = ["MAT: a problem to look at", "Who: " + (me || "nobody chosen"), "Screen: " + screen, "App version: " + version, "Time: " + when];
+  if (setAside.length) lines.push("Lines in the Sheet the app can’t read: " + setAside.map((x) => x.id).join(", "));
   if (sentences === null || sentences === undefined) lines.push("Latest changes: " + HISTORY_UNAVAILABLE);
   else if (!sentences.length) lines.push("Latest changes: none yet");
   else lines.push("Latest changes, newest first:", ...sentences.slice(0, REPORT_LINES).map((x) => "- " + x));
@@ -64,57 +67,6 @@ export function reportText({ me, screen, version, when, sentences }) {
 // "Sat Dec 12, 13:20", in the phone's own clock.
 function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
-}
-
-// Puts text (or a promise of it) on the clipboard; true when it worked. A
-// promise goes in as a ClipboardItem so Safari still counts the tap that
-// started it, even when the text takes a moment to build.
-async function copyText(text) {
-  try {
-    if (typeof text !== "string" && globalThis.ClipboardItem && navigator.clipboard.write) {
-      const blob = Promise.resolve(text).then((t) => new Blob([t], { type: "text/plain" }));
-      blob.catch(() => {}); // a text that cannot be built is answered below, not left unhandled
-      await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
-      return true;
-    }
-  } catch {
-    // fall through to the plain copy below
-  }
-  let plain;
-  try {
-    plain = await text;
-  } catch {
-    return false; // the text could not be built: nothing to copy
-  }
-  try {
-    await navigator.clipboard.writeText(plain);
-    return true;
-  } catch {
-    // an older phone: fall back to the selection copy
-  }
-  try {
-    const t = document.createElement("textarea");
-    t.value = plain;
-    t.setAttribute("readonly", "");
-    t.style.cssText = "position:fixed;top:0;left:0;opacity:0";
-    document.body.append(t);
-    t.select();
-    const ok = document.execCommand("copy");
-    t.remove();
-    return ok;
-  } catch {
-    return false;
-  }
-}
-
-// Already opened from the Home Screen (or as an installed app).
-function standalone() {
-  try {
-    if (globalThis.navigator && navigator.standalone === true) return true;
-    return typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches;
-  } catch {
-    return false;
-  }
 }
 
 export function mountYou(root, store, { onHistory = () => {}, getKey = () => null, screen = "Money" } = {}) {
@@ -382,7 +334,7 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   async function reportNote() {
     const h = await store.loadHistory();
     const sentences = !h || h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
-    return reportText({ me: store.state.me, screen, version: APP_VERSION, when: whenText(Date.now()), sentences });
+    return reportText({ me: store.state.me, screen, version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [] });
   }
   report.addEventListener("click", async () => {
     if (reporting) return;

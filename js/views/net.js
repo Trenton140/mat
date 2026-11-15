@@ -8,7 +8,7 @@
 //
 // mountNet(root, store) adds #net to root (the phone).
 
-const NO_SIGNAL = "No signal. Showing what this phone last saw.";
+const SHOWING_LAST = "No signal. Showing what this phone last saw.";
 const NOTHING_YET = "No signal.";
 
 export function mountNet(root, store) {
@@ -33,7 +33,7 @@ export function mountNet(root, store) {
     const { unsent, waiting } = store.outbox();
     const show = !s.online || waiting > 0;
     // With nothing loaded yet there is nothing being shown: just "No signal."
-    words.textContent = s.online ? "" : s.loadedAt === null ? NOTHING_YET : NO_SIGNAL;
+    words.textContent = s.online ? "" : s.loadedAt === null ? NOTHING_YET : SHOWING_LAST;
     count.textContent = unsent > 0 ? (s.online ? "" : " ") + unsent + " to send." : "";
     if (strip.hidden === show) {
       strip.hidden = !show;

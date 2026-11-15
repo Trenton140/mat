@@ -43,3 +43,9 @@ test("localDay is the phone's own day, and empty for no time", () => {
   assert.equal(localDay(Date.parse("2026-12-12T13:20:00")), "2026-12-12");
   assert.equal(localDay(NaN), "");
 });
+
+test("reportText lists the ids of Sheet lines the app left out (F3)", () => {
+  const t = reportText({ ...base, sentences: [], setAside: [{ kind: "expense", id: "exp00001", title: "Lodge", reason: "name" }, { kind: "payment", id: "pay00002", title: "Ajen → Moe", reason: "name" }] });
+  assert.ok(t.split("\n").includes("Lines in the Sheet the app can’t read: exp00001, pay00002"), t);
+  assert.equal(reportText({ ...base, sentences: [] }).includes("can’t read"), false);
+});

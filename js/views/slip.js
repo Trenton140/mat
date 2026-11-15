@@ -16,6 +16,7 @@ import { dollars, pt, dayHead, localDay } from "../format.js";
 import { paidStampSVG } from "../stamp.js";
 import { thud } from "../sound.js";
 import { drawWorking, routeSentence } from "./working.js";
+import { copyText } from "../clip.js";
 
 const ARM_MS = 8000;
 const FOLD = 2;
@@ -331,14 +332,7 @@ export function mountSlip(slip, store) {
   }
 
   function copy(text, done) {
-    const clip = globalThis.navigator && globalThis.navigator.clipboard;
-    const failed = () => store.notify("Couldn’t copy that.");
-    if (!clip || typeof clip.writeText !== "function") return failed();
-    try {
-      clip.writeText(text).then(() => store.notify(done), failed);
-    } catch {
-      failed();
-    }
+    return copyText(text).then((ok) => store.notify(ok ? done : "Couldn’t copy that."));
   }
 
   function remind(key) {

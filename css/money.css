@@ -6,8 +6,8 @@
 .say h1{margin:0;font-size:30px;font-weight:900;line-height:1.15;text-wrap:balance;font-variant-numeric:tabular-nums}
 .say p{margin:7px 0 0;color:var(--dim);font-size:13px}
 .say p b{font-weight:700;color:var(--text);font-variant-numeric:tabular-nums}
-.dg{display:inline-block}
-.dg.roll{animation:roll .28s cubic-bezier(.2,.8,.2,1)}
+.say .say-warn{margin-top:9px;padding-left:10px;border-left:3px solid var(--shu);color:var(--text);font-weight:700;font-size:13.5px;line-height:1.35}
+/* The arrival of the register's paper slips (#un, the undo bar). */
 @keyframes roll{from{transform:translateY(.55em);opacity:0}}
 
 .hist-btn{margin-top:12px;height:38px;padding:0 15px;border:1.5px solid var(--key-hi);border-radius:19px;background:none;color:var(--text);
@@ -146,7 +146,7 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
   background:linear-gradient(to top,var(--ground),rgba(26,22,20,0))}
 .nav button{border:0;background:none;color:var(--dim);display:grid;justify-items:center;font-weight:900;font-size:17px;line-height:1.2;padding:6px 10px}
 .nav button small{font-size:11px;font-weight:700}
-.nav button.is-active,.nav #youBtn{color:var(--text)}
+.nav #youBtn{color:var(--text)}
 .nav .ring{margin-left:auto;display:block;height:48px;padding:0 20px;border-radius:24px;background:var(--paper);color:var(--print);font-size:15.5px;transition:transform .15s ease-out}
 .nav .ring:active{transform:scale(.97)}
 .nav .ring[hidden]{display:none}

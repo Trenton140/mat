@@ -188,16 +188,29 @@ export function mountUneven(host, { onChange }) {
     }
     left.textContent = say;
     left.hidden = !say;
+    fit();
+  }
+
+  // The panel stands above the register: it may be no taller than the room
+  // there (a Safari tab on a small phone has little), and its rows scroll
+  // inside it while the title, Set split and the mode chips stay in view.
+  function fit() {
+    const phone = host.parentElement;
+    if (!phone) return;
+    const room = phone.clientHeight - host.offsetHeight - 16; // 8 px gap below, 8 above
+    un.style.setProperty("--un-room", Math.max(0, room) + "px");
   }
 
   function open() {
     if (!un.hidden) return;
     un.hidden = false;
+    host.classList.add("un-open");
     shown = "";
   }
 
   function close() {
     un.hidden = true;
+    host.classList.remove("un-open");
   }
 
   return { render, open, close, isOpen: () => !un.hidden };

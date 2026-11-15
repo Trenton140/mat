@@ -21,6 +21,9 @@ export const CHIPS = [
 ];
 
 const MAX_DIGITS = 8;
+// The biggest amount the backend takes (validateExpense in backend/Pure.js):
+// 10,000,000 in either currency, in the register's units (yen, or cents).
+export const MAX_UNITS = { JPY: 10000000, CAD: 1000000000 };
 const HOLD_MS = 500;
 const DAY_MS = 86400000;
 const FIELDS = ["title", "amount", "currency", "paidBy", "day", "kind"]; // split, splitMode, splitVals go together
@@ -140,7 +143,6 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
   const blank = () => ({ amt: "", tagged: null, split: names(), mode: null, parts: {}, exact: {} });
   let draft = { ...blank(), editId: null, orig: null, cur: storedCur(), payer: "", day: "pre", rate: null };
   let opened = false;
-  let sending = false;
   let peopleShown = "";
 
   const uneven = mountUneven(reg, { onChange: render });
@@ -177,7 +179,8 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
   }
 
   function canGo() {
-    return !sending && toUnits(draft.amt, draft.cur) > 0 && what.value.trim() !== "" && splitOf(draft).ok;
+    const units = toUnits(draft.amt, draft.cur);
+    return units > 0 && units <= MAX_UNITS[draft.cur] && what.value.trim() !== "" && splitOf(draft).ok;
   }
 
   function render() {
@@ -236,6 +239,8 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
       const dec = draft.amt.split(".")[1];
       let add = dec === undefined ? k : k.slice(0, 2 - dec.length);
       add = add.slice(0, MAX_DIGITS - draft.amt.replace(".", "").length);
+      // Nothing past the backend's limit: as much of the key as stays within it.
+      while (add && toUnits(draft.amt + add, draft.cur) > MAX_UNITS[draft.cur]) add = add.slice(0, -1);
       if (!add) return;
       draft.amt += add;
       if (/^0+$/.test(draft.amt)) draft.amt = "";
@@ -276,14 +281,11 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     // What stops a second tap is the reset: once the line is handed over the
     // amount is empty, so #kGo is disabled. It happens even if drawing the
     // line throws, so a retap can never send the same line twice.
-    sending = true;
-    go.disabled = true;
     const id = newId();
     try {
       store.addExpense({ id, ...line, note: "" }); // draws the line before it returns
     } finally {
       resetLine();
-      sending = false;
       render();
     }
     printLine(id);

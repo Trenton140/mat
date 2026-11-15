@@ -9,7 +9,17 @@ import { tripDay } from "../time.js";
 import { mountSlip, viewerOwed } from "./slip.js";
 import { yen, dollars, typed, dayHead, issuer, pt, freshText, sentence, tripSpan } from "../format.js";
 
-const NO_SIGNAL = "Couldn’t reach the trip sheet.";
+const UNREACHABLE = "Couldn’t reach the trip sheet.";
+const STAND_IN_RATE = "Yen is being converted at a stand-in rate of 111. Tell Mo.";
+
+// The one line about Sheet rows the app has left out (store.state.setAside).
+export function setAsideText(list) {
+  if (!list || !list.length) return "";
+  const why = [...new Set(list.map((x) => (x.reason === "name" ? "a name the app doesn’t know" : "an amount the app can’t read")))].join(", or ");
+  return list.length === 1
+    ? "1 line in the Sheet can’t be read (" + why + "). It’s left out of the totals. Tell Mo."
+    : list.length + " lines in the Sheet can’t be read (" + why + "). They’re left out of the totals. Tell Mo.";
+}
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -145,7 +155,16 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
   histN.hidden = true;
   histBtn.append(histN);
   const top = el("div", "say");
-  top.append(say, sayP, histBtn);
+  // Plain warnings about the figures, under the trip summary: a stand-in rate,
+  // and Sheet rows left out of the totals.
+  const rateNote = el("p", "say-warn");
+  rateNote.id = "rateNote";
+  rateNote.hidden = true;
+  const asideNote = el("p", "say-warn");
+  asideNote.id = "asideNote";
+  asideNote.setAttribute("role", "status");
+  asideNote.hidden = true;
+  top.append(say, sayP, rateNote, asideNote, histBtn);
   const slip = el("div", "slip");
   slip.id = "slip";
   const rc = el("div", "rc");
@@ -174,7 +193,9 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     const names = s.people.map((p) => p.name);
     if (!s.trip || !s.trip.start || !names.length) {
       say.textContent = "";
-      sayP.textContent = s.status === "error" ? NO_SIGNAL : "";
+      sayP.textContent = s.status === "error" ? UNREACHABLE : "";
+      rateNote.hidden = true;
+      asideNote.hidden = true;
       histBtn.hidden = true;
       slip.hidden = true;
       rc.replaceChildren();
@@ -188,6 +209,11 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     // The words stay dim; the three figures are bold and bright.
     sayP.replaceChildren("The trip so far is ", el("b", "", yen(sum(live, jpyOf))), ", about ", el("b", "", dollars(sum(live, cadCents))),
       ", across ", el("b", "", String(live.length)), live.length === 1 ? " receipt." : " receipts.");
+    rateNote.hidden = s.rateSource !== "fallback";
+    rateNote.textContent = rateNote.hidden ? "" : STAND_IN_RATE;
+    const aside = setAsideText(s.setAside);
+    asideNote.hidden = !aside;
+    asideNote.textContent = aside;
 
     const ctx = { me: s.me, online: s.online, seenAt: s.seenAt, people: s.people, names, days: s.days, nowMs: now() };
     // The one count of what is new: lines and stamps by someone else since you looked.

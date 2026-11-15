@@ -7,10 +7,14 @@
 //
 // The no-key screen also takes a pasted trip link (or the bare key): an app
 // opened from the Home Screen has storage of its own, without the key Safari
-// kept. The pasted key is never drawn anywhere else and never logged.
+// kept, and Safari itself clears a site's storage after a week without a
+// visit. The pasted key is never drawn anywhere else and never logged.
 
 export const HOW_LINES = ["Ring up what you paid.", "The slip says who pays whom.", "Stamp it the moment you send."];
-const NO_KEY = "This link is missing its key. Ask Mo to send you the trip link again.";
+// Under the three lines, only in Safari (not from the Home Screen).
+const HOW_HOME = "Add it to your Home Screen from You 設定, so this phone stays signed in.";
+const NO_KEY = "This phone needs the trip link. Open it from your chat again, or paste it here.";
+const KEY_REFUSED = "That trip link didn’t work. Ask Mo for the current one.";
 const NOT_CONNECTED = "This app isn’t connected yet.";
 const BAD_PASTE = "That doesn’t look like a trip link.";
 const KEY_SHAPE = /^[A-Za-z0-9_-]{6,200}$/;
@@ -32,6 +36,16 @@ export function keyFromPaste(text) {
     }
   }
   return KEY_SHAPE.test(key) ? key : null;
+}
+
+// Already opened from the Home Screen (or as an installed app).
+export function standalone() {
+  try {
+    if (globalThis.navigator && globalThis.navigator.standalone === true) return true;
+    return typeof matchMedia === "function" && matchMedia("(display-mode: standalone)").matches;
+  } catch {
+    return false;
+  }
 }
 
 function el(tag, cls, text) {
@@ -97,13 +111,14 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
   gate.hidden = true;
   const gateText = el("p");
   // A way in when the key is missing: paste the trip link.
+  // The sentence above says what the field is for; no label of its own.
   const paste = el("div", "gate-key");
-  const pasteLabel = el("label", "", "Or paste your trip link here");
-  pasteLabel.htmlFor = "keyPaste";
   const pasteRow = el("div", "gate-key-r");
   const pasteField = el("input");
   pasteField.id = "keyPaste";
   pasteField.type = "text";
+  pasteField.setAttribute("aria-label", "Trip link");
+  pasteField.placeholder = "Trip link";
   for (const [k, v] of Object.entries({ autocapitalize: "none", autocorrect: "off", autocomplete: "off", spellcheck: "false", enterkeyhint: "go", inputmode: "url" })) {
     pasteField.setAttribute(k, v);
   }
@@ -114,7 +129,7 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
   pasteMsg.id = "keyMsg";
   pasteMsg.setAttribute("role", "alert");
   pasteRow.append(pasteField, pasteGo);
-  paste.append(pasteLabel, pasteRow, pasteMsg);
+  paste.append(pasteRow, pasteMsg);
   gate.append(gateText, paste);
 
   function usePaste() {
@@ -146,6 +161,10 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
   const how = veil("how", "How this works", "How this works");
   const lines = el("div", "how");
   for (const text of HOW_LINES) lines.append(el("div", "how-l", text)); // numbered by CSS
+  const home = el("p", "how-x", HOW_HOME);
+  home.id = "howHome";
+  home.hidden = standalone();
+  lines.append(home);
   const ok = el("button", "go-btn", "Got it");
   ok.type = "button";
   ok.id = "howOk";
@@ -182,10 +201,11 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
   }
 
   function render(s) {
-    const blocked = !connected ? NOT_CONNECTED : s.status === "nokey" ? NO_KEY : null;
+    const keyless = connected && s.status === "nokey";
+    const blocked = !connected ? NOT_CONNECTED : keyless ? (s.keyRefused ? KEY_REFUSED : NO_KEY) : null;
     gate.hidden = !blocked;
     if (blocked) gateText.textContent = blocked;
-    paste.hidden = blocked !== NO_KEY;
+    paste.hidden = !keyless;
     const needMe = !blocked && s.status === "ready" && !s.me && s.people.length > 0;
     if (needMe) drawPeople(s.people);
     setOpen(first, needMe);

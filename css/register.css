@@ -46,7 +46,21 @@
 
 /* ---------- uneven split: a paper slip that stands above the register ---------- */
 .un{position:absolute;left:var(--gl);right:var(--gr);bottom:calc(100% + 8px);padding:8px 12px 10px;border-radius:8px;
-  background:var(--paper);color:var(--print);box-shadow:0 14px 28px -8px #000;animation:roll .22s ease-out}
+  background:var(--paper);color:var(--print);box-shadow:0 14px 28px -8px #000;animation:roll .22s ease-out;
+  display:flex;flex-direction:column;max-height:calc(var(--un-room, 100vh) - env(safe-area-inset-top, 0px))}
+.un[hidden]{display:none}
+/* Only the rows scroll: the title with Set split, the mode chips and what is left stay put. */
+.un-top,.un-mode,.un-left{flex:none}
+.un-rows{flex:0 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain}
+/* A short screen (a Safari tab): while the panel is open the register gives
+   it room by folding away the quick chips and lowering the keys. */
+@media (max-height:720px){
+  .reg.un-open .chips{display:none}
+  .reg.un-open .key{height:40px}
+}
+@media (max-height:600px){
+  .reg.un-open .key{height:36px}
+}
 .un-top{display:flex;justify-content:space-between;align-items:center;height:34px;font-weight:900;font-size:16px}
 .un-top button{border:0;background:none;color:var(--print);font-weight:900;font-size:15px;height:34px;padding:0 4px;opacity:.7}
 .un-mode{display:flex;gap:6px;margin:2px 0 4px}
