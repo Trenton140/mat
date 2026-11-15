@@ -750,3 +750,169 @@ test("the key check reads the cached key, not Script Properties, and compares wh
   }
   assert.equal(fake.propReads.includes("TRIP_KEY"), false);
 });
+
+// ---------- the trip side: stops, stays and day headers (Plan 2, Task 2) ----------
+
+const AS = (actor) => ({ actor });
+
+test("a stop: add, repeat, edit, delete, restore, each logged", async () => {
+  const call = client({});
+  const stop = { id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky", time: "14:00" };
+  const a = await call("addStop", { stop });
+  assert.equal(a.data.stop.title, "Shibuya Sky");
+  const again = await call("addStop", { stop }, AS("Ajen"));
+  assert.equal(again.data.logId, a.data.logId);
+  assert.equal(call.fake.tables.Stops.length, 1);
+  const e = await call("updateStop", { id: stop.id, patch: { time: "15:30" } }, AS("Ajen"));
+  assert.equal(e.data.stop.time, "15:30");
+  assert.equal((await call("updateStop", { id: stop.id, patch: { time: "15:30" } }, AS("Ajen"))).data.logId, null);
+  assert.equal((await call("updateStop", { id: stop.id, patch: { time: "nope" } })).error, "bad_input");
+  assert.equal((await call("updateStop", { id: stop.id, patch: { id: "other000001" } })).error, "bad_input");
+  const d = await call("deleteStop", { id: stop.id });
+  assert.equal(d.data.stop.deleted, true);
+  assert.equal((await call("updateStop", { id: stop.id, patch: { time: "16:00" } })).message, "Bring it back first.");
+  assert.equal((await call("restoreStop", { id: stop.id })).data.stop.deleted, false);
+  const h = await call("history", {});
+  assert.deepEqual(h.data.entries.map((x) => x.summary), ["put back Shibuya Sky on Sat Dec 12", "removed Shibuya Sky from Sat Dec 12", "moved Shibuya Sky to Sat Dec 12 15:30", "added Shibuya Sky to Sat Dec 12"]);
+});
+
+test("undo puts a stop back, and refuses once it changed again", async () => {
+  const call = client({ stops: [{ id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky", time: "14:00" }] });
+  const e1 = await call("updateStop", { id: "stopAAAA0001", patch: { time: "15:30" } });
+  const e2 = await call("updateStop", { id: "stopAAAA0001", patch: { title: "Sky deck" } }, AS("Ajen"));
+  assert.equal((await call("undo", { logId: e1.data.logId })).error, "stale");
+  const u = await call("undo", { logId: e2.data.logId });
+  assert.equal(u.data.stop.title, "Shibuya Sky");
+  assert.equal(u.data.stop.time, "15:30");
+});
+
+test("undoing an added stop marks it deleted; nothing is erased", async () => {
+  const call = client({});
+  const a = await call("addStop", { stop: { id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky" } });
+  const u = await call("undo", { logId: a.data.logId });
+  assert.equal(u.data.stop.deleted, true);
+  assert.equal(call.fake.tables.Stops.length, 1);
+});
+
+test("a stay: saved, changed, removed, undone", async () => {
+  const call = client({});
+  const stay = { id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12" };
+  assert.equal((await call("saveStay", { stay })).data.stay.name, "Asakusa hotel");
+  const e = await call("saveStay", { stay: { ...stay, nameJp: "浅草ホテル" } });
+  assert.equal(e.data.stay.nameJp, "浅草ホテル");
+  assert.equal(call.fake.tables.Stays.length, 1);
+  assert.equal((await call("undo", { logId: e.data.logId })).data.stay.nameJp, "");
+  assert.equal((await call("deleteStay", { id: stay.id })).data.stay.deleted, true);
+});
+
+test("a day header: set, logged, undone; an unknown day is refused", async () => {
+  const call = client({});
+  const s = await call("setDay", { date: "2026-12-12", patch: { city: "Tokyo", lineColour: "#9ACD32" } });
+  assert.equal(s.data.day.city, "Tokyo");
+  assert.equal((await call("undo", { logId: s.data.logId })).data.day.city, "");
+  assert.equal((await call("setDay", { date: "2026-12-25", patch: { city: "x" } })).error, "not_found");
+});
+
+test("load returns the typed plan, and migrate is safe to repeat", async () => {
+  const plan = require("./fixtures/plan.json");
+  const call = client(plan);
+  const l = await call("load", {});
+  const sky = l.data.stops.find((s) => s.id === "planstop1203");
+  assert.deepEqual([sky.travelMin, sky.fixed, sky.signJp, sky.deleted], [30, true, "渋谷", false]);
+  assert.equal(l.data.days.find((d) => d.date === "2026-12-12").lineJp, "山手線");
+  assert.equal(l.data.stays[0].firstNight, "2026-12-10");
+  assert.deepEqual((await call("migrate", {}, AS(undefined))).data, { added: [] });
+  assert.deepEqual((await call("migrate", {}, AS(undefined))).data, { added: [] });
+});
+
+test("every new write needs a known actor; nothing is written without one", async () => {
+  const call = client({ stops: [{ id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky" }], stays: [{ id: "stayAAAA0001", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15" }] });
+  const writes = [
+    ["addStop", { stop: { id: "stopAAAA0002", date: "2026-12-12", title: "Lunch" } }],
+    ["updateStop", { id: "stopAAAA0001", patch: { time: "10:00" } }],
+    ["deleteStop", { id: "stopAAAA0001" }],
+    ["restoreStop", { id: "stopAAAA0001" }],
+    ["saveStay", { stay: { id: "stayAAAA0002", name: "Hotel", firstNight: "2026-12-10", lastNight: "2026-12-12" } }],
+    ["deleteStay", { id: "stayAAAA0001" }],
+    ["restoreStay", { id: "stayAAAA0001" }],
+    ["setDay", { date: "2026-12-12", patch: { city: "Tokyo" } }],
+  ];
+  const logBefore = call.fake.tables.Log.length;
+  for (const [action, args] of writes) {
+    for (const actor of [undefined, "Nobody", ""]) {
+      const r = await call(action, args, AS(actor));
+      assert.equal(r.error, "bad_input", action);
+      assert.equal(r.message, "Pick who you are first.", action);
+    }
+  }
+  assert.equal(call.fake.tables.Log.length, logBefore);
+  assert.equal(call.fake.tables.Stops.length, 1);
+  assert.equal(call.fake.tables.Stays.length, 1);
+});
+
+test("a stop written by Claude is logged with via claude", async () => {
+  const call = client({});
+  await call("addStop", { stop: { id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky" } }, { via: "claude" });
+  const [entry] = await historyAll(call);
+  assert.equal(entry.via, "claude");
+  assert.equal(entry.kind, "stop");
+});
+
+test("plan writes that find nothing answer not_found with their own words", async () => {
+  const call = client({});
+  for (const [action, args, message] of [
+    ["updateStop", { id: "stopZZZZ0001", patch: { time: "10:00" } }, "That stop isn’t there any more."],
+    ["deleteStop", { id: "stopZZZZ0001" }, "That stop isn’t there any more."],
+    ["restoreStop", { id: "stopZZZZ0001" }, "That stop isn’t there any more."],
+    ["deleteStay", { id: "stayZZZZ0001" }, "That stay isn’t there any more."],
+    ["restoreStay", { id: "stayZZZZ0001" }, "That stay isn’t there any more."],
+    ["setDay", { date: "2026-12-25", patch: { city: "x" } }, "That day isn’t on this trip."],
+  ]) {
+    const r = await call(action, args);
+    assert.equal(r.error, "not_found", action);
+    assert.equal(r.message, message, action);
+  }
+});
+
+test("a stop or stay write that changes nothing logs nothing and keeps rev", async () => {
+  const call = client({});
+  const stay = { id: "stayAAAA0001", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15" };
+  await call("saveStay", { stay });
+  await call("addStop", { stop: { id: "stopAAAA0001", date: "2026-12-12", title: "Sky" } });
+  const before = await call("rev");
+  const logs = call.fake.tables.Log.length;
+  assert.equal((await call("saveStay", { stay })).data.logId, null);
+  assert.equal((await call("deleteStop", { id: "stopAAAA0001" })).ok, true);
+  assert.equal((await call("deleteStop", { id: "stopAAAA0001" })).data.logId, null);
+  assert.equal((await call("setDay", { date: "2026-12-12", patch: { city: "" } })).data.logId, null);
+  assert.equal(call.fake.tables.Log.length, logs + 1);
+  assert.equal((await call("rev")).rev, before.rev + 1);
+});
+
+test("saving a removed stay is refused until it is brought back", async () => {
+  const call = client({ stays: [{ id: "stayAAAA0001", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15", deleted: true }] });
+  const r = await call("saveStay", { stay: { id: "stayAAAA0001", name: "Lodge 2", firstNight: "2026-12-13", lastNight: "2026-12-15" } });
+  assert.equal(r.error, "bad_input");
+  assert.equal(r.message, "Bring it back first.");
+  assert.equal((await call("restoreStay", { id: "stayAAAA0001" })).data.stay.deleted, false);
+});
+
+test("undoing a day edit writes back every header field, blanks included", async () => {
+  const call = client({ days: { "2026-12-12": { city: "Tokyo", line_jp: "山手線" } } });
+  const s = await call("setDay", { date: "2026-12-12", patch: { city: "Kyoto", title: "Temples", lineJp: "", lineColour: "#9ACD32" } });
+  assert.equal(s.data.day.title, "Temples");
+  const u = await call("undo", { logId: s.data.logId });
+  assert.equal(u.ok, true);
+  assert.deepEqual(
+    [u.data.day.city, u.data.day.title, u.data.day.lineJp, u.data.day.lineColour],
+    ["Tokyo", "", "山手線", ""],
+  );
+  assert.equal(u.data.entry.kind, "day");
+  assert.equal(u.data.entry.ref, "2026-12-12");
+});
+
+test("a seeded stop or stay comes with its add in History", async () => {
+  const call = client({ stops: [{ id: "stopAAAA0001", date: "2026-12-12", title: "Sky" }], stays: [{ id: "stayAAAA0001", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15" }] });
+  const entries = await historyAll(call);
+  assert.deepEqual(entries.map((e) => [e.who, e.action, e.kind]).sort(), [["Mo", "add", "stay"], ["Mo", "add", "stop"]]);
+});

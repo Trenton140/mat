@@ -39,6 +39,7 @@ function appendObj_(tab, obj) {
 // Writes only the patched columns of the first row whose `column` equals
 // `value`, and returns that row as read back. A blank lookup value never
 // matches (it would hit an empty row); a patch value of undefined is skipped.
+// A cell Sheets hands back as a Date compares as yyyy-MM-dd (cellDate_).
 function updateWhere_(tab, column, value, patch) {
   if (value === "" || value === null || value === undefined) return null;
   var sh = sheet_(tab);
@@ -49,7 +50,7 @@ function updateWhere_(tab, column, value, patch) {
   if (col === -1) return null;
   var cells = sh.getRange(2, col + 1, last - 1, 1).getValues();
   for (var i = 0; i < cells.length; i++) {
-    if (String(unsanitizeCell(cells[i][0])) !== String(value)) continue;
+    if (cellDate_(unsanitizeCell(cells[i][0])) !== String(value)) continue;
     var rowNum = i + 2;
     Object.keys(patch).forEach(function (key) {
       var c = headers.indexOf(key);
@@ -63,4 +64,25 @@ function updateWhere_(tab, column, value, patch) {
 
 function updateById_(tab, id, patch) {
   return updateWhere_(tab, "id", id, patch);
+}
+
+// Adds every column TABS names that a tab's row 1 lacks, at the end, bold and
+// formatted the way setup() formats it (text columns "@"). Returns what it
+// added as "Tab.column". Safe to run twice: the second run adds nothing.
+function ensureColumns_() {
+  var added = [];
+  Object.keys(TABS).forEach(function (tab) {
+    var sh = sheet_(tab);
+    var have = sh.getLastColumn() === 0 ? [] : headersOf_(sh);
+    TABS[tab].forEach(function (h) {
+      if (have.indexOf(h) !== -1) return;
+      var col = have.length + 1;
+      if (col > sh.getMaxColumns()) sh.insertColumnsAfter(sh.getMaxColumns(), 1);
+      sh.getRange(1, col).setValue(h).setFontWeight("bold");
+      if (isTextColumn(tab, h)) sh.getRange(1, col, sh.getMaxRows(), 1).setNumberFormat("@");
+      have.push(h);
+      added.push(tab + "." + h);
+    });
+  });
+  return added;
 }

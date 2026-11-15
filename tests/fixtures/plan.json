@@ -1,0 +1,63 @@
+{
+  "days": {
+    "2026-12-11": {
+      "city": "Tokyo",
+      "title": "Temples, then the view",
+      "line_jp": "銀座線",
+      "line_en": "Ginza Line",
+      "line_colour": "#FF9500",
+      "from_jp": "浅草",
+      "from_en": "Asakusa",
+      "to_jp": "渋谷",
+      "to_en": "Shibuya"
+    },
+    "2026-12-12": {
+      "city": "Tokyo",
+      "line_jp": "山手線",
+      "line_en": "Yamanote Line",
+      "line_colour": "#9ACD32",
+      "from_jp": "新宿",
+      "from_en": "Shinjuku",
+      "to_jp": "渋谷",
+      "to_en": "Shibuya"
+    },
+    "2026-12-13": {
+      "city": "Niseko"
+    }
+  },
+  "stops": [
+    { "id": "planstop1101", "date": "2026-12-11", "time": "10:00", "title": "Senso-ji" },
+    { "id": "planstop1102", "date": "2026-12-11", "time": "18:30", "title": "Dinner in Shibuya" },
+    { "id": "planstop1201", "date": "2026-12-12", "time": "09:00", "title": "Meiji Shrine", "place": "Meiji Jingu" },
+    { "id": "planstop1202", "date": "2026-12-12", "time": "12:30", "title": "Lunch in Harajuku" },
+    {
+      "id": "planstop1203",
+      "date": "2026-12-12",
+      "time": "14:00",
+      "title": "Shibuya Sky",
+      "detail": "Booked for 14:00",
+      "gettingThere": "Yamanote Line, Harajuku to Shibuya. One stop.",
+      "travelMin": 30,
+      "fixed": true,
+      "place": "Shibuya Sky",
+      "signJp": "渋谷",
+      "link": "https://example.test/sky-ticket",
+      "note": "Entrance is on floor 14."
+    },
+    { "id": "planstop1204", "date": "2026-12-12", "time": "19:00", "title": "Dinner" },
+    { "id": "planstop1205", "date": "2026-12-12", "time": "", "title": "Buy gloves" }
+  ],
+  "stays": [
+    {
+      "id": "planstay0001",
+      "name": "Asakusa hotel",
+      "nameJp": "浅草ホテル",
+      "addressJp": "東京都台東区浅草1-1-1",
+      "firstNight": "2026-12-10",
+      "lastNight": "2026-12-12",
+      "place": "Asakusa hotel Tokyo",
+      "link": "https://example.test/booking"
+    },
+    { "id": "planstay0002", "name": "Niseko lodge", "firstNight": "2026-12-13", "lastNight": "2026-12-15" }
+  ]
+}

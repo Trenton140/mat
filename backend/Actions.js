@@ -2,7 +2,7 @@
 // This file reaches the outside world only through these primitives, defined
 // elsewhere (Sheets.js, Env.js, Rate.js on Apps Script; in memory in
 // tests/fake-backend.cjs):
-//   readTable_, appendObj_, updateById_, updateWhere_,
+//   readTable_, appendObj_, updateById_, updateWhere_, ensureColumns_,
 //   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_
 // It also uses the pure helpers from Pure.js.
 
@@ -18,6 +18,10 @@ var MSG_ = {
   noExpense: "That line isn’t there any more.",
   noPayment: "That payment isn’t there any more.",
   noPerson: "That person isn’t on this trip.",
+  noStop: "That stop isn’t there any more.",
+  noStay: "That stay isn’t there any more.",
+  noDay: "That day isn’t on this trip.",
+  stopPatchKey: "Only a stop’s details can be changed.",
   badLogId: "That didn’t say which change to undo.",
   noLog: "That change isn’t in the history.",
   undone: "That’s already been undone.",
@@ -26,6 +30,28 @@ var MSG_ = {
   badHistory: "That history request didn’t come through properly.",
   server: "Something went wrong on our side. Try again.",
 };
+
+// The trip plan: stops, stays and day headers differ only in these. `key` is
+// the column a row is found by (and the Log's ref); `fields` are the API
+// fields a person can change; `deletable` ones have a deleted_at column.
+// Built on call, not at load: Apps Script runs Actions.js before Pure.js.
+// Any other kind gives null.
+function planKind_(kind) {
+  if (kind === "stop") {
+    return {
+      tab: "Stops", key: "id", deletable: true, fromRow: stopFromRow, toRow: stopToRow, missing: MSG_.noStop,
+      fields: ["date", "time", "title", "detail", "gettingThere", "travelMin", "fixed", "place", "signJp", "booked", "link", "photo", "note"],
+    };
+  }
+  if (kind === "stay") {
+    return {
+      tab: "Stays", key: "id", deletable: true, fromRow: stayFromRow, toRow: stayToRow, missing: MSG_.noStay,
+      fields: ["name", "nameJp", "addressJp", "firstNight", "lastNight", "note", "place", "link"],
+    };
+  }
+  if (kind === "day") return { tab: "Days", key: "date", deletable: false, fromRow: dayFromRow, toRow: dayToRow, missing: MSG_.noDay, fields: DAY_PATCH_KEYS };
+  return null;
+}
 
 var EXPENSE_PATCH_KEYS_ = ["title", "amount", "currency", "paidBy", "split", "splitMode", "splitVals", "day", "note", "kind"];
 
@@ -49,6 +75,7 @@ function dispatch_(body) {
   if (action === "load") return load_();
   if (action === "rev") return ok_({}, rev_());
   if (action === "history") return history_(args);
+  if (action === "migrate") return withLock_(function () { return ok_({ added: ensureColumns_() }, rev_()); });
 
   var write;
   switch (action) {
@@ -60,6 +87,14 @@ function dispatch_(body) {
     case "removePayment": write = function (a, c) { return setPaymentRemoved_(a, c, true); }; break;
     case "restorePayment": write = function (a, c) { return setPaymentRemoved_(a, c, false); }; break;
     case "setPerson": write = setPerson_; break;
+    case "addStop": write = addStop_; break;
+    case "updateStop": write = updateStop_; break;
+    case "deleteStop": write = function (a, c) { return setPlanDeleted_("stop", a, c, true); }; break;
+    case "restoreStop": write = function (a, c) { return setPlanDeleted_("stop", a, c, false); }; break;
+    case "saveStay": write = saveStay_; break;
+    case "deleteStay": write = function (a, c) { return setPlanDeleted_("stay", a, c, true); }; break;
+    case "restoreStay": write = function (a, c) { return setPlanDeleted_("stay", a, c, false); }; break;
+    case "setDay": write = setDay_; break;
     case "undo": write = undo_; break;
     default: return err_("bad_input", MSG_.badAction);
   }
@@ -153,20 +188,6 @@ function idArg_(args) {
   return typeof args.id === "string" && args.id !== "" ? args.id : null;
 }
 
-function camel_(s) {
-  return s.replace(/_([a-z])/g, function (m, c) { return c.toUpperCase(); });
-}
-
-// A sheet row with camelCase keys, dates as yyyy-MM-dd, blanks as "".
-function plainRow_(o) {
-  var out = {};
-  Object.keys(o).forEach(function (k) {
-    var v = o[k];
-    out[camel_(k)] = v instanceof Date ? cellDate_(v) : v === null || v === undefined ? "" : v;
-  });
-  return out;
-}
-
 // The fields of an expense a person can change, as a fresh object.
 function editableOf_(e) {
   return {
@@ -195,9 +216,9 @@ function load_() {
   return ok_({
     trip: trip,
     people: peopleRows_().map(personFromRow),
-    days: readTable_("Days").filter(function (r) { return cellDate_(r.date) !== ""; }).map(plainRow_),
-    stops: readTable_("Stops").filter(function (r) { return cellText_(r.id) !== ""; }).map(plainRow_),
-    stays: readTable_("Stays").filter(function (r) { return cellText_(r.id) !== ""; }).map(plainRow_),
+    days: readTable_("Days").filter(function (r) { return cellDate_(r.date) !== ""; }).map(dayFromRow),
+    stops: readTable_("Stops").filter(function (r) { return cellText_(r.id) !== ""; }).map(stopFromRow),
+    stays: readTable_("Stays").filter(function (r) { return cellText_(r.id) !== ""; }).map(stayFromRow),
     expenses: readTable_("Expenses").filter(function (r) { return cellText_(r.id) !== ""; }).map(expenseFromRow),
     payments: readTable_("Settlements").filter(function (r) { return cellText_(r.id) !== ""; }).map(paymentFromRow),
     rateToday: rate.rate,
@@ -344,6 +365,132 @@ function setPerson_(args, ctx) {
   return ok_({ person: saved }, bumpRev_());
 }
 
+// ---- the trip plan: stops, stays, day headers ----
+
+// The row whose key cell (an id, or a day's date) is ref. Dates go through
+// cellDate_ in case Sheets hands a date cell back as a Date.
+function findPlanRow_(plan, ref) {
+  var rows = readTable_(plan.tab);
+  for (var i = 0; i < rows.length; i++) if (cellDate_(rows[i][plan.key]) === ref) return rows[i];
+  return null;
+}
+
+// The fields of an item a person can change, as a fresh object.
+function planFields_(plan, item) {
+  var out = {};
+  plan.fields.forEach(function (f) { out[f] = item[f]; });
+  return out;
+}
+
+function writePlan_(plan, ref, patch) {
+  return plan.fromRow(updateWhere_(plan.tab, plan.key, ref, patch));
+}
+
+function tripDates_() {
+  return readTable_("Days").map(function (r) { return cellDate_(r.date); }).filter(function (d) { return d !== ""; });
+}
+
+// Appends a new stop or stay, or returns the one already there with the id
+// of the Log row that added it (a repeated add).
+function addPlanItem_(kind, value, ctx) {
+  var plan = planKind_(kind);
+  var id = value.id;
+  var existing = findPlanRow_(plan, id);
+  if (existing) return ok_(planReply_(kind, plan.fromRow(existing), firstLogId_(kind, id, "add")), rev_());
+  var row = plan.toRow(value);
+  row.deleted_at = "";
+  appendObj_(plan.tab, row);
+  var saved = plan.fromRow(findPlanRow_(plan, id));
+  var log = appendLog_(ctx, "add", kind, id, summarize("add", kind, null, saved), null, saved);
+  return ok_(planReply_(kind, saved, log.id), bumpRev_());
+}
+
+// Writes an edit of an existing item (cur) to the values in next, unless
+// nothing changes. ref is the item's key (its id, or a day's date).
+function editPlanItem_(kind, ref, cur, next, ctx) {
+  var plan = planKind_(kind);
+  var cols = plan.toRow(planFields_(plan, next));
+  if (same_(cols, plan.toRow(planFields_(plan, cur)))) return ok_(planReply_(kind, cur, null), rev_());
+  var saved = writePlan_(plan, ref, cols);
+  var log = appendLog_(ctx, "edit", kind, ref, summarize("edit", kind, cur, saved), cur, saved);
+  return ok_(planReply_(kind, saved, log.id), bumpRev_());
+}
+
+function planReply_(kind, item, logId) {
+  var data = { logId: logId };
+  data[kind] = item;
+  return data;
+}
+
+function addStop_(args, ctx) {
+  var v = validateStop(args.stop, tripDates_());
+  if (!v.ok) return err_("bad_input", v.message);
+  return addPlanItem_("stop", v.value, ctx);
+}
+
+function updateStop_(args, ctx) {
+  var plan = planKind_("stop");
+  var id = idArg_(args);
+  if (!id) return err_("bad_input", MSG_.badId);
+  var patch = args.patch;
+  if (!isObj_(patch)) return err_("bad_input", MSG_.badPatch);
+  var keys = Object.keys(patch);
+  for (var i = 0; i < keys.length; i++) {
+    if (plan.fields.indexOf(keys[i]) === -1) return err_("bad_input", MSG_.stopPatchKey);
+  }
+  var row = findPlanRow_(plan, id);
+  if (!row) return err_("not_found", plan.missing);
+  var cur = plan.fromRow(row);
+  if (cur.deleted) return err_("bad_input", MSG_.editDeleted);
+
+  // Validate the whole stop as it would be, not the patch alone.
+  var merged = planFields_(plan, cur);
+  keys.forEach(function (k) { merged[k] = patch[k]; });
+  merged.id = id;
+  var v = validateStop(merged, tripDates_());
+  if (!v.ok) return err_("bad_input", v.message);
+  return editPlanItem_("stop", id, cur, v.value, ctx);
+}
+
+// A new id adds the stay; a known one edits it.
+function saveStay_(args, ctx) {
+  var plan = planKind_("stay");
+  var v = validateStay(args.stay);
+  if (!v.ok) return err_("bad_input", v.message);
+  var row = findPlanRow_(plan, v.value.id);
+  if (!row) return addPlanItem_("stay", v.value, ctx);
+  var cur = plan.fromRow(row);
+  if (cur.deleted) return err_("bad_input", MSG_.editDeleted);
+  return editPlanItem_("stay", cur.id, cur, v.value, ctx);
+}
+
+function setPlanDeleted_(kind, args, ctx, deleted) {
+  var plan = planKind_(kind);
+  var id = idArg_(args);
+  if (!id) return err_("bad_input", MSG_.badId);
+  var row = findPlanRow_(plan, id);
+  if (!row) return err_("not_found", plan.missing);
+  var cur = plan.fromRow(row);
+  if (cur.deleted === deleted) return ok_(planReply_(kind, cur, null), rev_());
+  var saved = writePlan_(plan, id, { deleted_at: deleted ? nowIso_() : "" });
+  var action = deleted ? "delete" : "restore";
+  var log = appendLog_(ctx, action, kind, id, summarize(action, kind, cur, saved), cur, saved);
+  return ok_(planReply_(kind, saved, log.id), bumpRev_());
+}
+
+function setDay_(args, ctx) {
+  var plan = planKind_("day");
+  if (typeof args.date !== "string") return err_("bad_input", MSG_.badRequest);
+  var v = validateDayPatch(args.patch);
+  if (!v.ok) return err_("bad_input", v.message);
+  var row = args.date === "" ? null : findPlanRow_(plan, args.date);
+  if (!row) return err_("not_found", plan.missing);
+  var cur = plan.fromRow(row);
+  var next = planFields_(plan, cur);
+  Object.keys(v.value).forEach(function (k) { next[k] = v.value[k]; });
+  return editPlanItem_("day", cur.date, cur, next, ctx);
+}
+
 // ---- undo ----
 
 function undo_(args, ctx) {
@@ -356,20 +503,27 @@ function undo_(args, ctx) {
   if (!row) return err_("not_found", MSG_.noLog);
 
   var entry = parseLogRow(row);
-  if (entry.kind !== "expense" && entry.kind !== "payment") return err_("stale", MSG_.cantUndo);
+  var plan = planKind_(entry.kind);
+  if (entry.kind !== "expense" && entry.kind !== "payment" && !plan) return err_("stale", MSG_.cantUndo);
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
   if (!canUndo(entry, rows.map(logShape_))) return err_("stale", MSG_.newer);
   if (!entry.before && !entry.after) return err_("stale", MSG_.cantUndo);
 
   var isExpense = entry.kind === "expense";
   var tab = isExpense ? "Expenses" : "Settlements";
-  var curRow = findRow_(tab, entry.ref);
-  if (!curRow) return err_("not_found", isExpense ? MSG_.noExpense : MSG_.noPayment);
+  var curRow = plan ? findPlanRow_(plan, entry.ref) : findRow_(tab, entry.ref);
+  if (!curRow) return err_("not_found", plan ? plan.missing : isExpense ? MSG_.noExpense : MSG_.noPayment);
   var target = undoTarget(entry);
   var cur, patch, saved;
   // Every editable column plus deleted_at / removed_at; never rate, added_by/at or stamped_by/at.
   // An item that is already marked keeps its original timestamp (undefined is not written).
-  if (isExpense) {
+  // A day header writes back every field, blanks included.
+  if (plan) {
+    cur = plan.fromRow(curRow);
+    patch = plan.toRow(planFields_(plan, target));
+    if (plan.deletable) patch.deleted_at = target.deleted ? (cur.deleted ? undefined : nowIso_()) : "";
+    saved = writePlan_(plan, entry.ref, patch);
+  } else if (isExpense) {
     cur = expenseFromRow(curRow);
     patch = expenseToRow(editableOf_(target));
     patch.deleted_at = target.deleted ? (cur.deleted ? undefined : nowIso_()) : "";

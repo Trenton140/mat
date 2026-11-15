@@ -5,7 +5,10 @@
 // on write, only patched columns written, same return values, and cells read
 // back the way Sheets hands them back (a stored "'=x" reads as "=x").
 //
-// seed = { expenses?, payments?, people?, days? } (see constraints R6).
+// seed = { expenses?, payments?, people?, days?, stops?, stays? } (see
+// constraints R6). stops and stays are arrays in API shape (deleted: true marks
+// one deleted), each logged as added by Mo; days is a per-date patch in the
+// Sheet's own column names.
 // The returned function takes a request body and resolves to the envelope.
 // Options: clock (() => ISO string); test-only: lockFails (() => boolean),
 // keepsApostrophe (Sheets hands back a text cell's leading ' verbatim).
@@ -97,7 +100,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       const h = headers(tab);
       if (h.indexOf(column) === -1) return null;
       for (const stored of tables[tab]) {
-        if (String(P.unsanitizeCell(cellOut(tab, column, stored[column]))) !== String(value)) continue;
+        if (P.cellDate_(P.unsanitizeCell(cellOut(tab, column, stored[column]))) !== String(value)) continue;
         for (const key of Object.keys(patch)) {
           if (h.indexOf(key) === -1 || patch[key] === undefined) continue;
           stored[key] = patch[key] === null ? "" : P.sanitizeCell(patch[key]);
@@ -109,6 +112,8 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     updateById_(tab, id, patch) {
       return primitives.updateWhere_(tab, "id", id, patch);
     },
+    // The in-memory tabs always have every column TABS names.
+    ensureColumns_: () => [],
     getProp_(key) {
       propReads.push(key);
       return Object.prototype.hasOwnProperty.call(props, key) ? props[key] : null;
@@ -204,6 +209,23 @@ function seedWorld(P, prim, tables, props, seed, now) {
     const base = { at: p.stampedAt, who: p.stampedBy, kind: "payment", ref: saved.id };
     events.push({ ...base, action: "stamp", summary: P.summarize("stamp", "payment", null, live), before: null, after: live });
     if (saved.removed) events.push({ ...base, action: "unstamp", summary: P.summarize("unstamp", "payment", live, saved), before: live, after: saved });
+  }
+
+  for (const kind of ["stop", "stay"]) {
+    const tab = kind === "stop" ? "Stops" : "Stays";
+    const toRow = kind === "stop" ? P.stopToRow : P.stayToRow;
+    const fromRow = kind === "stop" ? P.stopFromRow : P.stayFromRow;
+    for (const given of seed[kind + "s"] || []) {
+      const at = now();
+      const row = toRow(given);
+      row.deleted_at = given.deleted ? at : "";
+      prim.appendObj_(tab, row);
+      const saved = fromRow(lastRow(tab));
+      const live = { ...saved, deleted: false };
+      const base = { at, who: "Mo", kind, ref: saved.id };
+      events.push({ ...base, action: "add", summary: P.summarize("add", kind, null, live), before: null, after: live });
+      if (saved.deleted) events.push({ ...base, action: "delete", summary: P.summarize("delete", kind, live, saved), before: live, after: saved });
+    }
   }
 
   // Log ids follow time order (a stable sort keeps each add before its delete).
