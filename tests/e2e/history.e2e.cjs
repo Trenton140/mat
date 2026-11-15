@@ -391,3 +391,24 @@ module.exports = [
     },
   },
 ];
+
+// ---- fix wave ----
+
+module.exports.push({
+  name: "a changed e-Transfer address shows on the tape as a sentence, without the address and with no Undo",
+  async run({ page }) {
+    const backend = await ready(page);
+    await page.click("#youBtn");
+    await until(() => page.evaluate(() => document.getElementById("you").classList.contains("is-open")), "settings open");
+    await page.fill("#setMail", "mo@example.test");
+    await page.click("#setMailSave");
+    await until(() => backend.fake.tables.Log.some((r) => r.kind === "person"), "logged");
+    await page.click("#setHist");
+    await waitHist(page);
+    const rows = await waitTape(page, (r) => r.some((x) => x.sentence.includes("e-Transfer")), "the change on the tape");
+    const row = rows.find((x) => x.sentence.includes("e-Transfer"));
+    assert.equal(row.sentence, "Mo changed Mo’s e-Transfer address");
+    assert.equal(row.undo, false, "no Undo button");
+    assert.equal(await page.evaluate(() => document.getElementById("tape").textContent.includes("mo@example.test")), false);
+  },
+});

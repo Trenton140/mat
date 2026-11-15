@@ -164,7 +164,7 @@ module.exports = [
     name: "no key: says so and loads nothing",
     async run({ page }) {
       const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null });
-      await expectText(page, "#gate p", "This link is missing its key. Ask Mo to send you the trip link again.");
+      await expectText(page, "#gate p", "This phone needs the trip link. Open it from your chat again, or paste it here.");
       assert.ok(await visible(page, "#gate"));
       assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0, "#rc is empty");
       assert.equal(backend.requests.length, 0, "no calls without a key");
@@ -174,9 +174,10 @@ module.exports = [
     name: "no key: pasting the trip link opens the trip without a reload, and keeps the key off the screen and the address",
     async run({ page }) {
       const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null });
-      await expectText(page, "#gate p", "This link is missing its key. Ask Mo to send you the trip link again.");
+      await expectText(page, "#gate p", "This phone needs the trip link. Open it from your chat again, or paste it here.");
       assert.ok(await visible(page, "#keyPaste"));
-      assert.equal(await text(page, 'label[for="keyPaste"]'), "Or paste your trip link here");
+      assert.equal(await page.locator('label[for="keyPaste"]').count(), 0, "no label: the sentence says what the field is for");
+      assert.equal(await page.getAttribute("#keyPaste", "aria-label"), "Trip link");
       assert.equal(await text(page, "#keyGo"), "Open");
       const field = await page.evaluate(() => {
         const f = document.getElementById("keyPaste");
@@ -217,7 +218,7 @@ module.exports = [
       await page.fill("#keyPaste", "wrong-key-123");
       await page.click("#keyGo");
       await until(() => backend.requests.some((r) => r.action === "load"), "it tries the key");
-      await expectText(page, "#gate p", "This link is missing its key. Ask Mo to send you the trip link again.");
+      await expectText(page, "#gate p", "That trip link didn’t work. Ask Mo for the current one.");
       assert.ok(await visible(page, "#keyPaste"));
       assert.equal(await rowCount(page), 0);
 
@@ -263,6 +264,11 @@ module.exports = [
       assert.equal(await visible(page, "#first"), false);
       const lines = await page.$$eval("#how .how-l", (els) => els.map((e) => e.textContent.trim()));
       assert.deepEqual(lines, ["Ring up what you paid.", "The slip says who pays whom.", "Stamp it the moment you send."]);
+      // In a Safari tab (not from the Home Screen), one more line under them, dimmer.
+      assert.ok(await visible(page, "#how #howHome"));
+      assert.equal(await text(page, "#howHome"), "Add it to your Home Screen from You 設定, so this phone stays signed in.");
+      const dim = await page.evaluate(() => [getComputedStyle(document.querySelector("#how .how-l")).opacity, getComputedStyle(document.getElementById("howHome")).opacity].map(Number));
+      assert.ok(dim[1] < dim[0], "dimmer than the three lines: " + dim);
 
       await page.click("#howOk");
       await until(() => page.evaluate(() => localStorage.getItem("mat.how") === "1"), "mat.how stored");
@@ -311,3 +317,52 @@ module.exports = [
     },
   },
 ];
+
+// ---- fix wave ----
+
+module.exports.push(
+  {
+    name: "a Sheet row with a name the app does not know is left out, said so above the slip, and the rest works",
+    async run({ page }) {
+      const backend = makeBackend(SEED, { now: NOON12 });
+      // Mo mistypes a name by hand in the Sheet.
+      const row = backend.fake.tables.Expenses.find((r) => r.id === "seedexp004");
+      row.split = "Mo,Ajen,Trent";
+      await open(page, { backend, nowMs: NOON12 });
+      await waitRows(page, 7);
+      await expectText(page, "#asideNote", "1 line in the Sheet can’t be read (a name the app doesn’t know). It’s left out of the totals. Tell Mo.");
+      const order = await page.evaluate(() => {
+        const a = document.getElementById("asideNote").getBoundingClientRect();
+        const s = document.getElementById("slip").getBoundingClientRect();
+        return a.bottom <= s.top;
+      });
+      assert.ok(order, "the line sits above the slip");
+      assert.equal(await page.locator('#rc .rc-row[data-id="seedexp004"]').count(), 0, "the line is not on the receipt");
+      assert.ok((await page.locator("#slip .s-row.is-open").count()) > 0, "the slip still draws");
+      // The rest of the app works: open a line, and the stand-in rate line stays away.
+      await page.click('#rc .rc-row[data-id="seedexp001"]');
+      await until(() => page.evaluate(() => document.getElementById("line").classList.contains("is-open")), "a line opens");
+      assert.equal(await visible(page, "#rateNote"), false);
+      // Mo fixes the Sheet; a reload loads it.
+      row.split = "Mo,Ajen,Trenton";
+      await page.reload();
+      await waitRows(page, 8);
+      assert.equal(await visible(page, "#asideNote"), false);
+    },
+  },
+  {
+    name: "yen converted at the stand-in rate: one plain line under the trip summary",
+    async run({ page }) {
+      const backend = makeBackend(SEED, { now: NOON12 });
+      backend.fake.setRate(111, "fallback");
+      await open(page, { backend, nowMs: NOON12 });
+      await waitRows(page, 8);
+      await expectText(page, "#rateNote", "Yen is being converted at a stand-in rate of 111. Tell Mo.");
+      const under = await page.evaluate(() => document.getElementById("sayP").getBoundingClientRect().bottom <= document.getElementById("rateNote").getBoundingClientRect().top);
+      assert.ok(under, "under the trip summary");
+      backend.fake.setRate(108.4, "last");
+      await page.evaluate(() => globalThis.__matTest.store.refresh());
+      await until(async () => !(await visible(page, "#rateNote")), "nothing shown for an earlier day's rate");
+    },
+  },
+);

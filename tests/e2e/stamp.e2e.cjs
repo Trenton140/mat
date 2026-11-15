@@ -343,22 +343,50 @@ module.exports = [
     },
   },
   {
-    name: "stamping with no signal: rolled back, nothing half-drawn, and the bar says so",
+    name: "stamping with no signal: the stamp stays, is never called unsaved, and goes once signal returns",
     async run({ page }) {
       const backend = await ready(page);
       await waitOpen(page, 2);
       backend.failWith = "network";
       await arm(page, "Ajen>Mo");
       await page.click(spot("Ajen>Mo"));
-      await expectText(page, "#ubarT", "No signal. That wasn’t saved.");
       await idle(page);
-      assert.equal(await page.locator("#slip .stamp").count(), 0, "no stamp left on the slip");
-      assert.equal(await page.locator("#slip .s-row.is-paid").count(), 0);
-      assert.deepEqual((await openRows(page)).map((r) => r.key), ["Trenton>Mo", "Ajen>Mo"], "the transfer is open again");
-      assert.deepEqual(await armed(page), [], "and not armed");
-      assert.equal(await page.locator("#stampAmt").count(), 0);
+      assert.notEqual(await ubar(page), "No signal. That wasn’t saved.");
+      assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1, "the stamp stays on the slip");
+      assert.deepEqual((await openRows(page)).map((r) => r.key), ["Trenton>Mo"], "the transfer is not offered again");
       assert.equal(backend.fake.tables.Settlements.length, 0);
       backend.failWith = null;
+      await page.evaluate(() => globalThis.__matTest.store.checkRev());
+      await idle(page);
+      assert.equal(backend.fake.tables.Settlements.length, 1, "sent once");
+      assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1);
+    },
+  },
+  {
+    name: "a stamp whose reply is lost is resent with the same id: one payment on the Sheet",
+    async run({ page }) {
+      const backend = await ready(page);
+      await waitOpen(page, 2);
+      const handle = backend.handle;
+      backend.handle = async (body) => {
+        const env = await handle.call(backend, body);
+        if (body.action === "addPayment") throw new Error("reply lost"); // it reached the Sheet
+        return env;
+      };
+      await arm(page, "Ajen>Mo");
+      await page.click(spot("Ajen>Mo"));
+      await idle(page);
+      assert.equal(backend.fake.tables.Settlements.length, 1);
+      assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1, "still shown");
+      assert.deepEqual((await openRows(page)).map((r) => r.key), ["Trenton>Mo"]);
+      backend.handle = handle;
+      await page.evaluate(() => globalThis.__matTest.store.checkRev());
+      await idle(page);
+      const sent = backend.requests.filter((r) => r.action === "addPayment").map((r) => r.args.payment.id);
+      assert.equal(sent.length, 2);
+      assert.equal(sent[0], sent[1], "the same id both times");
+      assert.equal(backend.fake.tables.Settlements.length, 1, "one payment, not two");
+      assert.equal(await page.locator("#slip .s-row.is-paid").count(), 1);
     },
   },
   {

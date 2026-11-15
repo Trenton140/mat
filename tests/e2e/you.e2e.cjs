@@ -276,6 +276,17 @@ module.exports = [
       });
       assert.deepEqual(original, { href: "manifest.webmanifest", count: 1 });
 
+      // The page's Content-Security-Policy lets no script fetch a blob: URL, so
+      // the test reads the manifest from the Blob the app handed to createObjectURL.
+      await page.evaluate(() => {
+        const make = URL.createObjectURL.bind(URL);
+        globalThis.__blobs = {};
+        URL.createObjectURL = (blob) => {
+          const url = make(blob);
+          globalThis.__blobs[url] = blob;
+          return url;
+        };
+      });
       await page.click("#setInstall");
       await expectText(page, "#ubarT", "Link copied.");
       assert.equal(await clipboard(page), "http://localhost:4173/#k=test-key");
@@ -287,7 +298,7 @@ module.exports = [
         () => page.evaluate(async () => {
           const links = document.querySelectorAll('link[rel="manifest"]');
           if (links.length !== 1 || !links[0].href.startsWith("blob:")) return null;
-          return (await fetch(links[0].href)).json();
+          return JSON.parse(await globalThis.__blobs[links[0].href].text());
         }),
         "a keyed manifest stands in",
       );

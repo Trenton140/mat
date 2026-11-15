@@ -197,7 +197,7 @@ module.exports = [
       await page.fill("#lnNote", "ref 22");
       await page.click("#lnNoteSave");
       await idle(page);
-      await expectText(page, "#ubarT", /No signal/);
+      await expectText(page, "#ubarT", "Couldn’t confirm that. Checking…");
       assert.equal(await page.inputValue("#lnNote"), "ref 22", "what was typed is still there");
       assert.equal(await page.evaluate(() => document.getElementById("lnNoteSave").disabled), false, "Save is enabled");
       assert.equal(savedTitled(backend, "Shibuya dinner")[0].note, "");

@@ -153,14 +153,14 @@ module.exports = [
     },
   },
   {
-    name: "if turning Simplify off cannot be saved, the switch goes back and the bar says so",
+    name: "if turning Simplify off gets no reply, the switch goes back and the bar says it is checking",
     async run({ page }) {
       const backend = await ready(page);
       await waitRows(page, ["You → Trenton $10.00"]);
       backend.failWith = "network";
       await page.click("#simp");
       await page.click("#simpOff");
-      await expectText(page, "#ubarT", "No signal. That wasn’t saved.");
+      await expectText(page, "#ubarT", "Couldn’t confirm that. Checking…");
       await until(() => isOn(page), "the switch is back on");
       await waitRows(page, ["You → Trenton $10.00"]);
       backend.failWith = null;

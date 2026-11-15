@@ -619,3 +619,32 @@ module.exports = [
     },
   },
 ];
+
+// ---- fix wave ----
+
+module.exports.push({
+  name: "the keypad stops at the backend's limit: ¥10,000,000 and $10,000,000",
+  async run({ page }) {
+    const backend = await ready(page);
+    await ringOpen(page);
+    await keys(page, "9 9 9 9 9 9 9 9");
+    await expectText(page, "#xAmt", "¥9,999,999", undefined);
+    await keys(page, "del del del del del del del 1 0 0 0 0 0 0 1");
+    await expectText(page, "#xAmt", "¥1,000,000");
+    await keys(page, "0");
+    await expectText(page, "#xAmt", "¥10,000,000");
+    await page.click("#kCur");
+    await expectText(page, "#xAmt", "$10,000,000");
+    await keys(page, "del del del del del del del del 9 9 9 9 9 9 9 9");
+    await expectText(page, "#xAmt", "$9,999,999");
+    await keys(page, "del del del del del del del 1 0 0 0 0 0 0 1");
+    await expectText(page, "#xAmt", "$1,000,000");
+    await keys(page, "0");
+    await expectText(page, "#xAmt", "$10,000,000");
+    await page.fill("#xWhat", "Big");
+    await waitGo(page, true);
+    await page.click("#kGo");
+    const big = await until(() => savedTitled(backend, "Big")[0], "saved, not refused");
+    assert.deepEqual([big.amount, big.currency], [10000000, "CAD"]);
+  },
+});

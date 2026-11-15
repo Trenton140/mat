@@ -1,8 +1,9 @@
 // Runs the click-through tests: every tests/e2e/*.e2e.cjs, or only those
 // whose file name contains one of the words given (npm run e2e -- receipt).
 //
-// An e2e file exports an array of cases, { name, run(ctx), timezoneId?, serviceWorkers? }
-// (timezoneId: open the case's pages in that zone instead of Asia/Tokyo;
+// An e2e file exports an array of cases, { name, run(ctx), timezoneId?, serviceWorkers?, viewport? }
+// (viewport: { width, height } in place of 390x844, for a Safari tab or a
+// smaller phone; timezoneId: open the case's pages in that zone instead of Asia/Tokyo;
 // serviceWorkers: "allow" lets the app's service worker register, which every
 // other case blocks), or one async
 // function (a single case named after the file). ctx = { page, context,
@@ -119,6 +120,7 @@ async function runCase(browser, fileBase, c) {
   const newPage = async () => {
     const context = await browser.newContext({
       ...CONTEXT,
+      viewport: c.viewport || CONTEXT.viewport,
       timezoneId: c.timezoneId || CONTEXT.timezoneId,
       serviceWorkers: c.serviceWorkers || CONTEXT.serviceWorkers,
     });
