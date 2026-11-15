@@ -148,11 +148,13 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 .ad-row.is-today{box-shadow:0 0 0 2px var(--text)}
 
 /* The demo banner (#demo): plain ground and text like the no-signal strip,
-   in the Days screen's own flow above the bar (so every sheet, the undo bar,
-   the veil and the gate pass over it). */
-.demo{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px var(--gr) 0 var(--gl);padding:4px 4px 4px 13px;border-radius:8px;
+   in the Days screen's flow above the bar, and kept at the top while Days is
+   scrolled (z-index 5: under the nav, the no-signal strip, every sheet, the
+   undo bar, the veil and the gate). */
+.demo{position:sticky;top:calc(env(safe-area-inset-top, 0px) + var(--net-h, 0px));z-index:5;display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px var(--gr) 0 var(--gl);padding:4px 4px 4px 13px;border-radius:8px;
   background:var(--key);border-bottom:1.5px dashed var(--key-hi);font-weight:700;font-size:14px;line-height:1.3}
 .demo-t{min-width:0;font-variant-numeric:tabular-nums}
+.demo-time{font-weight:900;white-space:nowrap}
 .demo-stop{flex:none;height:44px;padding:0 18px;border:0;border-radius:6px;background:var(--paper);color:var(--print);font-weight:900;font-size:15px;
   transition:transform .12s ease-out}
 .demo-stop:active{transform:scale(.97)}

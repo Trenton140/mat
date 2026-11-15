@@ -16,6 +16,8 @@ export function createClock({ now = () => Date.now(), getTz }) {
       return Math.min(demo.base + (now() - demo.realStart) * SPEED, demo.cap);
     },
     demoDay: () => (demo ? demo.date : null),
+    // A demo that has reached its end of day and stands still.
+    holding: () => !!demo && demo.base + (now() - demo.realStart) * SPEED >= demo.cap,
     start(date) {
       const tz = getTz();
       demo = { date, realStart: now(), base: instantOf(tz, date, 7 * 60), cap: instantOf(tz, date, 23 * 60 + 30) };

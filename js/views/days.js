@@ -120,6 +120,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   const demo = el("div", "demo");
   demo.id = "demo";
   const demoText = el("span", "demo-t");
+  const demoTime = el("b", "demo-time");
   const demoStop = el("button", "demo-stop", "Stop");
   demoStop.type = "button";
   demoStop.id = "demoStop";
@@ -285,8 +286,11 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     const s = store.state;
     const m = nowIn((s.trip && s.trip.tz) || "Asia/Tokyo", clock.now()).minutes;
     const hhmm = String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
-    const text = "Pretending it’s " + dayHead(date, []).en + ", " + hhmm;
-    if (demoText.textContent !== text) demoText.textContent = text;
+    // The time is kept with the date: it never wraps onto a line alone.
+    const head = "Pretending it’s " + dayHead(date, []).en + ", ";
+    if (demoText.firstChild && demoText.firstChild.textContent === head && demoTime.textContent === hhmm) return;
+    demoTime.textContent = hhmm;
+    demoText.replaceChildren(head, demoTime);
   }
 
   function render(s) {
@@ -389,6 +393,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   // Ask the clock again: redraw when the trip zone's minute or day moved on.
   function tick() {
     showDemo();
+    if (timer && period() !== running) retime();
     const s = store.state;
     if (!tripReady(s)) return;
     const now = nowIn(tzOf(s), clock.now());
@@ -400,13 +405,22 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   // trip day than Days was last seen on, the rail moves to today's ticket
   // (R32); it never moves while the screen is being looked at.
   let timer = null;
-  const period = () => (clock.demoDay() ? DEMO_MS : TICK_MS);
+  // Fast only while a demo runs; at its end of day it stands still.
+  const period = () => (clock.demoDay() && !clock.holding() ? DEMO_MS : TICK_MS);
+  let running = TICK_MS; // the period the timer was set with
+  function retime() {
+    if (!timer) return;
+    clearInterval(timer);
+    running = period();
+    timer = setInterval(tick, running);
+  }
   let leftOn = null; // the trip-zone date when Days was last on screen
   function wake() {
     const live = document.visibilityState !== "hidden" && root.classList.contains("is-active");
     const s = store.state;
     if (live && !timer) {
-      timer = setInterval(tick, period());
+      running = period();
+      timer = setInterval(tick, running);
       tick();
       const back = leftOn;
       leftOn = null;
@@ -432,10 +446,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   if (clock.subscribe) {
     clock.subscribe(() => {
       const now = clock.demoDay();
-      if (timer) {
-        clearInterval(timer);
-        timer = setInterval(tick, period());
-      }
+      retime();
       render(store.state);
       if (now === demoWas) return;
       demoWas = now;

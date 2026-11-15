@@ -12,13 +12,23 @@ const NOV15 = Date.parse("2026-11-15T12:00:00+09:00");
 const row = (id) => '.r[data-id="' + id + '"]';
 const MEIJI = "planstop1201";
 const SKY = "planstop1203";
-const WRITES = ["addExpense", "editExpense", "deleteExpense", "addStop", "editStop", "addStay", "setPerson", "undo"];
+// Anything sent that is not a read (load, rev, history) counts as a write.
+const READS = ["load", "rev", "history"];
 
 async function ready(page, opts = {}) {
   const backend = await open(page, { seed: WITH_PLAN, tab: "days", nowMs: NOV15, ...opts });
   await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
   return backend;
 }
+
+// The app goes to the background (hidden true) or comes back.
+const setHidden = (page, hidden) => page.evaluate((h) => {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+  document.dispatchEvent(new Event("visibilitychange"));
+}, hidden);
+const demoDay = (page) => page.evaluate(() => globalThis.__matTest.clock.demoDay());
+// A plan whose Dec 12 ticket is taller than the screen.
+const LONG = { ...WITH_PLAN, stops: [...WITH_PLAN.stops, ...Array.from({ length: 16 }, (_, i) => ({ id: "longstop" + String(i).padStart(2, "0"), date: "2026-12-12", time: String(10 + (i % 12)).padStart(2, "0") + ":" + (i < 12 ? "10" : "40"), title: "Extra stop " + i }))] };
 
 const waitYou = (page) =>
   until(() => page.evaluate(() => {
@@ -50,7 +60,7 @@ const inView = (page) =>
     return best && best.off < 2 ? best.date : null;
   });
 const klass = (page, sel) => page.evaluate((s) => (document.querySelector(s) || { className: "" }).className, sel);
-const writes = (backend) => backend.requests.filter((r) => WRITES.includes(r.action));
+const writes = (backend) => backend.requests.filter((r) => !READS.includes(r.action));
 
 module.exports = [
   {
@@ -203,6 +213,116 @@ module.exports = [
       await expectText(page, "#dayCount", /^Day 3 of 11 today/);
       await until(async () => (await inView(page)) === "2026-12-12", "Dec 12 is in view");
       assert.equal(await page.evaluate(() => localStorage.getItem("mat.tab")), "money", "the remembered screen is untouched");
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.tabDay")), "2026-11-15", "and so is the day it was remembered on (the real one)");
+    },
+  },
+  {
+    name: "R34 a: the banner stays in view while Days is scrolled, covers no ticket at rest, moves no snap position",
+    async run({ page }) {
+      await ready(page, { seed: LONG });
+      const snaps = () => page.evaluate(() => {
+        const rail = document.getElementById("rail");
+        return [...rail.querySelectorAll(".pg")].map((p) => p.offsetLeft - rail.offsetLeft);
+      });
+      const without = await snaps();
+      await tryDay(page, "Sat 12");
+      await until(async () => (await inView(page)) === "2026-12-12", "Dec 12 is in view");
+      assert.deepEqual(await snaps(), without, "the rail's snap positions are the same with the banner on");
+      const rest = await page.evaluate(() => ({ demo: document.getElementById("demo").getBoundingClientRect().bottom, rail: document.getElementById("rail").getBoundingClientRect().top }));
+      assert.ok(rest.demo <= rest.rail, "at rest the banner covers no part of the ticket: " + JSON.stringify(rest));
+      const tall = await page.evaluate(() => { const v = document.getElementById("vDays"); return v.scrollHeight > v.clientHeight + 200; });
+      assert.equal(tall, true, "the ticket is taller than the screen");
+      await page.evaluate(() => { const v = document.getElementById("vDays"); v.scrollTop = v.scrollHeight; });
+      await until(() => page.evaluate(() => document.getElementById("vDays").scrollTop > 100), "Days scrolled");
+      const at = await page.evaluate(() => {
+        const r = document.getElementById("demoStop").getBoundingClientRect();
+        const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return { top: r.top, bottom: r.bottom, hit: hit && hit.id };
+      });
+      assert.ok(at.top >= 0 && at.bottom <= 844, "the banner is inside the viewport: " + JSON.stringify(at));
+      assert.equal(at.hit, "demoStop", "Stop can be tapped");
+      await page.click("#demoStop");
+      await until(async () => !(await visible(page, "#demo")), "Stop works from down the ticket");
+    },
+  },
+  {
+    name: "R34 a: the sticky banner sits under an open sheet",
+    async run({ page }) {
+      await ready(page, { seed: LONG });
+      await tryDay(page, "Sat 12");
+      await page.click("#dayCount");
+      await until(() => page.evaluate(() => document.getElementById("allDays").classList.contains("is-open")), "the list opens");
+      const hit = await page.evaluate(() => {
+        const r = document.getElementById("demo").getBoundingClientRect();
+        const el = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        return el && el.classList.contains("scrim") ? "scrim" : (el && (el.id || el.className));
+      });
+      assert.equal(hit, "scrim", "the dimmed area is over the banner, not the banner over it");
+    },
+  },
+  {
+    name: "R34 b: back after more than 10 minutes, the demo has ended like Stop",
+    async run({ page }) {
+      const backend = await ready(page);
+      await tryDay(page, "Sat 12");
+      await setHidden(page, true);
+      await advance(page, backend, 11 * 60000);
+      await setHidden(page, false);
+      await until(async () => !(await visible(page, "#demo")), "the banner goes");
+      assert.equal(await demoDay(page), null);
+      await expectText(page, "#dayCount", /^Day 1 of 11 in 25 days/);
+      await until(async () => (await inView(page)) === "2026-12-10", "the rail is on the real today's ticket");
+    },
+  },
+  {
+    name: "R34 b: back after 9 minutes, the demo goes on",
+    async run({ page }) {
+      const backend = await ready(page);
+      await tryDay(page, "Sat 12");
+      await setHidden(page, true);
+      await advance(page, backend, 9 * 60000);
+      await setHidden(page, false);
+      assert.equal(await demoDay(page), "2026-12-12");
+      assert.equal(await visible(page, "#demo"), true);
+    },
+  },
+  {
+    name: "R34 b: back on another real trip-zone day, the demo has ended",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: Date.parse("2026-11-15T23:55:00+09:00") });
+      await tryDay(page, "Sat 12");
+      await setHidden(page, true);
+      await advance(page, backend, 8 * 60000); // 00:03 on Nov 16
+      await setHidden(page, false);
+      await until(async () => !(await visible(page, "#demo")), "the banner goes");
+      assert.equal(await demoDay(page), null);
+    },
+  },
+  {
+    name: "R34 c: at the end of the day the fast tick goes back to the normal one",
+    async run({ page }) {
+      const backend = await ready(page);
+      await page.evaluate(() => {
+        const orig = window.setInterval.bind(window);
+        window.__iv = [];
+        window.setInterval = (f, d, ...a) => (window.__iv.push(d), orig(f, d, ...a));
+      });
+      await tryDay(page, "Sat 12");
+      assert.equal((await page.evaluate(() => window.__iv)).pop(), 500, "fast while it runs");
+      await advance(page, backend, 600000);
+      await expectText(page, "#demo", /23:30/);
+      await until(async () => (await page.evaluate(() => window.__iv)).pop() === 15000, "the normal tick is back");
+    },
+  },
+  {
+    name: "the You row says On while a demo runs, even over Money",
+    async run({ page }) {
+      await ready(page);
+      await tryDay(page, "Sat 12");
+      await page.click('[data-tab="money"]');
+      await page.click("#youBtn");
+      await waitYou(page);
+      await expectText(page, "#setDemoV", "On");
     },
   },
 ];

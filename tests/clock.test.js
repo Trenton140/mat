@@ -19,3 +19,17 @@ test("the demo clock starts at 07:00 on the chosen day, runs fast and holds at 2
   assert.equal(clock.now(), real);
   assert.deepEqual(told, ["2026-12-12", null]);
 });
+
+test("holding is true only once a demo has reached its end of day", () => {
+  let t = Date.parse("2026-11-15T03:00:00Z");
+  const clock = createClock({ now: () => t, getTz: () => "Asia/Tokyo" });
+  assert.equal(clock.holding(), false, "no demo");
+  clock.start("2026-12-12");
+  assert.equal(clock.holding(), false);
+  t += 4 * 60000;
+  assert.equal(clock.holding(), false);
+  t += 5 * 60000;
+  assert.equal(clock.holding(), true);
+  clock.stop();
+  assert.equal(clock.holding(), false);
+});

@@ -4,7 +4,8 @@
 // sub-pages.
 //
 // mountYou(root, store, { onHistory(), onDemo(date), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
-// onDemo(date): a trip day was picked under "Try another day".
+// onDemo(date): a trip day was picked under "Try another day". demo: the trip's
+// clock (js/clock.js), so the row can say a demo is running.
 // screen(): the screen showing, "Days" or "Money", for Report a problem.
 // root is the phone. getKey() gives the trip key for the invite link; the key
 // is only ever put on the clipboard, never drawn, logged or put in the report.
@@ -73,7 +74,7 @@ function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
 }
 
-export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, getKey = () => null, screen = () => "Money" } = {}) {
+export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, demo = null, getKey = () => null, screen = () => "Money" } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "youScrim";
   scrim.hidden = true;
@@ -162,6 +163,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     drawMail(s);
     soundV.textContent = soundOn() ? "On" : "Off";
     drawDemoDays(s);
+    setDemo(!demoDays.hidden);
     fresh.textContent = s.loadedAt === null ? NOT_YET : freshText(s.loadedAt);
     const url = typeof s.sheetUrl === "string" && /^https?:\/\//i.test(s.sheetUrl) ? s.sheetUrl : "";
     sheetLink.hidden = !url;
@@ -190,7 +192,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   function setDemo(show) {
     demoDays.hidden = !show;
     demoRow.setAttribute("aria-expanded", show ? "true" : "false");
-    demoV.textContent = show ? "Hide" : "Pick";
+    demoV.textContent = show ? "Hide" : demo && demo.demoDay() ? "On" : "Pick";
   }
 
   function setHow(show) {
@@ -387,6 +389,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   });
 
   store.subscribe(render);
+  if (demo && demo.subscribe) demo.subscribe(() => render(store.state));
   render(store.state);
 
   return { open, close: (restoreFocus) => close(restoreFocus), isOpen: () => opened };

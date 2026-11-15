@@ -22,6 +22,8 @@ import { mountNet } from "./views/net.js";
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
 const TABS = ["days", "money"];
+// A demo left alone longer than this in the background is ended on return.
+const DEMO_AWAY_MS = 10 * 60 * 1000;
 
 // localStorage, or a stand-in in memory when the browser will not give it.
 function phoneStorage() {
@@ -197,7 +199,23 @@ function start() {
     borrowed = false;
     closeDaySheets();
   });
+  // A phone is never left pretending unseen (R34): the demo ends by itself
+  // when the app comes back after more than 10 minutes away, or on another
+  // real trip-zone day than the one it started on. Real time, not the demo's.
+  const realToday = () => dateIn((store.state.trip && store.state.trip.tz) || "Asia/Tokyo", Date.now());
+  let demoOn = null; // the real trip-zone day the demo was started on
+  let hiddenAt = null;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") {
+      hiddenAt = Date.now();
+      return;
+    }
+    const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+    hiddenAt = null;
+    if (clock.demoDay() && (away > DEMO_AWAY_MS || realToday() !== demoOn)) clock.stop();
+  });
   const you = mountYou(phone, store, {
+    demo: clock,
     getKey: () => storage.getItem("mat.key"),
     screen: () => (tabs.tab() === "days" ? "Days" : "Money"),
     // Try another day: Days follows the demo clock from the picked day's
@@ -208,7 +226,10 @@ function start() {
       borrowed = false;
       closeDaySheets();
       tabs.showTab("days", false);
+      demoOn = realToday();
       clock.start(date);
+      // The clock's own change already jumped the rail; this is for picking
+      // the day that is already running, which changes nothing it can see.
       days.goDay(Math.max(0, (store.state.days || []).findIndex((d) => d && d.date === date)));
     },
     onHistory: () => {
@@ -303,7 +324,7 @@ function start() {
   });
   // Click-through tests reach the register and the store here; only when the
   // fake backend is in the page, never in the real app.
-  if (typeof globalThis.MAT_FAKE_API === "function") globalThis.__matTest = { store, register };
+  if (typeof globalThis.MAT_FAKE_API === "function") globalThis.__matTest = { store, register, clock };
   document.getElementById("youBtn").addEventListener("click", () => {
     register.close();
     line.close(false);
