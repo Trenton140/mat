@@ -6,7 +6,9 @@
 //   -> { open(), close(restoreFocus), isOpen() }
 // root is the phone. clock: the trip's clock (js/clock.js); today and used are
 // judged by it in the trip's time zone, each time the sheet opens and on every
-// store change while it is open. Tapping a day closes the sheet and calls
+// store change while it is open. The rows are rebuilt only when what they
+// print changed (a sync with nothing new leaves them, and a tap or a screen
+// reader on them, alone). Tapping a day closes the sheet and calls
 // onPick with that day's index. Text from the Sheet goes in with textContent.
 
 import { dayState, nowIn, header } from "../plan.js";
@@ -65,12 +67,20 @@ export function mountAllDays(root, store, { clock, onPick = () => {} } = {}) {
   const rows = sheet.querySelector("#allDaysList");
   const done = sheet.querySelector("#allDaysDone");
   const isOpen = () => sheet.classList.contains("is-open");
+  let shown = ""; // what the rows were last drawn from
 
   function draw() {
     const s = store.state;
     const days = list(s.days).filter((d) => d && typeof d.date === "string" && d.date);
     const tz = (s.trip && s.trip.tz) || "Asia/Tokyo";
     const today = nowIn(tz, clock.now()).date;
+    // Everything a row prints: its number and date, city, title, colour, today/used.
+    const sig = JSON.stringify(days.map((d) => {
+      const h = header(d);
+      return [d.date, h.city, h.title, h.colour, dayState(d.date, today)];
+    }));
+    if (sig === shown) return;
+    shown = sig;
     const hadFocus = rows.contains(document.activeElement) ? document.activeElement.dataset.i : null;
     rows.replaceChildren(...days.map((d, i) => dayRow(d, i, dayState(d.date, today))));
     if (hadFocus !== null) {

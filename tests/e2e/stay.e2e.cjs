@@ -4,7 +4,7 @@
 // seed; the clock is 13:20 on Dec 12 in Japan, Day 3.
 
 const assert = require("node:assert/strict");
-const { WITH_PLAN, open, until, text, expectText } = require("./helpers.cjs");
+const { WITH_PLAN, open, advance, until, text, expectText } = require("./helpers.cjs");
 
 async function ready(page, opts = {}) {
   const backend = await open(page, { seed: WITH_PLAN, tab: "days", ...opts });
@@ -188,6 +188,37 @@ module.exports = [
       const rows = await dayRows(page);
       assert.ok(rows[2].includes("used"), rows[2]);
       assert.ok(rows[3].includes("today"), rows[3]);
+    },
+  },
+  {
+    name: "the open list is only redrawn when it changes",
+    async run({ page }) {
+      const backend = await ready(page);
+      await page.click("#dayCount");
+      await until(() => isOpen(page, "allDays"), "the list opens");
+      await page.evaluate(() => { document.querySelector("#allDays .ad-row:nth-child(3)").__kept = 1; });
+      const kept = () => page.evaluate(() => document.querySelector("#allDays .ad-row:nth-child(3)").__kept === 1);
+      const syncs = () => backend.requests.length;
+      for (let i = 0; i < 2; i++) {
+        const before = syncs();
+        await advance(page, backend, 20000);
+        await until(() => syncs() > before, "a sync with nothing new");
+        await new Promise((r) => setTimeout(r, 150));
+        assert.equal(await kept(), true, "the third row is the same node after sync " + (i + 1));
+      }
+      backend.failWith = "network";
+      await advance(page, backend, 20000);
+      await until(() => page.evaluate(() => !!document.querySelector("#net:not([hidden])")), "no signal shows");
+      assert.equal(await kept(), true, "the same node with no signal");
+      backend.failWith = null;
+      await advance(page, backend, 20000);
+      await until(() => page.evaluate(() => !document.querySelector("#net:not([hidden])")), "signal is back");
+      assert.equal(await kept(), true, "the same node when signal is back");
+
+      const r = await backend.handle({ key: "test-key", actor: "Ajen", via: "app", action: "setDay", args: { date: "2026-12-13", patch: { city: "Sapporo" } } });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      await advance(page, backend, 20000);
+      await expectText(page, "#allDays .ad-row:nth-child(4)", /Sun Dec 13 ?Sapporo/);
     },
   },
   {
