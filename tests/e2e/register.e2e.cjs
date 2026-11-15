@@ -97,7 +97,12 @@ module.exports = [
       assert.ok(conv.includes("÷3") && conv.includes("≈ $"), "conversion: " + conv);
       await waitGo(page, true);
 
-      await page.click("#kGo");
+      const printed = await page.evaluate(() => {
+        document.getElementById("kGo").click();
+        const r = [...document.querySelectorAll("#rc .rc-row[data-id]")].find((x) => x.querySelector(".rc-t").firstChild.textContent === "Dinner");
+        return !!r && r.classList.contains("print");
+      });
+      assert.equal(printed, true, "the new line prints (class print) as soon as it is rung up");
       const row = await waitRow(page, "Dinner");
       assert.equal(row.day, "2026-12-12");
       assert.equal(row.amt, "¥14,500");
@@ -228,6 +233,10 @@ module.exports = [
       await expectText(page, "#xAmt", "$12.50");
       await keys(page, "7");
       await expectText(page, "#xAmt", "$12.50");
+      await keys(page, "del");
+      await expectText(page, "#xAmt", "$12.5");
+      await keys(page, "00");
+      await expectText(page, "#xAmt", "$12.50", undefined);
       const conv = await text(page, "#xConv");
       assert.ok(conv.includes("÷3") && conv.includes("≈ ¥1,388"), "conversion: " + conv);
       await page.fill("#xWhat", "Bus");
@@ -313,9 +322,16 @@ module.exports = [
       assert.equal(await isOn(page, '#unMode [data-mode="parts"]'), true, "parts mode first");
       assert.deepEqual(await page.$$eval("#un .un-val", (els) => els.map((e) => e.textContent)), ["1", "1", "1"]);
 
-      // Cannot go below 1.
-      await page.locator('#un .un-row[data-p="Mo"] .un-minus').evaluate((b) => b.click());
+      // Cannot go below 1: the minus is disabled, and even a click that gets
+      // through to the handler leaves 1.
+      const minus = page.locator('#un .un-row[data-p="Mo"] .un-minus');
+      assert.equal(await minus.evaluate((b) => b.disabled), true);
+      await minus.evaluate((b) => {
+        b.disabled = false;
+        b.click();
+      });
       await expectText(page, '#un .un-row[data-p="Mo"] .un-val', "1");
+      assert.equal(await minus.evaluate((b) => b.disabled), true, "drawn disabled again");
 
       await page.click('#un .un-row[data-p="Mo"] .un-plus');
       for (const n of ["Ajen", "Trenton"]) {
@@ -373,24 +389,58 @@ module.exports = [
       await page.fill('#un .un-row[data-p="Trenton"] .un-val', "10");
       await expectText(page, "#unLeft", "");
       await waitGo(page, true);
+      await expectText(page, "#unDone", "Set split");
+      await page.click("#unDone");
+      await page.click("#kGo");
+      await waitRow(page, "Hotel bar");
+      const h = await until(() => savedTitled(backend, "Hotel bar")[0], "saved");
+      assert.equal(h.splitMode, "exact");
+      assert.deepEqual(h.splitVals, [50, 20, 10]);
+      assert.equal(h.amount, 80);
+    },
+  },
+  {
+    name: "exact amounts: a new amount or a seal turned off shows the gap again",
+    async run({ page }) {
+      const backend = await ready(page);
+      await ringOpen(page);
+      await page.click("#kCur");
+      await keys(page, "8 0 . 0 0");
+      await page.fill("#xWhat", "Hotel bar");
+      await page.click("#xUneven");
+      await page.click('#unMode [data-mode="exact"]');
+      await page.fill('#un .un-row[data-p="Mo"] .un-val', "50");
+      await page.fill('#un .un-row[data-p="Ajen"] .un-val', "20");
+      await page.fill('#un .un-row[data-p="Trenton"] .un-val', "10");
+      await waitGo(page, true);
 
-      // Changing the amount brings the gap back.
+      // Changing the amount brings the gap back, with the panel closed or not.
+      await page.click("#unDone");
+      await until(async () => !(await visible(page, "#un")), "#un closes");
       await keys(page, "del");
       await expectText(page, "#xAmt", "$80.0");
+      await waitGo(page, true);
       await keys(page, "del del del del 9 0");
       await expectText(page, "#xAmt", "$90");
-      await until(() => visible(page, "#unLeft"), "#unLeft shows");
+      await until(() => visible(page, "#unLeft"), "the panel reopens on what is left");
       await expectText(page, "#unLeft", "$10.00 left to assign");
       await waitGo(page, false);
       await page.fill('#un .un-row[data-p="Trenton"] .un-val', "20");
       await expectText(page, "#unLeft", "");
       await waitGo(page, true);
+
+      // Turning someone off with the panel closed reopens it on the gap.
+      await page.click("#unDone");
+      await until(async () => !(await visible(page, "#un")), "#un closes");
+      await page.click(seal("xSplit", "Trenton"));
+      await until(() => visible(page, "#unLeft"), "the panel reopens after a seal is turned off");
+      await expectText(page, "#unLeft", "$20.00 left to assign");
+      await waitGo(page, false);
+      await page.fill('#un .un-row[data-p="Ajen"] .un-val', "40");
+      await waitGo(page, true);
       await page.click("#kGo");
-      await waitRow(page, "Hotel bar");
       const h = await until(() => savedTitled(backend, "Hotel bar")[0], "saved");
-      assert.equal(h.splitMode, "exact");
-      assert.deepEqual(h.splitVals, [50, 20, 20]);
-      assert.equal(h.amount, 90);
+      assert.deepEqual([h.amount, h.split, h.splitVals], [90, ["Mo", "Ajen"], [50, 40]]);
     },
   },
   {
@@ -464,6 +514,33 @@ module.exports = [
       assert.equal(await page.inputValue("#xWhat"), "");
       await expectText(page, "#xDay", "Sat 12");
       assert.equal(await isOn(page, seal("xPayer", "Mo")), true);
+    },
+  },
+  {
+    name: "editing only the amount leaves a split stored in another order alone",
+    async run({ page }) {
+      const seed = JSON.parse(JSON.stringify(SEED));
+      seed.expenses.push({
+        id: "seedexp011", day: "2026-12-11", title: "Izakaya", amount: 9000, currency: "JPY", rate: 111, paidBy: "Ajen",
+        split: ["Trenton", "Mo", "Ajen"], splitMode: "parts", splitVals: [1, 2, 3], note: "", kind: "", addedBy: "Ajen", deleted: false,
+      });
+      const backend = await open(page, { seed, nowMs: NOON12 });
+      await waitRows(page, 9);
+      await page.evaluate(() => globalThis.__matTest.register.edit("seedexp011"));
+      await waitOpen(page);
+      await expectText(page, "#xConv", "uneven");
+      await keys(page, "del del del del 1 2 0 0 0");
+      await expectText(page, "#xAmt", "¥12,000");
+      await page.click("#kGo");
+      await waitClosed(page);
+      await idle(page);
+      const sent = backend.requests.filter((r) => r.action === "updateExpense");
+      assert.equal(sent.length, 1);
+      assert.deepEqual(sent[0].args.patch, { amount: 12000 }, "only the amount is sent");
+      const e = saved(backend).find((x) => x.id === "seedexp011");
+      assert.deepEqual([e.amount, e.split, e.splitMode, e.splitVals], [12000, ["Trenton", "Mo", "Ajen"], "parts", [1, 2, 3]]);
+      const log = backend.fake.primitives.readTable_("Log");
+      assert.equal(log[log.length - 1].summary, "changed Izakaya ¥9,000 → ¥12,000");
     },
   },
   {

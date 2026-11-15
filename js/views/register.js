@@ -23,7 +23,7 @@ export const CHIPS = [
 const MAX_DIGITS = 8;
 const HOLD_MS = 500;
 const DAY_MS = 86400000;
-const FIELDS = ["title", "amount", "currency", "paidBy", "split", "splitMode", "splitVals", "day", "kind"];
+const FIELDS = ["title", "amount", "currency", "paidBy", "day", "kind"]; // split, splitMode, splitVals go together
 
 // Fixed markup only: names and titles go in later with textContent.
 const MARKUP = `
@@ -79,6 +79,15 @@ function typedAmount(e) {
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+// Whether two lines split differently: who shares it, the mode, or anyone's
+// part or amount. Order does not count (the Sheet may hold another order).
+function splitDiffers(a, b) {
+  const mode = (x) => (x.splitMode === "parts" || x.splitMode === "exact" ? x.splitMode : "equal");
+  if (mode(a) !== mode(b) || a.split.length !== b.split.length) return true;
+  const val = (x, n) => (mode(x) === "equal" ? null : x.splitVals[x.split.indexOf(n)]);
+  return a.split.some((n) => !b.split.includes(n) || val(a, n) !== val(b, n));
+}
 const calm = () => globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 export function mountRegister(root, store, { now = () => Date.now(), storage = defaultStorage() } = {}) {
@@ -223,15 +232,21 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     } else if (k === ".") {
       if (draft.cur === "CAD" && !draft.amt.includes(".")) draft.amt = (draft.amt || "0") + ".";
     } else {
+      // Append as much of the key as fits: two decimals, eight digits.
       const dec = draft.amt.split(".")[1];
-      if (dec !== undefined && dec.length + k.length > 2) return;
-      if (draft.amt.replace(".", "").length + k.length > MAX_DIGITS) return;
-      draft.amt += k;
+      let add = dec === undefined ? k : k.slice(0, 2 - dec.length);
+      add = add.slice(0, MAX_DIGITS - draft.amt.replace(".", "").length);
+      if (!add) return;
+      draft.amt += add;
       if (/^0+$/.test(draft.amt)) draft.amt = "";
     }
-    // Exact amounts that no longer add up: show what is left to assign.
-    if (draft.mode === "exact" && toUnits(draft.amt, draft.cur) > 0 && !splitOf(draft).ok) uneven.open();
+    showGap();
     render();
+  }
+
+  // Exact amounts that no longer add up: open the panel on what is left to assign.
+  function showGap() {
+    if (draft.mode === "exact" && toUnits(draft.amt, draft.cur) > 0 && !splitOf(draft).ok) uneven.open();
   }
 
   // The line as the backend takes it.
@@ -250,18 +265,27 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     if (draft.editId) {
       const patch = {};
       for (const k of FIELDS) if (!same(line[k], draft.orig[k])) patch[k] = line[k];
-      if (Object.keys(patch).length) store.updateExpense(draft.editId, patch);
-      close();
+      if (splitDiffers(line, draft.orig)) Object.assign(patch, { split: line.split, splitMode: line.splitMode, splitVals: line.splitVals });
+      try {
+        if (Object.keys(patch).length) store.updateExpense(draft.editId, patch);
+      } finally {
+        close();
+      }
       return;
     }
-    // Disabled from the tap until the line is on the receipt.
+    // What stops a second tap is the reset: once the line is handed over the
+    // amount is empty, so #kGo is disabled. It happens even if drawing the
+    // line throws, so a retap can never send the same line twice.
     sending = true;
     go.disabled = true;
     const id = newId();
-    store.addExpense({ id, ...line, note: "" }); // draws the line before it returns
-    resetLine();
-    sending = false;
-    render();
+    try {
+      store.addExpense({ id, ...line, note: "" }); // draws the line before it returns
+    } finally {
+      resetLine();
+      sending = false;
+      render();
+    }
     printLine(id);
   }
 
@@ -424,6 +448,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     } else {
       draft.split = names().filter((n) => n === name || draft.split.includes(n));
     }
+    showGap();
     render();
   });
 

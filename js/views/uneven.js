@@ -65,7 +65,7 @@ export function mountUneven(host, { onChange }) {
   un.setAttribute("role", "group");
   un.setAttribute("aria-label", "Uneven split");
   const top = el("div", "un-top");
-  const done = el("button", "", "Done");
+  const done = el("button", "", "Set split");
   done.type = "button";
   done.id = "unDone";
   top.append(el("span", "", "Uneven split"), done);
