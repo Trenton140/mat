@@ -6,7 +6,7 @@ var TABS = {
   People: ["name", "initials", "order", "etransfer", "simplify", "email"],
   Days: ["date", "city", "title", "line_jp", "line_en", "line_colour", "from_jp", "from_en", "to_jp", "to_en"],
   Stops: ["id", "date", "time", "title", "detail", "getting_there", "travel_min", "fixed", "place", "sign_jp", "booked", "link", "photo", "note", "deleted_at"],
-  Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link"],
+  Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "deleted_at"],
   Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at"],
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
@@ -175,6 +175,144 @@ function validatePersonPatch(patch) {
   return { ok: true, value: out };
 }
 
+// ---- stops, stays and day headers ----
+
+var DAY_PATCH_KEYS = ["city", "title", "lineJp", "lineEn", "lineColour", "fromJp", "fromEn", "toJp", "toEn"];
+var TIME_RE_ = /^([01]\d|2[0-3]):[0-5]\d$/;
+var COLOUR_RE_ = /^#[0-9A-Fa-f]{6}$/;
+
+// The trimmed link when it is http(s) with no spaces and not too long, else "".
+function safeUrl(v) {
+  if (typeof v !== "string") return "";
+  var t = v.trim();
+  return t.length <= 500 && /^https?:\/\/\S+$/i.test(t) ? t : "";
+}
+
+function dayLabel(date) {
+  var s = String(date);
+  if (!DAY_RE_.test(s) || !realDay_(s)) return s;
+  var d = new Date(Date.UTC(Number(s.slice(0, 4)), Number(s.slice(5, 7)) - 1, Number(s.slice(8, 10))));
+  var wd = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][d.getUTCDay()];
+  var mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()];
+  return wd + " " + mo + " " + d.getUTCDate();
+}
+
+function validDay_(v) { return typeof v === "string" && DAY_RE_.test(v) && realDay_(v); }
+
+// Optional text: absent is "", otherwise a string trimmed and kept to max letters.
+function optText_(v, max, tooLong) {
+  if (v === undefined || v === null) return { ok: true, value: "" };
+  if (typeof v !== "string") return fail_("That didn’t come through properly.");
+  var t = v.trim();
+  if (t.length > max) return fail_(tooLong);
+  return { ok: true, value: t };
+}
+
+// Optional link: absent or blank is "", otherwise it has to be http(s).
+function optLink_(v, message) {
+  if (v === undefined || v === null) return { ok: true, value: "" };
+  if (typeof v !== "string") return fail_(message);
+  if (v.trim() === "") return { ok: true, value: "" };
+  var u = safeUrl(v);
+  return u ? { ok: true, value: u } : fail_(message);
+}
+
+// A place is plain words or a pasted Maps link; anything starting http has to be a good link.
+function optPlace_(v) {
+  var r = optText_(v, 200, "Keep the place under 200 letters.");
+  if (!r.ok) return r;
+  if (/^https?:/i.test(r.value) && !safeUrl(r.value)) return fail_("That map link didn’t come through properly.");
+  return r;
+}
+
+function optFlag_(v, message) {
+  if (v === undefined || v === null) return { ok: true, value: false };
+  if (typeof v !== "boolean") return fail_(message);
+  return { ok: true, value: v };
+}
+
+function validateStop(input, dayDates) {
+  if (!isObj_(input)) return fail_("That didn’t come through properly.");
+  if (typeof input.id !== "string" || !ID_RE_.test(input.id)) return fail_("That stop has a bad id.");
+  if (!validDay_(input.date) || dayDates.indexOf(input.date) === -1) return fail_("Pick a day of the trip.");
+  if (typeof input.title !== "string" || input.title.trim() === "") return fail_("Say what it is.");
+  var title = input.title.trim();
+  if (title.length > 80) return fail_("Keep the name under 80 letters.");
+  var time = input.time === undefined || input.time === null ? "" : input.time;
+  if (typeof time !== "string" || (time !== "" && !TIME_RE_.test(time))) return fail_("Use a time like 14:30.");
+  var travel = input.travelMin === undefined || input.travelMin === null || input.travelMin === "" ? 0 : input.travelMin;
+  if (typeof travel !== "number" || travel % 1 !== 0 || travel < 0 || travel > 600) return fail_("Minutes to get there must be a whole number from 0 to 600.");
+  var detail = optText_(input.detail, 120, "Keep the detail under 120 letters.");
+  if (!detail.ok) return detail;
+  var there = optText_(input.gettingThere, 300, "Keep the directions under 300 letters.");
+  if (!there.ok) return there;
+  var fixed = optFlag_(input.fixed, "Fixed has to be on or off.");
+  if (!fixed.ok) return fixed;
+  var place = optPlace_(input.place);
+  if (!place.ok) return place;
+  var sign = optText_(input.signJp, 20, "Keep the sign name under 20 letters.");
+  if (!sign.ok) return sign;
+  var booked = optFlag_(input.booked, "Booked has to be on or off.");
+  if (!booked.ok) return booked;
+  var link = optLink_(input.link, "That link has to start with https://.");
+  if (!link.ok) return link;
+  var photo = optLink_(input.photo, "That photo link has to start with https://.");
+  if (!photo.ok) return photo;
+  var note = optText_(input.note, 300, "Keep the note under 300 letters.");
+  if (!note.ok) return note;
+  return {
+    ok: true,
+    value: { id: input.id, date: input.date, time: time, title: title, detail: detail.value, gettingThere: there.value, travelMin: travel, fixed: fixed.value, place: place.value, signJp: sign.value, booked: booked.value, link: link.value, photo: photo.value, note: note.value },
+  };
+}
+
+function validateStay(input) {
+  if (!isObj_(input)) return fail_("That didn’t come through properly.");
+  if (typeof input.id !== "string" || !ID_RE_.test(input.id)) return fail_("That stay has a bad id.");
+  if (typeof input.name !== "string" || input.name.trim() === "") return fail_("Say where you’re staying.");
+  var name = input.name.trim();
+  if (name.length > 80) return fail_("Keep the name under 80 letters.");
+  var nameJp = optText_(input.nameJp, 80, "Keep the Japanese name under 80 letters.");
+  if (!nameJp.ok) return nameJp;
+  var addressJp = optText_(input.addressJp, 200, "Keep the address under 200 letters.");
+  if (!addressJp.ok) return addressJp;
+  if (!validDay_(input.firstNight) || !validDay_(input.lastNight)) return fail_("Pick the first and last night.");
+  if (input.lastNight < input.firstNight) return fail_("The last night can’t be before the first.");
+  var note = optText_(input.note, 300, "Keep the note under 300 letters.");
+  if (!note.ok) return note;
+  var place = optPlace_(input.place);
+  if (!place.ok) return place;
+  var link = optLink_(input.link, "That link has to start with https://.");
+  if (!link.ok) return link;
+  return {
+    ok: true,
+    value: { id: input.id, name: name, nameJp: nameJp.value, addressJp: addressJp.value, firstNight: input.firstNight, lastNight: input.lastNight, note: note.value, place: place.value, link: link.value },
+  };
+}
+
+function validateDayPatch(patch) {
+  if (!isObj_(patch)) return fail_("That didn’t come through properly.");
+  var keys = Object.keys(patch);
+  if (keys.length === 0) return fail_("Nothing to change.");
+  var out = {};
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i];
+    if (DAY_PATCH_KEYS.indexOf(k) === -1) return fail_("Only a day’s city, title, line and places can be changed.");
+    var v = patch[k];
+    if (typeof v !== "string") return fail_("That didn’t come through properly.");
+    v = v.trim();
+    if (k === "lineColour") {
+      if (v !== "" && !COLOUR_RE_.test(v)) return fail_("Use a colour like #2FB6E8.");
+    } else if (k === "title") {
+      if (v.length > 80) return fail_("Keep the title under 80 letters.");
+    } else if (v.length > 60) {
+      return fail_("Keep each line, city and place under 60 letters.");
+    }
+    out[k] = v;
+  }
+  return { ok: true, value: out };
+}
+
 // ---- sheet row -> API shape ----
 
 function cellDate_(v) {
@@ -246,6 +384,60 @@ function personFromRow(o) {
   return { name: cellText_(o.name), initials: cellText_(o.initials), etransfer: cellText_(o.etransfer), simplify: !off };
 }
 
+function cellBool_(v) { return v === true || String(v).trim().toUpperCase() === "TRUE"; }
+
+function stopFromRow(o) {
+  var time = cellText_(o.time).trim();
+  return {
+    id: cellText_(o.id),
+    date: cellDate_(o.date),
+    time: TIME_RE_.test(time) ? time : "",
+    title: cellText_(o.title),
+    detail: cellText_(o.detail),
+    gettingThere: cellText_(o.getting_there),
+    travelMin: cellNum_(o.travel_min),
+    fixed: cellBool_(o.fixed),
+    place: cellText_(o.place),
+    signJp: cellText_(o.sign_jp),
+    booked: cellBool_(o.booked),
+    link: safeUrl(cellText_(o.link)),
+    photo: safeUrl(cellText_(o.photo)),
+    note: cellText_(o.note),
+    deleted: cellSet_(o.deleted_at),
+  };
+}
+
+function stayFromRow(o) {
+  return {
+    id: cellText_(o.id),
+    name: cellText_(o.name),
+    nameJp: cellText_(o.name_jp),
+    addressJp: cellText_(o.address_jp),
+    firstNight: cellDate_(o.first_night),
+    lastNight: cellDate_(o.last_night),
+    note: cellText_(o.note),
+    place: cellText_(o.place),
+    link: safeUrl(cellText_(o.link)),
+    deleted: cellSet_(o.deleted_at),
+  };
+}
+
+function dayFromRow(o) {
+  var colour = cellText_(o.line_colour).trim();
+  return {
+    date: cellDate_(o.date),
+    city: cellText_(o.city),
+    title: cellText_(o.title),
+    lineJp: cellText_(o.line_jp),
+    lineEn: cellText_(o.line_en),
+    lineColour: COLOUR_RE_.test(colour) ? colour : "",
+    fromJp: cellText_(o.from_jp),
+    fromEn: cellText_(o.from_en),
+    toJp: cellText_(o.to_jp),
+    toEn: cellText_(o.to_en),
+  };
+}
+
 // ---- API shape -> sheet row ----
 // Timestamps (added_at, deleted_at, stamped_at, removed_at) are left to the
 // action that writes the row. Optional fields that are absent are left out, so
@@ -280,6 +472,54 @@ function paymentToRow(p) {
   put_(o, "stamped_by", p.stampedBy);
   put_(o, "seed", p.seed);
   put_(o, "rot", p.rot);
+  return o;
+}
+
+function stopToRow(s) {
+  var o = {};
+  put_(o, "id", s.id);
+  put_(o, "date", s.date);
+  put_(o, "time", s.time);
+  put_(o, "title", s.title);
+  put_(o, "detail", s.detail);
+  put_(o, "getting_there", s.gettingThere);
+  put_(o, "travel_min", s.travelMin);
+  put_(o, "fixed", s.fixed);
+  put_(o, "place", s.place);
+  put_(o, "sign_jp", s.signJp);
+  put_(o, "booked", s.booked);
+  put_(o, "link", s.link);
+  put_(o, "photo", s.photo);
+  put_(o, "note", s.note);
+  return o;
+}
+
+function stayToRow(s) {
+  var o = {};
+  put_(o, "id", s.id);
+  put_(o, "name", s.name);
+  put_(o, "name_jp", s.nameJp);
+  put_(o, "address_jp", s.addressJp);
+  put_(o, "first_night", s.firstNight);
+  put_(o, "last_night", s.lastNight);
+  put_(o, "note", s.note);
+  put_(o, "place", s.place);
+  put_(o, "link", s.link);
+  return o;
+}
+
+function dayToRow(d) {
+  var o = {};
+  put_(o, "date", d.date);
+  put_(o, "city", d.city);
+  put_(o, "title", d.title);
+  put_(o, "line_jp", d.lineJp);
+  put_(o, "line_en", d.lineEn);
+  put_(o, "line_colour", d.lineColour);
+  put_(o, "from_jp", d.fromJp);
+  put_(o, "from_en", d.fromEn);
+  put_(o, "to_jp", d.toJp);
+  put_(o, "to_en", d.toEn);
   return o;
 }
 
@@ -356,6 +596,20 @@ function expenseDiff_(before, after) {
   return "changed " + after.title + (changed.length ? ": " + changed.join(", ") : "");
 }
 
+var STOP_FIELD_LABELS_ = [["detail", "detail"], ["gettingThere", "directions"], ["travelMin", "travel time"], ["fixed", "fixed time"], ["place", "place"], ["signJp", "sign name"], ["booked", "booked"], ["link", "link"], ["photo", "photo"], ["note", "note"]];
+
+function stopDiff_(before, after) {
+  if (before.title !== after.title) return "renamed " + before.title + " to " + after.title;
+  if (before.date !== after.date || before.time !== after.time) {
+    return "moved " + after.title + " to " + dayLabel(after.date) + (after.time ? " " + after.time : "");
+  }
+  var changed = [];
+  for (var i = 0; i < STOP_FIELD_LABELS_.length; i++) {
+    if (before[STOP_FIELD_LABELS_[i][0]] !== after[STOP_FIELD_LABELS_[i][0]]) changed.push(STOP_FIELD_LABELS_[i][1]);
+  }
+  return "changed " + after.title + (changed.length ? ": " + changed.join(", ") : "");
+}
+
 function summarize(action, kind, before, after) {
   // The address itself never goes in a sentence: it stays in the Sheet.
   if (kind === "person") return "changed " + (after || before).name + "\u2019s e-Transfer address";
@@ -367,6 +621,22 @@ function summarize(action, kind, before, after) {
     if (action === "restamp") return "put back the stamp " + what;
     return "changed the stamp " + what;
   }
+  if (kind === "stop") {
+    var stop = after || before;
+    if (action === "add") return "added " + stop.title + " to " + dayLabel(stop.date);
+    if (action === "delete") return "removed " + stop.title + " from " + dayLabel(stop.date);
+    if (action === "restore") return "put back " + stop.title + " on " + dayLabel(stop.date);
+    if (before && after) return stopDiff_(before, after);
+    return "changed " + stop.title;
+  }
+  if (kind === "stay") {
+    var stayName = (after || before).name;
+    if (action === "add") return "added the stay " + stayName;
+    if (action === "delete") return "removed the stay " + stayName;
+    if (action === "restore") return "put back the stay " + stayName;
+    return "changed the stay " + stayName;
+  }
+  if (kind === "day") return "changed the ticket for " + dayLabel((after || before).date);
   var item = after || before;
   var tag = item.title + " " + money_(item.amount, item.currency);
   if (action === "add") return "rang up " + tag;
@@ -434,5 +704,5 @@ function entryFromRow(o, allRows) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey };
 }

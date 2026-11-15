@@ -264,3 +264,89 @@ test("every message the backend can show uses the curly apostrophe (R20, F10)", 
     }
   }
 });
+
+const DATES = ["2026-12-10", "2026-12-11", "2026-12-12"];
+const STOP = { id: "stopAAAA0001", date: "2026-12-12", title: " Shibuya Sky ", time: "14:00" };
+
+test("validateStop fills the blanks and trims", () => {
+  const v = P.validateStop(STOP, DATES);
+  assert.deepEqual(v.value, { id: "stopAAAA0001", date: "2026-12-12", time: "14:00", title: "Shibuya Sky", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "" });
+});
+test("validateStop refuses what it must", () => {
+  const bad = (patch, message) => assert.deepEqual(P.validateStop({ ...STOP, ...patch }, DATES), { ok: false, message });
+  bad({ date: "2026-12-25" }, "Pick a day of the trip.");
+  bad({ title: "  " }, "Say what it is.");
+  bad({ title: "x".repeat(81) }, "Keep the name under 80 letters.");
+  bad({ time: "9:5" }, "Use a time like 14:30.");
+  bad({ time: "25:00" }, "Use a time like 14:30.");
+  bad({ travelMin: 12.5 }, "Minutes to get there must be a whole number from 0 to 600.");
+  bad({ travelMin: 601 }, "Minutes to get there must be a whole number from 0 to 600.");
+  bad({ link: "javascript:alert(1)" }, "That link has to start with https://.");
+  bad({ photo: "data:image/png;base64,AAAA" }, "That photo link has to start with https://.");
+  bad({ place: "http://" }, "That map link didn’t come through properly.");
+  bad({ fixed: "yes" }, "Fixed has to be on or off.");
+  bad({ id: "x" }, "That stop has a bad id.");
+});
+test("validateStop length limits", () => {
+  const bad = (patch, message) => assert.deepEqual(P.validateStop({ ...STOP, ...patch }, DATES), { ok: false, message });
+  bad({ detail: "x".repeat(121) }, "Keep the detail under 120 letters.");
+  bad({ gettingThere: "x".repeat(301) }, "Keep the directions under 300 letters.");
+  bad({ place: "x".repeat(201) }, "Keep the place under 200 letters.");
+  bad({ signJp: "x".repeat(21) }, "Keep the sign name under 20 letters.");
+  bad({ note: "x".repeat(301) }, "Keep the note under 300 letters.");
+  bad({ booked: 1 }, "Booked has to be on or off.");
+  assert.equal(P.validateStop({ ...STOP, detail: "x".repeat(120), note: "x".repeat(300) }, DATES).ok, true);
+});
+test("a stop with no time is allowed, and a pasted Maps link is a place", () => {
+  assert.equal(P.validateStop({ ...STOP, time: "" }, DATES).value.time, "");
+  assert.equal(P.validateStop({ ...STOP, place: "https://maps.app.goo.gl/abc" }, DATES).value.place, "https://maps.app.goo.gl/abc");
+});
+test("stop rows round-trip, and a hand-typed row reads safely", () => {
+  const s = { ...P.validateStop({ ...STOP, travelMin: 30, fixed: true, signJp: "渋谷" }, DATES).value };
+  const back = P.stopFromRow(P.stopToRow(s));
+  assert.deepEqual(back, { ...s, deleted: false });
+  assert.equal("deleted_at" in P.stopToRow(s), false);
+  const hand = P.stopFromRow({ id: "h1", date: new Date(Date.UTC(2026, 11, 12)), time: "9:5", title: 7, travel_min: "abc", fixed: "TRUE", link: "javascript:x", photo: "ftp://x", deleted_at: "2026-12-01T00:00:00Z" });
+  assert.deepEqual([hand.time, hand.title, hand.travelMin, hand.fixed, hand.link, hand.photo, hand.deleted], ["", "7", 0, true, "", "", true]);
+});
+test("validateStay", () => {
+  const stay = { id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12" };
+  assert.deepEqual(P.validateStay(stay).value, { ...stay, nameJp: "", addressJp: "", note: "", place: "", link: "" });
+  assert.equal(P.validateStay({ ...stay, lastNight: "2026-12-09" }).message, "The last night can’t be before the first.");
+  assert.equal(P.validateStay({ ...stay, name: "" }).message, "Say where you’re staying.");
+  assert.equal(P.validateStay({ ...stay, link: "javascript:x" }).message, "That link has to start with https://.");
+  assert.equal(P.validateStay({ ...stay, id: "x" }).message, "That stay has a bad id.");
+  assert.equal(P.validateStay({ ...stay, firstNight: "nope" }).message, "Pick the first and last night.");
+  assert.equal(P.validateStay({ ...stay, name: "x".repeat(81) }).message, "Keep the name under 80 letters.");
+  assert.equal(P.validateStay({ ...stay, nameJp: "x".repeat(81) }).message, "Keep the Japanese name under 80 letters.");
+  assert.equal(P.validateStay({ ...stay, addressJp: "x".repeat(201) }).message, "Keep the address under 200 letters.");
+});
+test("stay rows round-trip and read safely", () => {
+  const stay = P.validateStay({ id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12", link: "https://x.test" }).value;
+  assert.deepEqual(P.stayFromRow(P.stayToRow(stay)), { ...stay, deleted: false });
+  assert.equal("deleted_at" in P.stayToRow(stay), false);
+  assert.equal(P.stayFromRow({ id: "s", name: "N", link: "javascript:x", deleted_at: "x" }).link, "");
+  assert.equal(P.stayFromRow({ id: "s", deleted_at: "x" }).deleted, true);
+  assert.equal(P.TABS.Stays[P.TABS.Stays.length - 1], "deleted_at");
+});
+test("validateDayPatch", () => {
+  assert.deepEqual(P.validateDayPatch({ city: " Tokyo ", lineColour: "#2fb6e8" }).value, { city: "Tokyo", lineColour: "#2fb6e8" });
+  assert.equal(P.validateDayPatch({ lineColour: "blue" }).message, "Use a colour like #2FB6E8.");
+  assert.equal(P.validateDayPatch({ date: "2026-12-11" }).message, "Only a day’s city, title, line and places can be changed.");
+  assert.equal(P.validateDayPatch({}).message, "Nothing to change.");
+  assert.equal(P.validateDayPatch({ city: "x".repeat(61) }).message, "Keep each line, city and place under 60 letters.");
+  assert.equal(P.validateDayPatch({ title: "x".repeat(81) }).message, "Keep the title under 80 letters.");
+  assert.equal(P.validateDayPatch({ title: "x".repeat(80) }).ok, true);
+  assert.deepEqual(P.validateDayPatch({ lineColour: "" }).value, { lineColour: "" });
+});
+test("day rows, labels and links", () => {
+  const d = { date: "2026-12-12", city: "Tokyo", title: "", lineJp: "山手線", lineEn: "Yamanote", lineColour: "#9ACD32", fromJp: "", fromEn: "", toJp: "", toEn: "" };
+  assert.deepEqual(P.dayFromRow(P.dayToRow(d)), d);
+  assert.equal(P.dayFromRow({ date: "2026-12-12", line_colour: "not a colour" }).lineColour, "");
+  assert.equal(P.dayLabel("2026-12-12"), "Sat Dec 12");
+  assert.equal(P.safeUrl("  https://a.test/x "), "https://a.test/x");
+  assert.equal(P.safeUrl("javascript:alert(1)"), "");
+  assert.equal(P.safeUrl("https://a b"), "");
+  assert.equal(P.safeUrl("https://a.test/" + "x".repeat(500)), "");
+  assert.equal(P.safeUrl(5), "");
+});

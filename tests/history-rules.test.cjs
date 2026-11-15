@@ -119,3 +119,28 @@ test("a person's e-Transfer change reads as a sentence without the address, and 
   const entry = { id: 3, kind: "person", ref: "Ajen", undoneBy: null };
   assert.equal(P.canUndo(entry, [entry]), false);
 });
+
+const A = { id: "s1", date: "2026-12-12", time: "14:00", title: "Shibuya Sky", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "", deleted: false };
+test("stop sentences", () => {
+  assert.equal(P.summarize("add", "stop", null, A), "added Shibuya Sky to Sat Dec 12");
+  assert.equal(P.summarize("delete", "stop", A, { ...A, deleted: true }), "removed Shibuya Sky from Sat Dec 12");
+  assert.equal(P.summarize("restore", "stop", { ...A, deleted: true }, A), "put back Shibuya Sky on Sat Dec 12");
+  assert.equal(P.summarize("edit", "stop", A, { ...A, title: "Sky deck" }), "renamed Shibuya Sky to Sky deck");
+  assert.equal(P.summarize("edit", "stop", A, { ...A, time: "15:30" }), "moved Shibuya Sky to Sat Dec 12 15:30");
+  assert.equal(P.summarize("edit", "stop", A, { ...A, date: "2026-12-13", time: "" }), "moved Shibuya Sky to Sun Dec 13");
+  assert.equal(P.summarize("edit", "stop", A, { ...A, gettingThere: "Walk", travelMin: 5, link: "https://x.test" }), "changed Shibuya Sky: directions, travel time, link");
+});
+test("stay and day sentences", () => {
+  const stay = { id: "y1", name: "Asakusa hotel" };
+  assert.equal(P.summarize("add", "stay", null, stay), "added the stay Asakusa hotel");
+  assert.equal(P.summarize("edit", "stay", stay, stay), "changed the stay Asakusa hotel");
+  assert.equal(P.summarize("delete", "stay", stay, stay), "removed the stay Asakusa hotel");
+  assert.equal(P.summarize("restore", "stay", stay, stay), "put back the stay Asakusa hotel");
+  assert.equal(P.summarize("edit", "day", { date: "2026-12-12" }, { date: "2026-12-12" }), "changed the ticket for Sat Dec 12");
+});
+test("undo rules hold for the new kinds", () => {
+  const add = { id: 5, kind: "stop", ref: "s1", before: null, after: A, undoneBy: null };
+  assert.equal(P.undoTarget(add).deleted, true);
+  assert.equal(P.canUndo(add, [add, { id: 6, kind: "stop", ref: "s1" }]), false);
+  assert.equal(P.canUndo(add, [add, { id: 6, kind: "expense", ref: "s1" }]), true);
+});
