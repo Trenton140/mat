@@ -123,3 +123,9 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:scale(.97)
 .st-btns button:disabled{opacity:.3;transform:none}
 #stSave{flex:1;border:0;background:var(--print);color:var(--stock)}
 #stDel{flex:none;padding:0 18px;border:1.5px solid var(--shu);background:none;color:var(--shu)}
+
+/* Try another day: the trip's days as a grid of buttons, "Sat 12". */
+.set-days{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.set-days button{height:52px;border:0;border-radius:8px;background:var(--key);color:var(--text);font-weight:900;font-size:15px;font-variant-numeric:tabular-nums;
+  transition:transform .15s ease-out,background .12s}
+.set-days button:active{background:var(--key-hi);transform:scale(.97)}

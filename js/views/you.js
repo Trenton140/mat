@@ -3,7 +3,8 @@
 // the invite link, the Google Sheet and "Report a problem". One sheet, no
 // sub-pages.
 //
-// mountYou(root, store, { onHistory(), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
+// mountYou(root, store, { onHistory(), onDemo(date), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
+// onDemo(date): a trip day was picked under "Try another day".
 // screen(): the screen showing, "Days" or "Money", for Report a problem.
 // root is the phone. getKey() gives the trip key for the invite link; the key
 // is only ever put on the clipboard, never drawn, logged or put in the report.
@@ -11,7 +12,7 @@
 
 import { APP_VERSION } from "../config.js";
 import { soundOn, setSound } from "../sound.js";
-import { clock, dayHead, localDay, freshText, historySentence } from "../format.js";
+import { clock, dayHead, dayShort, localDay, freshText, historySentence } from "../format.js";
 import { HOW_LINES, standalone } from "./first.js";
 import { copyText } from "../clip.js";
 
@@ -36,6 +37,8 @@ const MARKUP = `
   <button type="button" class="set-r" id="setSound"><span>Stamp sound</span><b id="setSoundV">On</b></button>
   <button type="button" class="set-r" id="setHist"><span>History<small>Every change, with undo</small></span><b>Open</b></button>
   <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh"></b></button>
+  <button type="button" class="set-r" id="setDemo" aria-expanded="false" aria-controls="setDemoDays"><span>Try another day<small>See how a day will look before you go</small></span><b id="setDemoV">Pick</b></button>
+  <div class="set-days" id="setDemoDays" hidden></div>
   <button type="button" class="set-r" id="setHow" aria-expanded="false" aria-controls="setHowLines"><span>How this works</span><b id="setHowV">Show</b></button>
   <div class="how" id="setHowLines" hidden></div>
   <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
@@ -70,7 +73,7 @@ function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
 }
 
-export function mountYou(root, store, { onHistory = () => {}, getKey = () => null, screen = () => "Money" } = {}) {
+export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, getKey = () => null, screen = () => "Money" } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "youScrim";
   scrim.hidden = true;
@@ -92,6 +95,9 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   const how = $("setHow");
   const howV = $("setHowV");
   const howLines = $("setHowLines");
+  const demoRow = $("setDemo");
+  const demoV = $("setDemoV");
+  const demoDays = $("setDemoDays");
   const sheetLink = $("setSheet");
   const report = $("setReport");
   const install = $("setInstall");
@@ -155,11 +161,36 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
     drawWho(s);
     drawMail(s);
     soundV.textContent = soundOn() ? "On" : "Off";
+    drawDemoDays(s);
     fresh.textContent = s.loadedAt === null ? NOT_YET : freshText(s.loadedAt);
     const url = typeof s.sheetUrl === "string" && /^https?:\/\//i.test(s.sheetUrl) ? s.sheetUrl : "";
     sheetLink.hidden = !url;
     if (url) sheetLink.href = url;
     else sheetLink.removeAttribute("href");
+  }
+
+  // The trip's days as buttons ("Sat 12"), drawn only when they change.
+  let shownDays = "";
+  function drawDemoDays(s) {
+    const dates = (Array.isArray(s.days) ? s.days : []).map((d) => d && d.date).filter((d) => typeof d === "string" && d);
+    demoRow.hidden = !dates.length;
+    const sig = dates.join(",");
+    if (sig === shownDays) return;
+    shownDays = sig;
+    demoDays.replaceChildren(
+      ...dates.map((date) => {
+        const b = el("button", "", dayShort(date));
+        b.type = "button";
+        b.dataset.date = date;
+        return b;
+      }),
+    );
+  }
+
+  function setDemo(show) {
+    demoDays.hidden = !show;
+    demoRow.setAttribute("aria-expanded", show ? "true" : "false");
+    demoV.textContent = show ? "Hide" : "Pick";
   }
 
   function setHow(show) {
@@ -176,6 +207,7 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
     mail.value = addressOf(store.state);
     shownMail = mail.value;
     setHow(false);
+    setDemo(false);
     render(store.state);
     sheet.classList.add("is-open");
     sheet.inert = false;
@@ -245,6 +277,11 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   $("setHist").addEventListener("click", () => onHistory());
   $("setFreshRow").addEventListener("click", () => store.refresh());
   how.addEventListener("click", () => setHow(howLines.hidden));
+  demoRow.addEventListener("click", () => setDemo(demoDays.hidden));
+  demoDays.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-date]");
+    if (b) onDemo(b.dataset.date);
+  });
 
   const inviteLink = (key) => location.origin + location.pathname + "#k=" + encodeURIComponent(key);
 

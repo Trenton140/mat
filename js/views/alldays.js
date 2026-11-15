@@ -127,6 +127,12 @@ export function mountAllDays(root, store, { clock, onPick = () => {} } = {}) {
   store.subscribe(() => {
     if (isOpen()) draw();
   });
+  // A demo started or stopped changes today and which days are used.
+  if (clock.subscribe) {
+    clock.subscribe(() => {
+      if (isOpen()) draw();
+    });
+  }
 
   return { open, close: (restoreFocus) => close(restoreFocus), isOpen };
 }

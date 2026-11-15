@@ -200,6 +200,17 @@ function start() {
   const you = mountYou(phone, store, {
     getKey: () => storage.getItem("mat.key"),
     screen: () => (tabs.tab() === "days" ? "Days" : "Money"),
+    // Try another day: Days follows the demo clock from the picked day's
+    // 07:00. Nothing is stored, so a reload ends it.
+    onDemo: (date) => {
+      you.close(false);
+      register.close();
+      borrowed = false;
+      closeDaySheets();
+      tabs.showTab("days", false);
+      clock.start(date);
+      days.goDay(Math.max(0, (store.state.days || []).findIndex((d) => d && d.date === date)));
+    },
     onHistory: () => {
       you.close(false);
       history.open();

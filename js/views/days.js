@@ -28,10 +28,12 @@
 // itself) until the day in view changes.
 
 import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayFor } from "../plan.js";
-import { issuer, dayShort } from "../format.js";
+import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
 
 const TICK_MS = 15000;
+// While a demo runs, a trip minute passes every half second.
+const DEMO_MS = 500;
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -113,7 +115,18 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   bar.append(count, pager);
   const rail = el("div", "rail");
   rail.id = "rail";
-  root.replaceChildren(bar, rail);
+  // The demo banner: plain ground and text, above the bar, only while a demo
+  // runs. Stop is local (the clock forgets the demo), so it works with no signal.
+  const demo = el("div", "demo");
+  demo.id = "demo";
+  const demoText = el("span", "demo-t");
+  const demoStop = el("button", "demo-stop", "Stop");
+  demoStop.type = "button";
+  demoStop.id = "demoStop";
+  demo.append(demoText, demoStop);
+  demo.hidden = true;
+  demoStop.addEventListener("click", () => clock.stop());
+  root.replaceChildren(demo, bar, rail);
 
   let dates = []; // the dates of the drawn tickets, in order
   let states = []; // each one's dayState
@@ -264,7 +277,20 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     if (target) target.focus({ preventScroll: true });
   }
 
+  // "Pretending it’s Sat Dec 12, 07:00", the demo's day and trip-zone time.
+  function showDemo() {
+    const date = clock.demoDay();
+    demo.hidden = !date;
+    if (!date) return;
+    const s = store.state;
+    const m = nowIn((s.trip && s.trip.tz) || "Asia/Tokyo", clock.now()).minutes;
+    const hhmm = String(Math.floor(m / 60)).padStart(2, "0") + ":" + String(m % 60).padStart(2, "0");
+    const text = "Pretending it’s " + dayHead(date, []).en + ", " + hhmm;
+    if (demoText.textContent !== text) demoText.textContent = text;
+  }
+
   function render(s) {
+    showDemo();
     const ready = s.status === "ready" && s.trip && s.trip.start && list(s.days).length;
     if (!ready) {
       if (!dates.length) {
@@ -362,6 +388,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
 
   // Ask the clock again: redraw when the trip zone's minute or day moved on.
   function tick() {
+    showDemo();
     const s = store.state;
     if (!tripReady(s)) return;
     const now = nowIn(tzOf(s), clock.now());
@@ -373,12 +400,13 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   // trip day than Days was last seen on, the rail moves to today's ticket
   // (R32); it never moves while the screen is being looked at.
   let timer = null;
+  const period = () => (clock.demoDay() ? DEMO_MS : TICK_MS);
   let leftOn = null; // the trip-zone date when Days was last on screen
   function wake() {
     const live = document.visibilityState !== "hidden" && root.classList.contains("is-active");
     const s = store.state;
     if (live && !timer) {
-      timer = setInterval(tick, TICK_MS);
+      timer = setInterval(tick, period());
       tick();
       const back = leftOn;
       leftOn = null;
@@ -398,7 +426,23 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
 
   render(store.state);
   store.subscribe(render);
-  if (clock.subscribe) clock.subscribe(() => render(store.state));
+  // Starting or stopping a demo is a deliberate jump: the rail goes to the
+  // day the clock now says is today, whatever R32 would otherwise hold.
+  let demoWas = clock.demoDay();
+  if (clock.subscribe) {
+    clock.subscribe(() => {
+      const now = clock.demoDay();
+      if (timer) {
+        clearInterval(timer);
+        timer = setInterval(tick, period());
+      }
+      render(store.state);
+      if (now === demoWas) return;
+      demoWas = now;
+      const s = store.state;
+      if (tripReady(s) && dates.length) goDay(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), clock.now()));
+    });
+  }
   wake();
 
   return {

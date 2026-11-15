@@ -54,12 +54,11 @@ module.exports = [
       assert.equal(await text(page, "#you .sheet-top span"), "You設定");
       assert.equal(await page.evaluate(() => document.getElementById("you").contains(document.activeElement)), true, "focus moves into the sheet");
       const order = await page.evaluate(() => {
-        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setHow", "setInstall", "setInvite", "setSheet", "setReport"];
+        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setDemo", "setHow", "setInstall", "setInvite", "setSheet", "setReport"];
         const all = [...document.querySelectorAll("#you *")];
         return ids.map((id) => all.indexOf(document.getElementById(id)));
       });
       assert.ok(order.every((n) => n > 0) && order.slice().sort((a, b) => a - b).join() === order.join(), "rows are in the asked order: " + order);
-      assert.equal(await page.locator("#you").getByText("Try another day").count(), 0, "no demo clock in this plan");
 
       await page.click("#youDone");
       await waitYouClosed(page);
