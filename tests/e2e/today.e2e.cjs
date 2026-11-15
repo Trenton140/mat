@@ -49,6 +49,33 @@ function inView(page) {
   });
 }
 
+// A 1x1 PNG in place of a real photo.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+
+// The app goes to the background (hidden true) or comes back.
+const setHidden = (page, hidden) => page.evaluate((h) => {
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (h ? "hidden" : "visible") });
+  document.dispatchEvent(new Event("visibilitychange"));
+}, hidden);
+
+// 指定 beside its English on the Sky row, on one line, as large as the detail line.
+async function fixedMarkOnOneLine(page) {
+  const mark = await page.evaluate((sel) => {
+    const fx = document.querySelector(sel + " .r-fx");
+    const [b, en] = [fx.querySelector("b"), fx.querySelector("span")];
+    const rb = b.getBoundingClientRect();
+    const range = document.createRange();
+    range.selectNodeContents(en);
+    const lines = range.getClientRects().length;
+    return { jp: b.textContent, en: en.textContent, dy: Math.abs(rb.top - en.getBoundingClientRect().top), lines, enH: en.getBoundingClientRect().height, size: parseFloat(getComputedStyle(en).fontSize) };
+  }, row(SKY));
+  assert.equal(mark.jp, "指定");
+  assert.equal(mark.en, "Fixed time");
+  assert.ok(mark.dy <= 2, "指定 and Fixed time share a line: " + JSON.stringify(mark));
+  assert.equal(mark.lines, 1, "Fixed time is on one line");
+  assert.ok(mark.size >= 12.5, "at least the detail line's size: " + mark.size);
+}
+
 async function seedWithSky(patch) {
   const seed = JSON.parse(JSON.stringify(WITH_PLAN));
   Object.assign(seed.stops.find((s) => s.id === SKY), patch);
@@ -81,6 +108,15 @@ module.exports = [
       assert.ok(sky.includes("指定") && sky.includes("Fixed time"), sky);
       const others = await page.evaluate(() => [...document.querySelectorAll("#rail .r[data-id]")].filter((r) => r.dataset.id !== "planstop1203").map((r) => r.textContent));
       for (const t of others) assert.equal(/指定|Fixed time/.test(t), false, t);
+      await fixedMarkOnOneLine(page);
+    },
+  },
+  {
+    name: "a fixed time on a small phone is still one line",
+    viewport: { width: 320, height: 568 },
+    async run({ page }) {
+      await ready(page);
+      await fixedMarkOnOneLine(page);
     },
   },
   {
@@ -259,6 +295,8 @@ module.exports = [
       assert.equal(await count(page, tk("2026-12-12") + " .insp"), 0);
       await advance(page, backend, 50 * 60000);
       await until(async () => (await count(page, tk("2026-12-12") + " .insp")) === 1, "Dec 12 is used without a reload");
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?used$/);
+      assert.equal(await page.evaluate(() => document.querySelector("#pager .sq:nth-child(3)").classList.contains("is-done")), true, "the third square is filled");
       await page.reload();
       await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw again");
       await expectText(page, "#dayCount", /^Day 4 of 11/);
@@ -335,8 +373,6 @@ module.exports = [
   {
     name: "a photo that loads is shown on the open stop",
     async run({ page, context }) {
-      // A 1x1 PNG in place of a real photo.
-      const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
       await context.route("https://example.test/sky.png", (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
       await ready(page, { seed: await seedWithSky({ photo: "https://example.test/sky.png" }) });
       await until(() => has(page, row(SKY), "is-open"), "Sky is open");
@@ -357,6 +393,93 @@ module.exports = [
       assert.ok((await text(page, row(SKY) + " .r-s")).includes("in 10 min."), "no tick off screen");
       await page.click('[data-tab="days"]');
       await until(async () => (await text(page, row(SKY) + " .r-s")).includes("in 9 min."), "back on Days it catches up at once");
+    },
+  },
+  {
+    name: "the next stop's line changes in place each minute",
+    async run({ page, context }) {
+      await context.route("https://example.test/sky.png", (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+      const backend = await ready(page, { seed: await seedWithSky({ photo: "https://example.test/sky.png" }) });
+      await until(() => page.evaluate((sel) => !!document.querySelector(sel + ".is-open img.r-ph"), row(SKY)), "Sky is open with its photo");
+      await page.evaluate((sel) => {
+        const r = document.querySelector(sel);
+        r.__kept = 1;
+        r.querySelector("img.r-ph").__kept = 1;
+      }, row(SKY));
+      assert.ok((await text(page, row(SKY) + " .r-lv")).includes("in 10 min."));
+      await advance(page, backend, 60000);
+      await until(async () => (await text(page, row(SKY) + " .r-lv")) === "Leave by 13:30, in 9 min.", "the line moves on");
+      const kept = await page.evaluate((sel) => {
+        const r = document.querySelector(sel);
+        const img = r.querySelector("img.r-ph");
+        return { row: r.__kept === 1, img: !!img && img.__kept === 1, open: r.classList.contains("is-open") };
+      }, row(SKY));
+      assert.deepEqual(kept, { row: true, img: true, open: true });
+    },
+  },
+  {
+    name: "a photo that failed is not asked for again",
+    async run({ page }) {
+      const MISSING = "https://example.test/missing.jpg";
+      let asked = 0;
+      page.on("request", (req) => { if (req.url() === MISSING) asked++; });
+      const backend = await ready(page, { seed: await seedWithSky({ photo: MISSING }) });
+      await until(() => has(page, row(SKY), "is-open"), "Sky is open");
+      await until(() => page.evaluate((sel) => !document.querySelector(sel + " img"), row(SKY)), "the broken photo is gone");
+      assert.equal(asked, 1);
+      // Watch for any photo drawn again while the minute and two syncs pass.
+      await page.evaluate(() => {
+        globalThis.__photos = 0;
+        new MutationObserver((ms) => {
+          for (const m of ms) for (const n of m.addedNodes) if (n.nodeType === 1 && (n.matches("img.r-ph") || n.querySelector("img.r-ph"))) globalThis.__photos++;
+        }).observe(document.getElementById("rail"), { childList: true, subtree: true });
+      });
+      await advance(page, backend, 60000);
+      await advance(page, backend, 20000);
+      await advance(page, backend, 20000);
+      await until(async () => (await text(page, row(SKY) + " .r-lv")).includes("in 9 min."), "the minutes passed");
+      assert.equal(await page.evaluate(() => globalThis.__photos), 0, "no photo drawn again");
+      assert.equal(await count(page, row(SKY) + " .r-ph"), 0);
+      assert.equal(asked, 1, "asked for once");
+    },
+  },
+  {
+    name: "back after a night away, on today's ticket",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: jp("2026-12-12T23:40:00") });
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?today$/);
+      await setHidden(page, true);
+      await advance(page, backend, 50 * 60000);
+      await setHidden(page, false);
+      await expectText(page, "#dayCount", /^Day 4 of 11 ?today$/);
+      await until(async () => (await inView(page)) === "2026-12-13", "Dec 13 is in view");
+    },
+  },
+  {
+    name: "back on Days after a night on Money, on today's ticket",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: jp("2026-12-12T23:40:00") });
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?today$/);
+      await page.click('[data-tab="money"]');
+      await until(() => page.evaluate(() => document.getElementById("vMoney").classList.contains("is-active")), "Money shows");
+      await advance(page, backend, 50 * 60000);
+      await page.click('[data-tab="days"]');
+      await expectText(page, "#dayCount", /^Day 4 of 11 ?today$/);
+      await until(async () => (await inView(page)) === "2026-12-13", "Dec 13 is in view");
+    },
+  },
+  {
+    name: "back the same day, the ticket in view stays",
+    async run({ page }) {
+      const backend = await ready(page);
+      await page.click("#pager .sq:nth-child(6)");
+      await until(async () => (await inView(page)) === "2026-12-15", "Dec 15 is in view");
+      await setHidden(page, true);
+      await advance(page, backend, 60 * 60000);
+      await setHidden(page, false);
+      await advance(page, backend, 1000);
+      await expectText(page, "#dayCount", /^Day 6 of 11/);
+      assert.equal(await inView(page), "2026-12-15");
     },
   },
 ];

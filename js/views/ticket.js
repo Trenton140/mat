@@ -98,18 +98,8 @@ function route(h, tripName) {
   return r;
 }
 
-// The time column: the time ("—" without a valid one), and 指定 under it
-// for a time that cannot slip.
-function timeCell(stop) {
-  const c = el("div", "r-c");
-  c.append(el("div", "r-t", minutesOf(stop.time) === null ? "—" : stop.time));
-  if (stop.fixed === true) {
-    const fx = el("div", "r-fx");
-    fx.append(el("b", "", "指定"), el("i", "", "Fixed time"));
-    c.append(fx);
-  }
-  return c;
-}
+// A photo address that failed to load is not drawn again (this visit).
+const failedPhotos = new Set();
 
 // What shows when the stop is open: the photo, how to get there, the note,
 // and the buttons (directions, and the stop's own link).
@@ -118,13 +108,16 @@ function more(stop, origin) {
   wrap.inert = true;
   const inner = el("div");
   const photo = safeHref(stop.photo);
-  if (photo) {
+  if (photo && !failedPhotos.has(photo)) {
     const img = el("img", "r-ph");
     img.alt = "";
     img.loading = "lazy";
     img.decoding = "async";
     img.referrerPolicy = "no-referrer";
-    img.addEventListener("error", () => img.remove(), { once: true });
+    img.addEventListener("error", () => {
+      failedPhotos.add(photo);
+      img.remove();
+    }, { once: true });
     img.src = photo;
     inner.append(img);
   }
@@ -169,6 +162,12 @@ function row(stop, i, model) {
     if (title) n.append(title);
     body.append(n);
   }
+  // A time that cannot slip: 指定 beside the English, under the name.
+  if (stop.fixed === true) {
+    const fx = el("div", "r-fx");
+    fx.append(el("b", "", "指定"), " ", el("span", "", "Fixed time"));
+    body.append(fx);
+  }
   const lead = next ? nextLine(stop, minutes) : "";
   const detail = str(stop.detail);
   if (lead || detail) {
@@ -178,7 +177,7 @@ function row(stop, i, model) {
     if (detail) s.append(detail);
     body.append(s);
   }
-  r.append(timeCell(stop), body, el("div", "r-j", str(stop.signJp)), more(stop, originFor(stops, i, stays, day.date)));
+  r.append(el("div", "r-t", minutesOf(stop.time) === null ? "—" : stop.time), body, el("div", "r-j", str(stop.signJp)), more(stop, originFor(stops, i, stays, day.date)));
   return r;
 }
 

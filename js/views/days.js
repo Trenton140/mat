@@ -44,14 +44,32 @@ const calm = () => typeof matchMedia === "function" && matchMedia("(prefers-redu
 // whether a redrawn row is the same as the one on screen.
 const drawn = new WeakMap();
 
+// A row's markup without the text of its leave-by line.
+const LEAD = /(<b class="r-lv">)[^<]*(<\/b>)/;
+const withoutLead = (html) => html.replace(LEAD, "$1$2");
+
 // Puts the fresh rows into `rows` in order, keeping each old row that is
-// drawn the same. Only rows that changed or moved are touched.
+// drawn the same. A row that differs only in its leave-by line's words (the
+// next stop, every minute) keeps its node, and only those words change, so
+// focus, its photo, a height change under way and a screen reader are left
+// alone. Only rows that changed otherwise, or moved, are touched.
 function patchRows(rows, fresh) {
   const old = new Map();
   for (const r of rows.children) if (r.dataset.id) old.set(r.dataset.id, r);
   const want = [...fresh.children].map((r) => {
     const keep = r.dataset.id ? old.get(r.dataset.id) : null;
-    return keep && drawn.get(keep) === drawn.get(r) ? keep : r;
+    if (!keep) return r;
+    const was = drawn.get(keep);
+    const now = drawn.get(r);
+    if (was === now) return keep;
+    const lead = keep.querySelector(".r-lv");
+    const next = r.querySelector(".r-lv");
+    if (lead && next && withoutLead(was) === withoutLead(now)) {
+      lead.textContent = next.textContent;
+      drawn.set(keep, now);
+      return keep;
+    }
+    return r;
   });
   want.forEach((node, i) => {
     const at = rows.children[i];
@@ -308,29 +326,45 @@ export function mountDays(root, store, { clock, onAllDays = () => {} } = {}) {
     // Keep the day in view where it was, without animation.
     const keep = inView ? dates.indexOf(inView) : -1;
     if (!sameDays) goDay(keep >= 0 ? keep : cur);
-    else if (rail.scrollLeft !== left) rail.scrollLeft = left;
-    else showDay();
+    else {
+      if (rail.scrollLeft !== left) rail.scrollLeft = left;
+      showDay();
+    }
   }
+
+  const tzOf = (s) => s.trip.tz || "Asia/Tokyo";
+  const tripReady = (s) => s.status === "ready" && s.trip && s.trip.start;
 
   // Ask the clock again: redraw when the trip zone's minute or day moved on.
   function tick() {
     const s = store.state;
-    if (!(s.status === "ready" && s.trip && s.trip.start)) return;
-    const now = nowIn(s.trip.tz || "Asia/Tokyo", clock.now());
+    if (!tripReady(s)) return;
+    const now = nowIn(tzOf(s), clock.now());
     if (!seen || now.date !== seen.date || now.minutes !== seen.minutes) render(s);
   }
 
   // The clock is asked only while the app is on screen and Days is the
-  // screen showing; at once when either comes back.
+  // screen showing; at once when either comes back. Coming back on a later
+  // trip day than Days was last seen on, the rail moves to today's ticket
+  // (R32); it never moves while the screen is being looked at.
   let timer = null;
+  let leftOn = null; // the trip-zone date when Days was last on screen
   function wake() {
     const live = document.visibilityState !== "hidden" && root.classList.contains("is-active");
+    const s = store.state;
     if (live && !timer) {
       timer = setInterval(tick, TICK_MS);
       tick();
+      const back = leftOn;
+      leftOn = null;
+      if (back && tripReady(s) && dates.length) {
+        const nowMs = clock.now();
+        if (nowIn(tzOf(s), nowMs).date > back) goDay(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), nowMs));
+      }
     } else if (!live && timer) {
       clearInterval(timer);
       timer = null;
+      leftOn = tripReady(s) ? nowIn(tzOf(s), clock.now()).date : null;
     }
   }
   document.addEventListener("visibilitychange", wake);

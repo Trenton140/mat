@@ -61,7 +61,7 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 /* A used day: the gate stamp over the header, a hole punched in the perforation. */
 .insp{position:absolute;left:50%;margin-left:-39px;top:34px;width:78px;height:78px;transform:rotate(var(--rot));mix-blend-mode:multiply;pointer-events:none}
 .punch{position:absolute;right:22px;top:-6px;width:10px;height:10px;border-radius:50%;background:var(--ground);box-shadow:inset 0 1px 2px #000}
-.r{display:grid;grid-template-columns:48px minmax(0,1fr) auto;column-gap:8px;padding:10px 0;border-bottom:1px solid rgba(21,18,15,.17);cursor:pointer}
+.r{display:grid;grid-template-columns:3.7em minmax(0,1fr) auto;column-gap:8px;padding:10px 0;border-bottom:1px solid rgba(21,18,15,.17);cursor:pointer}
 .r:last-child{border-bottom:0}
 .r-t{font-size:15px;font-weight:900;padding-top:1px;font-variant-numeric:tabular-nums}
 .r-n{font-size:15.5px;font-weight:900;line-height:1.25;overflow-wrap:anywhere}
@@ -73,11 +73,9 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 .tag{display:inline-block;background:var(--print);color:var(--stock);font-size:11px;padding:1px 6px 2px;border-radius:2px;margin-right:6px;vertical-align:2px}
 /* Leave by: the line a person reads first on the next stop. */
 .r-lv{font-weight:900}
-/* 指定: a time that cannot slip, boxed under the time like a reserved seat. */
-.r-c{min-width:0}
-.r-fx{margin-top:5px;line-height:1.1}
-.r-fx b{display:inline-block;border:1.5px solid var(--print);border-radius:2px;padding:0 3px 1px;font-size:11.5px;font-weight:900}
-.r-fx i{display:block;margin-top:3px;font-size:10.5px;font-weight:700}
+/* 指定: a time that cannot slip, boxed like a reserved seat, beside its English. */
+.r-fx{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:12.5px;font-weight:700;line-height:1.2;white-space:nowrap}
+.r-fx b{border:1.5px solid var(--print);border-radius:2px;padding:0 4px 1px;font-weight:900}
 /* The open stop: a 200 ms height change, nothing else moves. */
 .r-more{grid-column:2 / -1;display:grid;grid-template-rows:0fr;transition:grid-template-rows .2s ease-out}
 .r.is-open .r-more{grid-template-rows:1fr}
@@ -91,5 +89,5 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 .r-ph{display:block;width:100%;height:158px;object-fit:cover;border-radius:3px;margin-top:10px;background:var(--stock-mark)}
 .r-note{font-size:13.5px;font-weight:500;padding-top:5px;overflow-wrap:anywhere}
 /* A day with no stops: one line in plain print where the rows would be. */
-.r-none{padding:14px 0 12px 56px;font-size:15px;font-weight:700}
+.r-none{padding:14px 0 12px calc(3.7em + 8px);font-size:15px;font-weight:700}
 .tk-foot{display:flex;justify-content:space-between;gap:8px;padding:9px 14px 12px;font-size:10.5px;font-weight:500;border-top:1px solid rgba(21,18,15,.17)}

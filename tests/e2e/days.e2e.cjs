@@ -102,7 +102,7 @@ module.exports = [
       await expectText(page, '.r[data-id="planstop1203"] .r-t', "14:00");
       await expectText(page, '.r[data-id="planstop1203"] .r-j', "渋谷");
       // On today's ticket the next stop's leave-by line comes first.
-      await expectText(page, '.r[data-id="planstop1203"] .r-s', /(^|\. )Booked for 14:00$/);
+      await expectText(page, '.r[data-id="planstop1203"] .r-s', /^(Leave by 13:30, in 10 min\. )?Booked for 14:00$/);
       await expectText(page, '.r[data-id="planstop1205"] .r-t', "—");
       assert.equal(/undefined/.test(await rowText(page, "planstop1205")), false);
     },
