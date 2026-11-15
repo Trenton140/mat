@@ -214,6 +214,11 @@ module.exports = [
       await until(async () => (await inView(page)) === "2026-12-12", "Dec 12 is in view");
       assert.equal(await page.evaluate(() => localStorage.getItem("mat.tab")), "money", "the remembered screen is untouched");
       assert.equal(await page.evaluate(() => localStorage.getItem("mat.tabDay")), "2026-11-15", "and so is the day it was remembered on (the real one)");
+      await page.click('[data-tab="days"]');
+      await page.click("#demoStop");
+      await until(async () => !(await visible(page, "#demo")), "Stop works");
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.tab")), "days", "going to Days by hand remembers Days");
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.tabDay")), "2026-11-15", "after Stop the remembered day is still the real one");
     },
   },
   {
@@ -323,6 +328,57 @@ module.exports = [
       await page.click("#youBtn");
       await waitYou(page);
       await expectText(page, "#setDemoV", "On");
+    },
+  },
+  {
+    name: "R34 b: exactly 10 minutes away keeps the demo",
+    async run({ page }) {
+      const backend = await ready(page);
+      await tryDay(page, "Sat 12");
+      await setHidden(page, true);
+      await advance(page, backend, 10 * 60000);
+      await setHidden(page, false);
+      assert.equal(await demoDay(page), "2026-12-12");
+      assert.equal(await visible(page, "#demo"), true);
+    },
+  },
+  {
+    name: "R34 b: a visible phone on Days ends the demo when the real day rolls over, and its timers stop",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: Date.parse("2026-11-15T23:55:00+09:00") });
+      await page.evaluate(() => {
+        const orig = window.setInterval.bind(window);
+        window.__iv = [];
+        window.setInterval = (f, d, ...a) => (window.__iv.push(d), orig(f, d, ...a));
+      });
+      await tryDay(page, "Sat 12");
+      await advance(page, backend, 600000); // the demo holds at 23:30; the real time is 00:05 on Nov 16
+      await until(async () => !(await visible(page, "#demo")), "the banner goes");
+      assert.equal(await demoDay(page), null);
+      await expectText(page, "#dayCount", /^Day 1 of 11 in 24 days/);
+      await until(async () => (await inView(page)) === "2026-12-10", "the rail is on the real today's ticket");
+      assert.equal((await page.evaluate(() => window.__iv)).pop(), 15000, "the normal tick");
+      // Nothing is left running for the demo: a long wait starts no new timer.
+      const timers = (await page.evaluate(() => window.__iv)).length;
+      await advance(page, backend, 120000);
+      assert.equal((await page.evaluate(() => window.__iv)).length, timers);
+    },
+  },
+  {
+    name: "R34 b: with Money showing on a visible page, the demo ends at the date change too",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: Date.parse("2026-11-15T23:55:00+09:00") });
+      await tryDay(page, "Sat 12");
+      await page.click('[data-tab="money"]');
+      await advance(page, backend, 600000);
+      await until(async () => (await demoDay(page)) === null, "the demo ended under Money");
+      await page.click('[data-tab="days"]');
+      assert.equal(await visible(page, "#demo"), false, "no banner on Days");
+      await expectText(page, "#dayCount", /^Day 1 of 11 in 24 days/);
+      await page.click('[data-tab="money"]');
+      await page.click("#youBtn");
+      await waitYou(page);
+      await expectText(page, "#setDemoV", "Pick");
     },
   },
 ];

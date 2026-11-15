@@ -24,6 +24,8 @@ const CHECK_MS = 20000;
 const TABS = ["days", "money"];
 // A demo left alone longer than this in the background is ended on return.
 const DEMO_AWAY_MS = 10 * 60 * 1000;
+// How often a running demo checks that the real day is still the one it started on.
+const DEMO_GUARD_MS = 30000;
 
 // localStorage, or a stand-in in memory when the browser will not give it.
 function phoneStorage() {
@@ -205,6 +207,13 @@ function start() {
   const realToday = () => dateIn((store.state.trip && store.state.trip.tz) || "Asia/Tokyo", Date.now());
   let demoOn = null; // the real trip-zone day the demo was started on
   let hiddenAt = null;
+  // The one rule: a running demo ends when it was left more than 10 minutes
+  // in the background, or the real trip-zone day is no longer the one it
+  // started on. Checked on return to the foreground and, while a demo runs,
+  // by a slow timer (a visible phone is never left pretending unseen).
+  const endStaleDemo = (away) => {
+    if (clock.demoDay() && (away > DEMO_AWAY_MS || realToday() !== demoOn)) clock.stop();
+  };
   document.addEventListener("visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       hiddenAt = Date.now();
@@ -212,7 +221,16 @@ function start() {
     }
     const away = hiddenAt === null ? 0 : Date.now() - hiddenAt;
     hiddenAt = null;
-    if (clock.demoDay() && (away > DEMO_AWAY_MS || realToday() !== demoOn)) clock.stop();
+    endStaleDemo(away);
+  });
+  // The slow timer exists only while a demo runs.
+  let demoGuard = null;
+  clock.subscribe(() => {
+    if (clock.demoDay() && !demoGuard) demoGuard = setInterval(() => endStaleDemo(0), DEMO_GUARD_MS);
+    else if (!clock.demoDay() && demoGuard) {
+      clearInterval(demoGuard);
+      demoGuard = null;
+    }
   });
   const you = mountYou(phone, store, {
     demo: clock,
