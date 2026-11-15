@@ -1964,7 +1964,7 @@ test("a stop add whose reply is lost, then Undo: the backend ends with it remove
   const id = idOf(p.store);
   await p.store.idle();
   assert.equal(p.store.state.notice, UNCONFIRMED);
-  assert.equal(stopOf(p.store, id), undefined, "rolled back meanwhile");
+  assert.equal(stopOf(p.store, id).deleted, false, "the backend's truth is shown at once (it did land)");
   assert.deepEqual(queueOf(p.storage), [], "a stop add is never kept in mat.queue");
   p.net.lose.clear();
   p.store.clearNotice();
@@ -2046,7 +2046,7 @@ test("a stop edit whose reply is lost: shown after contact, and Undo takes it ba
   const t = p.store.updateStop(SKY.id, { time: "15:30", travelMin: 20 });
   await p.store.idle();
   assert.equal(p.store.state.notice, UNCONFIRMED);
-  assert.equal(stopOf(p.store, SKY.id).time, "14:00", "rolled back meanwhile");
+  assert.equal(stopOf(p.store, SKY.id).time, "15:30", "the backend's truth is shown at once (it did land)");
   assert.deepEqual(queueOf(p.storage), []);
   p.net.lose.clear();
   p.store.clearNotice();
@@ -2159,4 +2159,27 @@ test("a cache from before the plan existed still paints, and the load fills in t
   hold();
   await booting;
   assert.equal(stopOf(p.store, SKY.id).title, "Shibuya Sky");
+});
+
+test("a stop write with no reply asks the backend at once, so the truth is back before anyone types it again", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.lose.add("addStop");
+  p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" });
+  const id = idOf(p.store);
+  await p.store.idle();
+  assert.equal(p.store.state.notice, UNCONFIRMED);
+  assert.equal(stopOf(p.store, id).title, "Shibuya Sky", "shown again from the backend, without waiting for the 20-second check");
+  assert.equal(sent(p.fake, "addStop"), 1, "the write itself is not sent again");
+  assert.equal(sent(p.fake, "load"), 2, "one reload");
+});
+
+test("an expense edit with no reply still waits for the next contact (unchanged by the stop rule)", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.net.lose.add("updateExpense");
+  p.store.updateExpense("seedexp004", { amount: 4500 });
+  await p.store.idle();
+  assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200);
+  assert.equal(sent(p.fake, "rev") + sent(p.fake, "load"), 1, "only the boot load");
 });

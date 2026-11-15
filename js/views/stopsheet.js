@@ -17,6 +17,7 @@
 import { dayHead } from "../format.js";
 
 const NO_SIGNAL = "No signal. Stops need a connection.";
+const GONE = "Someone removed this stop, so it can’t be saved.";
 const TIME = /^([01]\d|2[0-3]):[0-5]\d/;
 
 const MARKUP = `
@@ -30,7 +31,7 @@ const MARKUP = `
   <label class="st-f st-time"><span>Minutes to get there</span><input id="stMin" inputmode="numeric" maxlength="3" autocomplete="off" enterkeyhint="next"></label>
   <label class="st-sw"><span>The time can’t slip<i>指定</i></span><input id="stFixed" type="checkbox" role="switch"></label>
   <label class="st-f"><span>Place name or pasted Maps link</span><input id="stPlace" maxlength="200" autocomplete="off" enterkeyhint="next"></label>
-  <label class="st-f"><span>Link to a ticket or confirmation</span><input id="stLink" type="url" inputmode="url" autocomplete="off" enterkeyhint="next"></label>
+  <label class="st-f"><span>Link to a ticket or confirmation</span><input id="stLink" type="url" inputmode="url" maxlength="500" autocomplete="off" enterkeyhint="next"></label>
   <label class="st-f"><span>Japanese name on signs</span><input id="stSign" maxlength="20" lang="ja" autocomplete="off" enterkeyhint="done"></label>
   <p class="st-msg" id="stMsg" role="status"></p>
   <div class="st-btns"><button type="button" id="stDel" hidden>Remove</button><button type="button" id="stSave" disabled>Add stop</button></div>
@@ -54,6 +55,19 @@ const cleanMin = (v) => {
   const digits = str(v).replace(/\D/g, "");
   return digits ? Number(digits) : 0;
 };
+
+// What the backend's validateStop (backend/Pure.js) would refuse in these
+// fields, in its own words, and the field to correct; null when it takes
+// them. The other limits are the fields' maxlength, the name is required
+// before Save comes on, the time is cleaned and the day comes from a ticket,
+// so this is everything a save from the sheet can be refused for.
+const goodUrl = (v) => v.length <= 500 && /^https?:\/\/\S+$/i.test(v);
+function problem(v) {
+  if (v.travelMin > 600) return { field: "travelMin", text: "Minutes to get there must be a whole number from 0 to 600." };
+  if (/^https?:/i.test(v.place) && !goodUrl(v.place)) return { field: "place", text: "That map link didn’t come through properly." };
+  if (v.link && !goodUrl(v.link)) return { field: "link", text: "That link has to start with https://." };
+  return null;
+}
 
 export function mountStopSheet(root, store) {
   const scrim = el("div", "scrim");
@@ -84,6 +98,7 @@ export function mountStopSheet(root, store) {
   let date = null; // the day the stop is on
   let stopId = null; // the stop being changed
   let was = null; // the fields as they were filled, to send only what changed
+  let refused = ""; // why the last Save was not sent, until a field changes
 
   const isOpen = () => sheet.classList.contains("is-open");
   const current = () => (store.state.stops || []).find((s) => s && s.id === stopId && !s.deleted) || null;
@@ -118,23 +133,26 @@ export function mountStopSheet(root, store) {
     was = read();
   }
 
-  // Save and Remove, and the no-signal line: from the store and the name.
+  // Something differs from what the sheet opened with (a field typed and
+  // put back counts as unchanged).
+  function changed() {
+    const now = read();
+    return Object.keys(now).some((k) => now[k] !== was[k]);
+  }
+
+  // Save and Remove, and the line above them: no signal, the stop removed on
+  // another phone (what was typed stays, but cannot be saved; it comes back
+  // if the stop is put back), or why the last Save was not sent.
   function update() {
     if (!isOpen()) return;
     const off = !online();
-    save.disabled = off || f.title.value.trim() === "";
-    del.disabled = off;
-    msg.textContent = off ? NO_SIGNAL : "";
+    const gone = mode === "edit" && !current();
+    save.disabled = off || gone || f.title.value.trim() === "";
+    del.disabled = off || gone;
+    msg.textContent = off ? NO_SIGNAL : gone ? GONE : refused;
   }
 
-  function render() {
-    if (!isOpen()) return;
-    if (mode === "edit" && !current()) {
-      close(false);
-      return;
-    }
-    update();
-  }
+  const render = update;
 
   function show(title, day, saveWord) {
     head.textContent = title;
@@ -184,6 +202,7 @@ export function mountStopSheet(root, store) {
     const day = date;
     mode = null;
     stopId = null;
+    refused = "";
     sheet.classList.remove("is-open");
     sheet.inert = true;
     scrim.hidden = true;
@@ -200,6 +219,14 @@ export function mountStopSheet(root, store) {
     if (save.disabled) return;
     const now = read();
     if (!now.title) return;
+    // Refused here in the backend's words, with everything typed kept.
+    const why = problem(now);
+    if (why) {
+      refused = why.text;
+      update();
+      f[why.field].focus();
+      return;
+    }
     if (mode === "add") {
       store.addStop({ date, ...now });
     } else if (mode === "edit") {
@@ -235,9 +262,21 @@ export function mountStopSheet(root, store) {
     else if (box.top < view.top + pad) sheet.scrollTop -= view.top + pad - box.top;
   }
   sheet.addEventListener("focusin", () => requestAnimationFrame(keepInView));
-  if (globalThis.visualViewport) globalThis.visualViewport.addEventListener("resize", keepInView);
+  // iOS moves the visible area (offsetTop) with "scroll" as well as "resize".
+  if (globalThis.visualViewport) {
+    globalThis.visualViewport.addEventListener("resize", keepInView);
+    globalThis.visualViewport.addEventListener("scroll", keepInView);
+  }
 
   f.title.addEventListener("input", update);
+  // Correcting any field takes the reason away.
+  const edited = () => {
+    if (!refused) return;
+    refused = "";
+    update();
+  };
+  sheet.addEventListener("input", edited);
+  sheet.addEventListener("change", edited);
   // Minutes are a whole number: anything else typed is dropped.
   f.travelMin.addEventListener("input", () => {
     const digits = f.travelMin.value.replace(/\D/g, "");
@@ -246,15 +285,20 @@ export function mountStopSheet(root, store) {
   save.addEventListener("click", onSave);
   del.addEventListener("click", onRemove);
   done.addEventListener("click", () => close());
-  scrim.addEventListener("click", () => close());
-  document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape") close();
+  // A tap outside closes the sheet only when nothing was changed (R33).
+  scrim.addEventListener("click", () => {
+    if (isOpen() && !changed()) close();
   });
-  // The keyboard's Next goes to the next field; on the last one it puts the keyboard away.
-  const order = [f.title, f.time, f.detail, f.travelMin, f.place, f.link, f.signJp];
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && !ev.isComposing) close();
+  });
+  // The keyboard's Next, in a one-line field, goes to the next field (the
+  // directions box among them); on the last one it puts the keyboard away.
+  // Enter in the directions box is its own (a new line).
+  const order = [f.title, f.time, f.detail, f.gettingThere, f.travelMin, f.place, f.link, f.signJp];
   sheet.addEventListener("keydown", (ev) => {
     const i = order.indexOf(ev.target);
-    if (ev.key !== "Enter" || i < 0 || ev.isComposing) return;
+    if (ev.key !== "Enter" || i < 0 || ev.isComposing || ev.target === f.gettingThere) return;
     ev.preventDefault();
     if (order[i + 1]) order[i + 1].focus();
     else ev.target.blur();

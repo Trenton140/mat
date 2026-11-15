@@ -230,16 +230,152 @@ module.exports = [
     },
   },
   {
-    name: "a bad link is refused in the backend's words",
+    name: "a bad link is refused in the backend's words, with everything typed kept (R33 b)",
     async run({ page }) {
       const backend = await ready(page);
       const rows = backend.fake.tables.Stops.length;
-      await addTower(page, { "#stLink": "javascript:alert(1)" });
-      await expectText(page, "#ubarT", "That link has to start with https://.");
+      await openAdd(page);
+      const typed = {
+        "#stWhat": "Tower Records", "#stTime": "16:00", "#stDetail": "Seven floors of records", "#stGo": "Walk from Shibuya Sky",
+        "#stMin": "15", "#stPlace": "Tower Records Shibuya", "#stLink": "javascript:alert(1)", "#stSign": "タワーレコード",
+      };
+      for (const [sel, v] of Object.entries(typed)) await page.fill(sel, v);
+      await page.click("#stFixed");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "That link has to start with https://.");
+      assert.equal(await isOpen(page, "stop"), true, "the sheet stays open");
+      for (const [sel, v] of Object.entries(typed)) assert.equal(await value(page, sel), v, sel + " is kept");
+      assert.equal(await page.evaluate(() => document.getElementById("stFixed").checked), true);
+      assert.equal(await page.evaluate(() => document.activeElement.id), "stLink", "the field to correct has focus");
       await idle(page);
       assert.equal((await rowTitles(page, D12)).includes("Tower Records"), false);
       assert.equal(backend.fake.tables.Stops.length, rows);
+      assert.equal(backend.requests.filter((r) => r.action === "addStop").length, 0, "nothing sent, so nothing in History");
+      // Minutes past what the backend takes are refused in its words too.
+      await page.fill("#stLink", "https://example.test/tower");
+      assert.equal(await text(page, "#stMsg"), "", "correcting a field clears the reason");
+      await page.fill("#stMin", "700");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "Minutes to get there must be a whole number from 0 to 600.");
+      await page.fill("#stMin", "15");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await idle(page);
+      const added = backend.fake.tables.Stops.at(-1);
+      assert.deepEqual([added.title, added.link, Number(added.travel_min)], ["Tower Records", "https://example.test/tower", 15]);
       assert.equal(await page.evaluate(() => [...document.querySelectorAll("#rail a")].some((a) => /^javascript:/i.test(a.getAttribute("href") || ""))), false);
+    },
+  },
+  {
+    name: "a place that starts like a link must be a good one",
+    async run({ page }) {
+      await ready(page);
+      await openAdd(page);
+      await page.fill("#stWhat", "Tower Records");
+      await page.fill("#stPlace", "https://maps example");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "That map link didn’t come through properly.");
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await page.evaluate(() => document.getElementById("stLink").maxLength), 500, "the ticket link is kept to the backend's 500");
+    },
+  },
+  {
+    name: "a tap outside closes the sheet only when nothing was changed (R33 a)",
+    async run({ page }) {
+      await ready(page);
+      const outside = () => page.click("#stopScrim", { position: { x: 195, y: 20 } });
+      await openAdd(page);
+      await outside();
+      await waitSheetClosed(page);
+      await openAdd(page);
+      await page.fill("#stWhat", "Tower Records");
+      await outside();
+      await page.waitForTimeout(100);
+      assert.equal(await isOpen(page, "stop"), true, "a changed sheet stays open");
+      await page.fill("#stWhat", "");
+      await outside();
+      await waitSheetClosed(page);
+      // Editing: the same, and the switch counts as a change.
+      await openEdit(page, SKY);
+      await page.click("#stFixed");
+      await outside();
+      await page.waitForTimeout(100);
+      assert.equal(await isOpen(page, "stop"), true);
+      await page.click("#stFixed");
+      await outside();
+      await waitSheetClosed(page);
+      // Done still closes a changed sheet.
+      await openAdd(page);
+      await page.fill("#stWhat", "Tower Records");
+      await page.click("#stDone");
+      await waitSheetClosed(page);
+    },
+  },
+  {
+    name: "Next goes through every field, and Enter in the directions is left alone",
+    async run({ page }) {
+      await ready(page);
+      await openAdd(page);
+      await page.press("#stDetail", "Enter");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "stGo");
+      await page.fill("#stGo", "Walk");
+      await page.press("#stGo", "Enter");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "stGo", "Enter stays in the directions");
+      assert.equal(await value(page, "#stGo"), "Walk\n");
+      await page.press("#stMin", "Enter");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "stPlace");
+    },
+  },
+  {
+    name: "Escape while composing Japanese does not close the sheet",
+    async run({ page }) {
+      await ready(page);
+      await openAdd(page);
+      await page.fill("#stSign", "たわ");
+      await page.evaluate(() => document.getElementById("stSign").dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", isComposing: true, bubbles: true })));
+      await page.waitForTimeout(100);
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await value(page, "#stSign"), "たわ");
+      await page.press("#stSign", "Escape");
+      await waitSheetClosed(page);
+    },
+  },
+  {
+    name: "the stop being changed is removed on another phone: the sheet says so and keeps what was typed",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openEdit(page, SKY);
+      await page.fill("#stDetail", "Gate B");
+      let env = await backend.handle({ key: "test-key", actor: "Ajen", via: "app", action: "deleteStop", args: { id: SKY } });
+      assert.equal(env.ok, true, JSON.stringify(env));
+      await advance(page, backend, 20000);
+      await expectText(page, "#stMsg", "Someone removed this stop, so it can’t be saved.");
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await value(page, "#stDetail"), "Gate B");
+      assert.equal(await disabled(page, "#stSave"), true);
+      assert.equal(await disabled(page, "#stDel"), true);
+      // Put back on that phone: the sheet can save again.
+      env = await backend.handle({ key: "test-key", actor: "Ajen", via: "app", action: "restoreStop", args: { id: SKY } });
+      assert.equal(env.ok, true, JSON.stringify(env));
+      await advance(page, backend, 20000);
+      await until(async () => !(await disabled(page, "#stSave")), "Save comes back on");
+      assert.equal(await text(page, "#stMsg"), "");
+    },
+  },
+  {
+    name: "the field being typed in is kept in view when the visible area scrolls",
+    async run({ page }) {
+      await ready(page);
+      await openAdd(page);
+      await page.focus("#stSign");
+      await page.evaluate(() => { document.getElementById("stop").scrollTop = 0; });
+      const below = () => page.evaluate(() => {
+        const f = document.getElementById("stSign").getBoundingClientRect();
+        return f.bottom > document.getElementById("stop").getBoundingClientRect().bottom;
+      });
+      assert.equal(await below(), true, "the field starts out of the sheet's view");
+      await page.evaluate(() => visualViewport.dispatchEvent(new Event("scroll")));
+      await until(async () => !(await below()), "a visual-viewport scroll brings it back into view");
     },
   },
   {

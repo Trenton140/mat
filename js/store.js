@@ -550,6 +550,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       } else {
         removeOp(op);
         state.notice = failNotice(err);
+        // A stop with no reply is asked about at once, not at the next
+        // 20-second check, so a stop that did land is back on screen before
+        // anyone types it again. (A reload only: the write is never resent.)
+        if (op.kind === "stop" && fateUnknown(err)) track(checkRev());
       }
     }
     saveQueue();
