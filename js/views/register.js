@@ -1,0 +1,437 @@
+// The register: the sheet where an expense is rung up or changed. Its own
+// number pad, quick chips, payer and split seals, a day stepper, and the
+// uneven split panel (js/views/uneven.js).
+//
+// mountRegister(root, store, { now, storage }) -> { open(day?), edit(id), close(), isOpen() }
+// root is the phone; the register sits at its bottom over the Money view.
+// storage keeps mat.cur, the currency last used on this phone.
+
+import { defaultRingDay, newId } from "../time.js";
+import { yen, dollars, pt, dayShort } from "../format.js";
+import { mountUneven, splitOf, toUnits, fromUnits } from "./uneven.js";
+
+// Each quick pick carries a kind, stored with the line and never shown.
+export const CHIPS = [
+  { label: "Dinner", kind: "food" }, { label: "Lunch", kind: "food" }, { label: "Coffee", kind: "food" },
+  { label: "Drinks", kind: "food" }, { label: "Groceries", kind: "food" },
+  { label: "Train", kind: "transport" }, { label: "Taxi", kind: "transport" }, { label: "Flight", kind: "transport" },
+  { label: "Stay", kind: "stay" },
+  { label: "Tickets", kind: "activity" }, { label: "Onsen", kind: "activity" },
+  { label: "Shopping", kind: "shopping" },
+];
+
+const MAX_DIGITS = 8;
+const HOLD_MS = 500;
+const DAY_MS = 86400000;
+const FIELDS = ["title", "amount", "currency", "paidBy", "split", "splitMode", "splitVals", "day", "kind"];
+
+// Fixed markup only: names and titles go in later with textContent.
+const MARKUP = `
+<div class="reg-top"><span id="regTitle">Ring up</span><button type="button" id="regDone">Done</button></div>
+<div class="lcd">
+  <div class="lcd-1"><input id="xWhat" type="text" maxlength="80" placeholder="what was it?" autocomplete="off" enterkeyhint="done" aria-label="What was it"><span id="xAmt">¥0</span></div>
+  <div class="lcd-2">
+    <div class="step"><button type="button" id="dPrev" aria-label="Earlier day">‹</button><span id="xDay"></span><button type="button" id="dNext" aria-label="Later day">›</button></div>
+    <span id="xConv"></span>
+  </div>
+</div>
+<div class="chips" id="xQuick"></div>
+<div class="who">
+  <div><span class="who-l">paid</span><span class="seals" id="xPayer"></span></div>
+  <div><span class="who-l who-split">split<button type="button" id="xUneven">Uneven</button></span><span class="seals" id="xSplit"></span></div>
+</div>
+<div class="pad" id="pad">
+  <button type="button" class="key" data-k="7">7</button><button type="button" class="key" data-k="8">8</button><button type="button" class="key" data-k="9">9</button><button type="button" class="key" data-k="del" aria-label="Delete">⌫</button>
+  <button type="button" class="key" data-k="4">4</button><button type="button" class="key" data-k="5">5</button><button type="button" class="key" data-k="6">6</button><button type="button" class="key" data-k="cur" id="kCur">¥ → $</button>
+  <button type="button" class="key" data-k="1">1</button><button type="button" class="key" data-k="2">2</button><button type="button" class="key" data-k="3">3</button><button type="button" class="key go" data-k="go" id="kGo" disabled>Ring<br>it up</button>
+  <button type="button" class="key" data-k="0">0</button><button type="button" class="key" data-k="00">00</button><button type="button" class="key" data-k=".">.</button>
+</div>`;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function defaultStorage() {
+  try {
+    return globalThis.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+// "pre", then every date of the trip.
+function dayOptions(trip) {
+  if (!trip || !trip.start || !trip.end) return ["pre"];
+  const utc = (s) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - 1, +s.slice(8, 10));
+  const out = ["pre"];
+  for (let t = utc(trip.start), end = utc(trip.end); t <= end; t += DAY_MS) out.push(new Date(t).toISOString().slice(0, 10));
+  return out;
+}
+
+// The amount as stored, back as the keys would have typed it.
+function typedAmount(e) {
+  if (e.currency === "JPY") return String(Math.round(e.amount));
+  const cents = Math.round(e.amount * 100);
+  return cents % 100 ? (cents / 100).toFixed(2) : String(cents / 100);
+}
+
+const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const calm = () => globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+export function mountRegister(root, store, { now = () => Date.now(), storage = defaultStorage() } = {}) {
+  const reg = el("div", "reg");
+  reg.id = "reg";
+  reg.setAttribute("role", "dialog");
+  reg.setAttribute("aria-label", "Ring up an expense");
+  reg.inert = true;
+  reg.innerHTML = MARKUP;
+  root.append(reg);
+  const $ = (id) => reg.querySelector("#" + id);
+  const what = $("xWhat");
+  const amtOut = $("xAmt");
+  const go = $("kGo");
+  const chips = $("xQuick");
+  const payerSeals = $("xPayer");
+  const splitSeals = $("xSplit");
+  const unevenBtn = $("xUneven");
+  const view = () => root.querySelector("#vMoney");
+
+  chips.replaceChildren(
+    ...CHIPS.map((c) => {
+      const b = el("button", "chip", c.label);
+      b.type = "button";
+      b.dataset.q = c.label;
+      return b;
+    }),
+  );
+
+  const storedCur = () => {
+    try {
+      return storage && storage.getItem("mat.cur") === "CAD" ? "CAD" : "JPY";
+    } catch {
+      return "JPY";
+    }
+  };
+  const keepCur = (cur) => {
+    try {
+      if (storage) storage.setItem("mat.cur", cur);
+    } catch {
+      // private mode: it starts in yen next time
+    }
+  };
+
+  const names = () => store.state.people.map((p) => p.name);
+  const me = () => store.state.me || names()[0] || "";
+  const today = () => (store.state.trip && store.state.trip.start ? defaultRingDay(store.state.trip, now()) : "pre");
+
+  // tagged: the label whose kind the line carries while its title still reads so.
+  const blank = () => ({ amt: "", tagged: null, split: names(), mode: null, parts: {}, exact: {} });
+  let draft = { ...blank(), editId: null, orig: null, cur: storedCur(), payer: "", day: "pre", rate: null };
+  let opened = false;
+  let sending = false;
+  let peopleShown = "";
+
+  const uneven = mountUneven(reg, { onChange: render });
+
+  function resetLine() {
+    Object.assign(draft, blank());
+    what.value = "";
+    uneven.close();
+  }
+
+  function startFresh(day) {
+    resetLine();
+    Object.assign(draft, { editId: null, orig: null, cur: storedCur(), payer: me(), day: day || today() });
+  }
+
+  const kindNow = () => (draft.tagged && what.value.trim() === draft.tagged.label ? draft.tagged.kind : "");
+  const rate = () => (draft.orig ? draft.orig.rate : store.state.rateToday);
+
+  function drawSeals() {
+    const people = store.state.people;
+    const sig = JSON.stringify(people.map((p) => [p.name, p.initials]));
+    if (sig === peopleShown) return;
+    peopleShown = sig;
+    const seals = (label) =>
+      people.map((p) => {
+        const b = el("button", "seal", p.initials || p.name.slice(0, 2).toUpperCase());
+        b.type = "button";
+        b.dataset.p = p.name;
+        b.setAttribute("aria-label", label(p.name));
+        return b;
+      });
+    payerSeals.replaceChildren(...seals((n) => n + " paid"));
+    splitSeals.replaceChildren(...seals((n) => "Split with " + n));
+  }
+
+  function canGo() {
+    return !sending && toUnits(draft.amt, draft.cur) > 0 && what.value.trim() !== "" && splitOf(draft).ok;
+  }
+
+  function render() {
+    drawSeals();
+    draft.rate = rate();
+    const units = toUnits(draft.amt, draft.cur);
+    const sym = draft.cur === "JPY" ? "¥" : "$";
+    const shown = draft.amt === "" ? "0" : draft.amt.replace(/^\d+/, (w) => String(Number(w)).replace(/\B(?=(\d{3})+(?!\d))/g, ","));
+    amtOut.innerHTML = pt(sym + shown);
+    $("kCur").textContent = draft.cur === "JPY" ? "¥ → $" : "$ → ¥";
+    $("xDay").textContent = dayShort(draft.day);
+    const opts = dayOptions(store.state.trip);
+    const i = opts.indexOf(draft.day);
+    $("dPrev").disabled = i <= 0;
+    $("dNext").disabled = i === -1 || i >= opts.length - 1;
+
+    const split = splitOf(draft);
+    let conv = "";
+    if (units > 0 && split.mode !== "equal") conv = "uneven";
+    else if (units > 0) {
+      conv = "÷" + draft.split.length;
+      if (draft.rate > 0) conv += "  ≈ " + (draft.cur === "JPY" ? dollars(Math.round((units / draft.rate) * 100)) : yen(Math.round((units / 100) * draft.rate)));
+    }
+    $("xConv").textContent = conv;
+    unevenBtn.classList.toggle("is-on", split.mode !== "equal");
+
+    const kind = kindNow();
+    for (const b of chips.children) b.classList.toggle("is-on", !!kind && b.dataset.q === draft.tagged.label);
+    for (const b of payerSeals.children) b.classList.toggle("is-on", b.dataset.p === draft.payer);
+    for (const b of splitSeals.children) b.classList.toggle("is-on", draft.split.includes(b.dataset.p));
+
+    $("regTitle").textContent = draft.editId ? "Change this line" : "Ring up";
+    if (draft.editId) go.textContent = "Save";
+    else go.replaceChildren("Ring", el("br"), "it up");
+    go.disabled = !canGo();
+    uneven.render(draft);
+  }
+
+  // ---- keys ----
+
+  function press(k) {
+    if (k === "go") return ringUp();
+    if (k === "cur") {
+      draft.cur = draft.cur === "JPY" ? "CAD" : "JPY";
+      if (draft.cur === "JPY") {
+        draft.amt = draft.amt.split(".")[0];
+        for (const n of Object.keys(draft.exact)) draft.exact[n] = draft.exact[n].split(".")[0];
+      }
+      keepCur(draft.cur);
+    } else if (k === "del") {
+      draft.amt = draft.amt.slice(0, -1);
+    } else if (k === ".") {
+      if (draft.cur === "CAD" && !draft.amt.includes(".")) draft.amt = (draft.amt || "0") + ".";
+    } else {
+      const dec = draft.amt.split(".")[1];
+      if (dec !== undefined && dec.length + k.length > 2) return;
+      if (draft.amt.replace(".", "").length + k.length > MAX_DIGITS) return;
+      draft.amt += k;
+      if (/^0+$/.test(draft.amt)) draft.amt = "";
+    }
+    // Exact amounts that no longer add up: show what is left to assign.
+    if (draft.mode === "exact" && toUnits(draft.amt, draft.cur) > 0 && !splitOf(draft).ok) uneven.open();
+    render();
+  }
+
+  // The line as the backend takes it.
+  function fields() {
+    const units = toUnits(draft.amt, draft.cur);
+    const split = splitOf(draft);
+    return {
+      day: draft.day, title: what.value.trim(), amount: fromUnits(units, draft.cur), currency: draft.cur,
+      paidBy: draft.payer, split: draft.split.slice(), splitMode: split.mode, splitVals: split.vals, kind: kindNow(),
+    };
+  }
+
+  function ringUp() {
+    if (!canGo()) return;
+    const line = fields();
+    if (draft.editId) {
+      const patch = {};
+      for (const k of FIELDS) if (!same(line[k], draft.orig[k])) patch[k] = line[k];
+      if (Object.keys(patch).length) store.updateExpense(draft.editId, patch);
+      close();
+      return;
+    }
+    // Disabled from the tap until the line is on the receipt.
+    sending = true;
+    go.disabled = true;
+    const id = newId();
+    store.addExpense({ id, ...line, note: "" }); // draws the line before it returns
+    resetLine();
+    sending = false;
+    render();
+    printLine(id);
+  }
+
+  // ---- placing things in view ----
+
+  // Scrolls the Money view so `bottom` (a y on screen) clears the register.
+  function clear(bottom) {
+    const v = view();
+    if (!v) return;
+    const regTop = v.getBoundingClientRect().bottom - reg.offsetHeight;
+    const over = bottom - (regTop - 16);
+    if (over > 0) v.scrollBy({ top: over, behavior: calm() ? "auto" : "smooth" });
+  }
+
+  function printLine(id) {
+    const row = root.querySelector('#rc .rc-row[data-id="' + id + '"]');
+    if (!row) return;
+    const bottom = row.getBoundingClientRect().bottom; // before the reveal starts it at no height
+    row.classList.add("print");
+    clear(bottom);
+  }
+
+  function showDay(day) {
+    const group = root.querySelector('#rc .rc-group[data-day="' + day + '"]');
+    if (group) clear(group.getBoundingClientRect().bottom);
+  }
+
+  // ---- open and close ----
+
+  function show() {
+    opened = true;
+    reg.inert = false;
+    reg.classList.add("is-open");
+    root.classList.add("reg-open");
+    render();
+    const v = view();
+    if (v) v.style.paddingBottom = 96 + reg.offsetHeight + "px";
+    showDay(draft.day);
+  }
+
+  function open(day) {
+    if (draft.editId) startFresh(day);
+    else {
+      if (!names().includes(draft.payer)) draft.payer = me();
+      if (!draft.split.length) draft.split = names();
+      draft.day = day || today();
+      draft.cur = storedCur();
+      if (draft.cur === "JPY") draft.amt = draft.amt.split(".")[0];
+    }
+    show();
+  }
+
+  function edit(id) {
+    const e = store.state.expenses.find((x) => x.id === id && !x.deleted);
+    if (!e) return false;
+    resetLine();
+    const mode = e.splitMode === "parts" || e.splitMode === "exact" ? e.splitMode : null;
+    Object.assign(draft, {
+      editId: id, orig: { ...e }, amt: typedAmount(e), cur: e.currency, payer: e.paidBy, day: e.day,
+      split: names().filter((n) => e.split.includes(n)), tagged: { label: e.title, kind: e.kind || "" }, mode,
+    });
+    e.split.forEach((n, i) => {
+      const v = e.splitVals[i];
+      if (mode === "parts") draft.parts[n] = v;
+      if (mode === "exact") draft.exact[n] = e.currency === "JPY" ? String(v) : typedAmount({ currency: "CAD", amount: v });
+    });
+    what.value = e.title;
+    show();
+    return true;
+  }
+
+  function close() {
+    if (!opened) return;
+    opened = false;
+    stopHold();
+    if (draft.editId) startFresh();
+    uneven.close();
+    reg.classList.remove("is-open");
+    reg.inert = true;
+    root.classList.remove("reg-open");
+    const v = view();
+    if (v) v.style.paddingBottom = "";
+    if (reg.contains(document.activeElement)) document.activeElement.blur();
+  }
+
+  // ---- taps ----
+
+  $("pad").addEventListener("click", (ev) => {
+    const b = ev.target.closest(".key");
+    if (b && !b.disabled) press(b.dataset.k);
+  });
+  $("regDone").addEventListener("click", close);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Escape" && opened) close();
+  });
+  what.addEventListener("input", render);
+  what.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") what.blur();
+  });
+  chips.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".chip");
+    if (!b) return;
+    const chip = CHIPS.find((c) => c.label === b.dataset.q);
+    what.value = chip.label;
+    draft.tagged = { ...chip };
+    render();
+  });
+  payerSeals.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".seal");
+    if (!b) return;
+    draft.payer = b.dataset.p;
+    render();
+  });
+
+  const stepDay = (n) => {
+    const opts = dayOptions(store.state.trip);
+    const i = opts.indexOf(draft.day) + n;
+    if (i >= 0 && i < opts.length) draft.day = opts[i];
+    render();
+  };
+  $("dPrev").addEventListener("click", () => stepDay(-1));
+  $("dNext").addEventListener("click", () => stepDay(1));
+
+  function openUneven() {
+    if (!draft.mode) draft.mode = "parts";
+    uneven.open();
+    render();
+  }
+  unevenBtn.addEventListener("click", openUneven);
+
+  // Split seals: a tap turns a person in or out (never the last one); a
+  // 500 ms hold opens the uneven panel instead.
+  let holdTimer = null;
+  let held = false;
+  const stopHold = () => {
+    clearTimeout(holdTimer);
+    holdTimer = null;
+  };
+  splitSeals.addEventListener("pointerdown", () => {
+    held = false;
+    stopHold();
+    holdTimer = setTimeout(() => {
+      holdTimer = null;
+      held = true;
+      openUneven();
+    }, HOLD_MS);
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) splitSeals.addEventListener(type, stopHold);
+  splitSeals.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  splitSeals.addEventListener("click", (ev) => {
+    if (held) {
+      held = false;
+      return;
+    }
+    const b = ev.target.closest(".seal");
+    if (!b) return;
+    const name = b.dataset.p;
+    if (draft.split.includes(name)) {
+      if (draft.split.length > 1) draft.split = draft.split.filter((n) => n !== name);
+    } else {
+      draft.split = names().filter((n) => n === name || draft.split.includes(n));
+    }
+    render();
+  });
+
+  store.subscribe(() => {
+    if (opened) render();
+  });
+  startFresh();
+  render();
+
+  return { open, edit, close, isOpen: () => opened };
+}

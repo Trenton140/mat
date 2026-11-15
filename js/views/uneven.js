@@ -1,0 +1,204 @@
+// The uneven split panel (#un), opened from the register. It works on the
+// register's draft: draft.mode ("parts" | "exact" | null), draft.parts
+// ({ name: 1..99 }), draft.exact ({ name: typed string }), plus the draft's
+// amt, cur, rate and split. It changes those and calls onChange(); the
+// register redraws everything, this panel included, through render().
+//
+// Amounts are handled in whole units of the entered currency: yen, or cents.
+
+import { expenseShares } from "../money.js";
+import { yen, dollars } from "../format.js";
+
+export const MAX_PARTS = 99;
+const MAX_DIGITS = 8;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+// A typed amount ("12.5", "14500") in whole units: cents for dollars, yen for yen.
+export function toUnits(str, cur) {
+  const [whole = "", dec = ""] = String(str || "").split(".");
+  if (cur === "JPY") return Number(whole || 0);
+  return Number(whole || 0) * 100 + Number((dec + "00").slice(0, 2));
+}
+
+// Whole units back to the number the backend takes (12.5 for 1250 cents).
+export const fromUnits = (units, cur) => (cur === "JPY" ? units : units / 100);
+export const showUnits = (units, cur) => (cur === "JPY" ? yen(units) : dollars(units));
+
+// What a typed amount can hold: digits, and for dollars one point and two decimals.
+export function cleanAmount(str, cur) {
+  const s = String(str).replace(/[^\d.]/g, "");
+  if (cur === "JPY") return s.replace(/\./g, "").slice(0, MAX_DIGITS);
+  const dot = s.indexOf(".");
+  if (dot === -1) return s.slice(0, MAX_DIGITS);
+  return s.slice(0, dot).slice(0, MAX_DIGITS) + "." + s.slice(dot + 1).replace(/\./g, "").slice(0, 2);
+}
+
+// How the draft splits: { mode, vals, ok, left }. Parts that are all the
+// same are an equal split. Exact needs every amount at least one unit and
+// the amounts to add up to the total (left === 0).
+export function splitOf(d) {
+  if (d.mode === "exact") {
+    const total = toUnits(d.amt, d.cur);
+    const units = d.split.map((n) => toUnits(d.exact[n], d.cur));
+    const left = total - units.reduce((a, u) => a + u, 0);
+    const everyone = units.every((u) => u >= 1);
+    return { mode: "exact", vals: units.map((u) => fromUnits(u, d.cur)), units, left, everyone, ok: total > 0 && left === 0 && everyone };
+  }
+  if (d.mode === "parts") {
+    const vals = d.split.map((n) => d.parts[n] || 1);
+    if (vals.some((v) => v !== vals[0])) return { mode: "parts", vals, ok: true, left: 0 };
+  }
+  return { mode: "equal", vals: [], ok: true, left: 0 };
+}
+
+// mountUneven(host, { onChange }) -> { render(draft), open(), close(), isOpen() }
+export function mountUneven(host, { onChange }) {
+  const un = el("div", "un");
+  un.id = "un";
+  un.hidden = true;
+  un.setAttribute("role", "group");
+  un.setAttribute("aria-label", "Uneven split");
+  const top = el("div", "un-top");
+  const done = el("button", "", "Done");
+  done.type = "button";
+  done.id = "unDone";
+  top.append(el("span", "", "Uneven split"), done);
+  const modes = el("div", "un-mode");
+  modes.id = "unMode";
+  for (const [mode, label] of [["parts", "Parts"], ["exact", "Exact amounts"]]) {
+    const b = el("button", "chip", label);
+    b.type = "button";
+    b.dataset.mode = mode;
+    modes.append(b);
+  }
+  const rows = el("div", "un-rows");
+  const left = el("div", "un-left");
+  left.id = "unLeft";
+  left.setAttribute("aria-live", "polite");
+  un.append(top, modes, rows, left);
+  host.append(un);
+
+  let draft = null;
+  let shown = ""; // mode and people the rows were built for
+
+  modes.addEventListener("click", (ev) => {
+    const b = ev.target.closest("[data-mode]");
+    if (!b || !draft || draft.mode === b.dataset.mode) return;
+    draft.mode = b.dataset.mode;
+    onChange();
+  });
+  rows.addEventListener("click", (ev) => {
+    const b = ev.target.closest(".un-minus, .un-plus");
+    if (!b || !draft) return;
+    const name = b.closest(".un-row").dataset.p;
+    const step = b.classList.contains("un-plus") ? 1 : -1;
+    draft.parts[name] = Math.min(MAX_PARTS, Math.max(1, (draft.parts[name] || 1) + step));
+    onChange();
+  });
+  rows.addEventListener("input", (ev) => {
+    const input = ev.target.closest("input.un-val");
+    if (!input || !draft) return;
+    const clean = cleanAmount(input.value, draft.cur);
+    if (clean !== input.value) input.value = clean;
+    draft.exact[input.closest(".un-row").dataset.p] = clean;
+    onChange();
+  });
+  done.addEventListener("click", () => {
+    close();
+    onChange();
+  });
+
+  function buildRows() {
+    const exact = draft.mode === "exact";
+    rows.replaceChildren(
+      ...draft.split.map((name) => {
+        const row = el("div", "un-row");
+        row.dataset.p = name;
+        const who = el("span", "un-who", name);
+        const minus = el("button", "un-minus", "−");
+        minus.type = "button";
+        minus.setAttribute("aria-label", "One part less for " + name);
+        const plus = el("button", "un-plus", "+");
+        plus.type = "button";
+        plus.setAttribute("aria-label", "One part more for " + name);
+        let val;
+        if (exact) {
+          val = el("input", "un-val");
+          val.type = "text";
+          val.autocomplete = "off";
+          val.setAttribute("aria-label", name + "'s amount");
+        } else {
+          val = el("span", "un-val");
+        }
+        minus.hidden = exact;
+        plus.hidden = exact;
+        row.append(who, minus, val, plus, el("span", "un-amt"));
+        return row;
+      }),
+    );
+  }
+
+  function render(d) {
+    draft = d;
+    if (un.hidden) return;
+    const sig = d.mode + "|" + d.split.join(",");
+    if (sig !== shown) {
+      shown = sig;
+      buildRows();
+    }
+    for (const b of modes.children) b.classList.toggle("is-on", b.dataset.mode === d.mode);
+
+    const total = toUnits(d.amt, d.cur);
+    const split = splitOf(d);
+    let cents = null;
+    if (d.mode === "parts" && total > 0 && (d.cur === "CAD" || d.rate > 0)) {
+      cents = expenseShares({ amount: fromUnits(total, d.cur), currency: d.cur, rate: d.rate, split: d.split, splitMode: "parts", splitVals: d.split.map((n) => d.parts[n] || 1) });
+    }
+    for (const row of rows.children) {
+      const name = row.dataset.p;
+      const val = row.querySelector(".un-val");
+      const amt = row.querySelector(".un-amt");
+      if (d.mode === "exact") {
+        val.inputMode = d.cur === "JPY" ? "numeric" : "decimal";
+        val.placeholder = d.cur === "JPY" ? "¥0" : "$0.00";
+        const v = d.exact[name] || "";
+        if (val.value !== v) val.value = v;
+        const u = toUnits(v, d.cur);
+        amt.textContent = u > 0 ? showUnits(u, d.cur) : "";
+      } else {
+        const n = d.parts[name] || 1;
+        val.textContent = String(n);
+        row.querySelector(".un-minus").disabled = n <= 1;
+        row.querySelector(".un-plus").disabled = n >= MAX_PARTS;
+        amt.textContent = cents ? dollars(cents[name]) : "";
+      }
+    }
+
+    let say = "";
+    if (d.mode === "exact" && total > 0) {
+      if (split.left > 0) say = showUnits(split.left, d.cur) + " left to assign";
+      else if (split.left < 0) say = showUnits(-split.left, d.cur) + " too much";
+      else if (!split.everyone) say = "Give everyone an amount.";
+    }
+    left.textContent = say;
+    left.hidden = !say;
+  }
+
+  function open() {
+    if (!un.hidden) return;
+    un.hidden = false;
+    shown = "";
+  }
+
+  function close() {
+    un.hidden = true;
+  }
+
+  return { render, open, close, isOpen: () => !un.hidden };
+}

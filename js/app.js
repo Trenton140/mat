@@ -7,6 +7,8 @@ import { createStore } from "./store.js";
 import { defaultRingDay } from "./time.js";
 import { mountMoney } from "./views/money.js";
 import { mountFirst } from "./views/first.js";
+import { mountRegister } from "./views/register.js";
+import { mountUndoBar } from "./views/ubar.js";
 
 // localStorage, or a stand-in in memory when the browser will not give it.
 function phoneStorage() {
@@ -79,20 +81,24 @@ function start() {
   store = createStore({ api, storage });
 
   const phone = document.getElementById("phone");
+  const register = mountRegister(phone, store, { storage: raw });
   const ring = (day) => {
-    // Task 8 opens the register here.
-    void day;
+    if (store.state.trip && store.state.trip.start) register.open(day);
   };
   mountMoney(document.getElementById("vMoney"), store, {
     onRing: ring,
     onLine: () => {}, // Task 9: the receipt line sheet
     onHistory: () => {}, // Task 11: History
   });
+  mountUndoBar(phone, store);
   mountFirst(phone, store, { connected, storage });
 
   document.getElementById("ring").addEventListener("click", () => {
     if (store.state.trip && store.state.trip.start) ring(defaultRingDay(store.state.trip, Date.now()));
   });
+  // Click-through tests reach the register and the store here; only when the
+  // fake backend is in the page, never in the real app.
+  if (typeof globalThis.MAT_FAKE_API === "function") globalThis.__matTest = { store, register };
   // #youBtn: Task 12 opens Settings.
 
   document.addEventListener("visibilitychange", () => {

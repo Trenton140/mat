@@ -91,6 +91,7 @@ function drawLine(e, ctx) {
     t.append(small);
   }
   if (e.failed) t.append(el("small", "rc-fail", "not saved, tap to retry"));
+  else if (e.pending && !ctx.online) t.append(el("small", "rc-wait", "will send when signal returns"));
   row.append(el("span", "mini", (payer && payer.initials) || String(e.paidBy).slice(0, 2).toUpperCase()), t, fig("span", "rc-amt", typed(e)));
   return row;
 }
@@ -206,7 +207,7 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     sayP.replaceChildren("The trip so far is ", el("b", "", yen(sum(live, jpyOf))), ", about ", el("b", "", dollars(sum(live, cadCents))),
       ", across ", el("b", "", String(live.length)), live.length === 1 ? " receipt." : " receipts.");
 
-    const ctx = { me: s.me, seenAt: s.seenAt, people: s.people, names, days: s.days, nowMs: now() };
+    const ctx = { me: s.me, online: s.online, seenAt: s.seenAt, people: s.people, names, days: s.days, nowMs: now() };
     const fresh = live.filter((e) => isNewLine(e, s.me, s.seenAt)).length + s.payments.filter((p) => isNewStamp(p, s.me, s.seenAt)).length;
     histN.textContent = String(fresh);
     histN.hidden = fresh === 0;

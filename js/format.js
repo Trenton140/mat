@@ -36,6 +36,13 @@ export function dayHead(day, days) {
   return { jp: m + "月" + d + "日(" + WK[w] + ")", en: WD[w] + " " + MON[m - 1] + " " + d, city: (row && row.city) || "" };
 }
 
+// The register's day: "Sat 12", or "Before" for before the trip.
+export function dayShort(day) {
+  if (day === "pre") return "Before";
+  const [y, m, d] = parts(day);
+  return WD[weekday(y, m, d)] + " " + d;
+}
+
 // The trip's dates in short: "Dec 10 to 20", or "Dec 28 to Jan 3".
 export function tripSpan(trip) {
   const [, m1, d1] = parts(trip.start);

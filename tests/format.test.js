@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { yen, dollars, typed, dayHead, issuer, pt, clock, sentence, changeText, tripSpan } from "../js/format.js";
+import { yen, dollars, typed, dayHead, issuer, pt, clock, sentence, changeText, tripSpan, dayShort } from "../js/format.js";
 
 test("yen and dollars", () => {
   assert.equal(yen(14500), "¥14,500");
@@ -71,4 +71,11 @@ test("changeText", () => {
   assert.equal(changeText({ action: "unstamp", kind: "payment", item: pay }), "Stamp removed.");
   assert.equal(changeText({ action: "restamp", kind: "payment", item: pay }), "Stamp put back.");
   assert.equal(changeText({ action: "undo", kind: "expense", item: dinner }), "Undone.");
+});
+
+test("dayShort is the register's day: weekday and date, or Before", () => {
+  assert.equal(dayShort("2026-12-12"), "Sat 12");
+  assert.equal(dayShort("2026-12-10"), "Thu 10");
+  assert.equal(dayShort("2027-01-01"), "Fri 1");
+  assert.equal(dayShort("pre"), "Before");
 });
