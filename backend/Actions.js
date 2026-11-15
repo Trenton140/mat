@@ -382,6 +382,17 @@ function planFields_(plan, item) {
   return out;
 }
 
+// The columns of next that differ from cur, both cleaned items. Only these
+// are written: a column the change leaves alone keeps whatever the Sheet
+// holds, even a hand-typed value the reader cleans away (9:30, a bare link).
+function changedCols_(plan, cur, next) {
+  var was = plan.toRow(planFields_(plan, cur));
+  var now = plan.toRow(planFields_(plan, next));
+  var out = {};
+  Object.keys(now).forEach(function (k) { if (!same_(now[k], was[k])) out[k] = now[k]; });
+  return out;
+}
+
 function writePlan_(plan, ref, patch) {
   return plan.fromRow(updateWhere_(plan.tab, plan.key, ref, patch));
 }
@@ -409,8 +420,8 @@ function addPlanItem_(kind, value, ctx) {
 // nothing changes. ref is the item's key (its id, or a day's date).
 function editPlanItem_(kind, ref, cur, next, ctx) {
   var plan = planKind_(kind);
-  var cols = plan.toRow(planFields_(plan, next));
-  if (same_(cols, plan.toRow(planFields_(plan, cur)))) return ok_(planReply_(kind, cur, null), rev_());
+  var cols = changedCols_(plan, cur, next);
+  if (Object.keys(cols).length === 0) return ok_(planReply_(kind, cur, null), rev_());
   var saved = writePlan_(plan, ref, cols);
   var log = appendLog_(ctx, "edit", kind, ref, summarize("edit", kind, cur, saved), cur, saved);
   return ok_(planReply_(kind, saved, log.id), bumpRev_());
@@ -517,10 +528,10 @@ function undo_(args, ctx) {
   var cur, patch, saved;
   // Every editable column plus deleted_at / removed_at; never rate, added_by/at or stamped_by/at.
   // An item that is already marked keeps its original timestamp (undefined is not written).
-  // A day header writes back every field, blanks included.
+  // A plan item writes back every field that differs from now, blanks included.
   if (plan) {
     cur = plan.fromRow(curRow);
-    patch = plan.toRow(planFields_(plan, target));
+    patch = changedCols_(plan, cur, target);
     if (plan.deletable) patch.deleted_at = target.deleted ? (cur.deleted ? undefined : nowIso_()) : "";
     saved = writePlan_(plan, entry.ref, patch);
   } else if (isExpense) {

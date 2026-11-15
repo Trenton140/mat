@@ -916,3 +916,38 @@ test("a seeded stop or stay comes with its add in History", async () => {
   const entries = await historyAll(call);
   assert.deepEqual(entries.map((e) => [e.who, e.action, e.kind]).sort(), [["Mo", "add", "stay"], ["Mo", "add", "stop"]]);
 });
+
+// ---------- fix round 1: a plan edit writes only the columns it changes ----------
+
+test("a hand-typed time and link survive a stop edit and its undo; changed and blanked fields are written", async () => {
+  const call = client({ stops: [{ id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky", note: "Bring cash", detail: "Floor 14" }] });
+  const row = call.fake.tables.Stops[0];
+  row.time = "9:30"; // typed into the Sheet by hand
+  row.link = "www.booking.com/x";
+  const e = await call("updateStop", { id: "stopAAAA0001", patch: { title: "Sky deck", note: "" } });
+  assert.equal(e.data.stop.title, "Sky deck");
+  assert.deepEqual([row.title, row.note, row.detail, row.time, row.link], ["Sky deck", "", "Floor 14", "9:30", "www.booking.com/x"]);
+  const u = await call("undo", { logId: e.data.logId });
+  assert.equal(u.ok, true);
+  assert.deepEqual([row.title, row.note, row.detail, row.time, row.link], ["Shibuya Sky", "Bring cash", "Floor 14", "9:30", "www.booking.com/x"]);
+});
+
+test("a hand-typed day colour survives a day edit and its undo; changed and blanked fields are written", async () => {
+  const call = client({ days: { "2026-12-12": { city: "Tokyo", title: "Shrines", line_colour: "orange" } } });
+  const row = call.fake.tables.Days.find((r) => r.date === "2026-12-12");
+  const s = await call("setDay", { date: "2026-12-12", patch: { city: "Kyoto", title: "" } });
+  assert.deepEqual([row.city, row.title, row.line_colour], ["Kyoto", "", "orange"]);
+  const u = await call("undo", { logId: s.data.logId });
+  assert.equal(u.ok, true);
+  assert.deepEqual([row.city, row.title, row.line_colour], ["Tokyo", "Shrines", "orange"]);
+});
+
+test("a hand-typed stay link survives a name change", async () => {
+  const stay = { id: "stayAAAA0001", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15", note: "Late check-in" };
+  const call = client({ stays: [stay] });
+  const row = call.fake.tables.Stays[0];
+  row.link = "www.booking.com/x";
+  const e = await call("saveStay", { stay: { ...stay, name: "Niseko lodge", note: "" } });
+  assert.equal(e.data.stay.name, "Niseko lodge");
+  assert.deepEqual([row.name, row.note, row.link], ["Niseko lodge", "", "www.booking.com/x"]);
+});
