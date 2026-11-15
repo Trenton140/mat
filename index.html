@@ -16,6 +16,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" crossorigin="anonymous" href="https://fonts.googleapis.com/css2?family=DotGothic16&family=Zen+Antique&family=Zen+Kaku+Gothic+New:wght@500;700;900&display=swap">
 <link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/days.css">
 <link rel="stylesheet" href="css/money.css">
 <link rel="stylesheet" href="css/register.css">
 <link rel="stylesheet" href="css/sheet.css">
@@ -25,9 +26,12 @@
 <body>
 <div class="phone" id="phone">
   <div class="views">
-    <section class="view is-active" id="vMoney" aria-label="Money"></section>
+    <section class="view is-active" id="vDays" aria-label="Days"></section>
+    <section class="view" id="vMoney" aria-label="Money" inert></section>
   </div>
   <nav class="nav" id="nav">
+    <button type="button" data-tab="days" class="is-active">Days<small>きっぷ</small></button>
+    <button type="button" data-tab="money">Money<small>精算</small></button>
     <button type="button" id="youBtn">You<small>設定</small></button>
     <button type="button" class="ring" id="ring">＋ Ring up</button>
   </nav>

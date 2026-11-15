@@ -12,6 +12,9 @@ const { createFakeBackend } = require("../fake-backend.cjs");
 
 const ORIGIN = "http://localhost:4173";
 const SEED = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "fixtures", "seed.json"), "utf8"));
+// A small plan (days, stops, stays) to lay over the seed: WITH_PLAN.
+const PLAN = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "fixtures", "plan.json"), "utf8"));
+const WITH_PLAN = { ...SEED, ...PLAN };
 // 2026-12-12 13:20 in Japan.
 const NOON12 = Date.parse("2026-12-12T13:20:00+09:00");
 // When seed items without an addedAt / stampedAt were made: before the trip,
@@ -19,6 +22,9 @@ const NOON12 = Date.parse("2026-12-12T13:20:00+09:00");
 const SEEDED_AT = "2026-11-20T00:00:00.000Z";
 
 const copy = (v) => JSON.parse(JSON.stringify(v));
+
+// "YYYY-MM-DD" in Japan at this instant.
+const japanDate = (ms) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
 
 // backend = { handle(body) -> Promise<envelope>, fake, requests, failWith, now }.
 // failWith: null (normal), "network" (handle rejects, so the page's call
@@ -58,11 +64,15 @@ function makeBackend(seed, { clock, now = Date.now() } = {}) {
 // - storage: more localStorage keys. Every key is only written when not set
 //   already, so a reload keeps whatever the app stored.
 // - hash: appended to the address (for example "#k=test-key").
+// - tab: the screen the app last showed, put into localStorage as mat.tab,
+//   with mat.tabDay the Japan date of nowMs (as if it was shown today), so
+//   the app opens on it. Default "money"; "days" for the Days screen; null
+//   writes neither (the app then decides, from whatever `storage` holds).
 // Time: the page's clock is installed and paused at nowMs, and a backend
 // built here starts its clock (backend.now) at nowMs too. Neither moves on
 // its own: call advance(page, backend, ms) to move both together, so the
 // backend never dates a write ahead of (or behind) what the page shows.
-async function open(page, { seed = SEED, key = "test-key", me = "Mo", how = "1", nowMs = NOON12, storage = {}, backend, hash = "" } = {}) {
+async function open(page, { seed = SEED, key = "test-key", me = "Mo", how = "1", nowMs = NOON12, storage = {}, backend, hash = "", tab = "money" } = {}) {
   const be = backend || makeBackend(seed, { now: nowMs });
 
   await page.exposeFunction("__matBridge", async (body) => {
@@ -80,7 +90,7 @@ async function open(page, { seed = SEED, key = "test-key", me = "Mo", how = "1",
     };
   });
 
-  const own = { "mat.key": key, "mat.me": me, "mat.how": how };
+  const own = { "mat.key": key, "mat.me": me, "mat.how": how, "mat.tab": tab, "mat.tabDay": tab === null ? null : japanDate(nowMs) };
   const entries = Object.entries({ ...own, ...storage })
     .filter(([, v]) => v !== null && v !== undefined)
     .map(([k, v]) => [k, String(v)]);
@@ -152,4 +162,4 @@ function visible(page, selector) {
   }, selector);
 }
 
-module.exports = { ORIGIN, SEED, NOON12, SEEDED_AT, makeBackend, open, advance, until, text, expectText, visible };
+module.exports = { ORIGIN, SEED, PLAN, WITH_PLAN, NOON12, SEEDED_AT, makeBackend, open, advance, until, text, expectText, visible };

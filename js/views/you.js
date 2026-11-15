@@ -3,7 +3,8 @@
 // the invite link, the Google Sheet and "Report a problem". One sheet, no
 // sub-pages.
 //
-// mountYou(root, store, { onHistory(), getKey(), screen }) -> { open(), close(restoreFocus), isOpen() }
+// mountYou(root, store, { onHistory(), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
+// screen(): the screen showing, "Days" or "Money", for Report a problem.
 // root is the phone. getKey() gives the trip key for the invite link; the key
 // is only ever put on the clipboard, never drawn, logged or put in the report.
 // Text from people or the Sheet goes in with textContent / .value only.
@@ -69,7 +70,7 @@ function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
 }
 
-export function mountYou(root, store, { onHistory = () => {}, getKey = () => null, screen = "Money" } = {}) {
+export function mountYou(root, store, { onHistory = () => {}, getKey = () => null, screen = () => "Money" } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "youScrim";
   scrim.hidden = true;
@@ -334,7 +335,7 @@ export function mountYou(root, store, { onHistory = () => {}, getKey = () => nul
   async function reportNote() {
     const h = await store.loadHistory();
     const sentences = !h || h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
-    return reportText({ me: store.state.me, screen, version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [] });
+    return reportText({ me: store.state.me, screen: screen(), version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [] });
   }
   report.addEventListener("click", async () => {
     if (reporting) return;

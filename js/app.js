@@ -1,10 +1,12 @@
 // Starts the app: takes the trip key from the invite link, builds the api and
-// the store, mounts the screens and boots. Money is the only screen for now.
+// the store, mounts the two screens (Days and Money) and boots.
 
 import { API_URL } from "./config.js";
 import { createApi } from "./api.js";
 import { createStore } from "./store.js";
-import { defaultRingDay } from "./time.js";
+import { createClock } from "./clock.js";
+import { dateIn, defaultRingDay, tripDay } from "./time.js";
+import { mountDays } from "./views/days.js";
 import { mountMoney } from "./views/money.js";
 import { mountFirst } from "./views/first.js";
 import { mountRegister } from "./views/register.js";
@@ -16,6 +18,7 @@ import { mountNet } from "./views/net.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
+const TABS = ["days", "money"];
 
 // localStorage, or a stand-in in memory when the browser will not give it.
 function phoneStorage() {
@@ -74,6 +77,75 @@ function withKey(storage, keyHere) {
   };
 }
 
+// The two screens. showTab(tab) shows one, marks its button and makes the
+// other inert; with `remember` it keeps the choice (mat.tab) and the trip day
+// it was made on (mat.tabDay, by the real time, never the demo clock).
+function mountTabs(store, storage) {
+  const views = { days: document.getElementById("vDays"), money: document.getElementById("vMoney") };
+  const nav = document.getElementById("nav");
+  const read = (k) => {
+    try {
+      return storage.getItem(k);
+    } catch {
+      return null;
+    }
+  };
+  const keptTab = TABS.includes(read("mat.tab")) ? read("mat.tab") : null;
+  const keptDay = read("mat.tabDay");
+  let tab = null;
+  let settled = false; // the opening screen has been decided with the trip known
+
+  function showTab(t, remember = true) {
+    tab = t;
+    for (const b of nav.querySelectorAll("button[data-tab]")) {
+      const on = b.dataset.tab === t;
+      b.classList.toggle("is-active", on);
+      if (on) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    }
+    for (const [name, view] of Object.entries(views)) {
+      view.classList.toggle("is-active", name === t);
+      view.inert = name !== t;
+    }
+    if (!remember) return;
+    const trip = store.state.trip;
+    try {
+      storage.setItem("mat.tab", t);
+      storage.setItem("mat.tabDay", dateIn((trip && trip.tz) || "Asia/Tokyo", Date.now()));
+    } catch {
+      // private mode: it opens on Days next time
+    }
+  }
+
+  // The stored screen, except that on a new day of the trip it is the ticket;
+  // with nothing stored it is the ticket.
+  function opening(trip) {
+    if (!keptTab) return "days";
+    if (trip && trip.start) {
+      const today = tripDay(trip, Date.now());
+      if (today !== "pre" && today !== "post" && keptDay !== today) return "days";
+    }
+    return keptTab;
+  }
+
+  function settle(s) {
+    if (settled || !(s.trip && s.trip.start)) return;
+    settled = true;
+    showTab(opening(s.trip));
+  }
+
+  showTab(opening(null), false);
+  settle(store.state);
+  store.subscribe(settle);
+  nav.addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-tab]");
+    if (!b) return;
+    settled = true;
+    showTab(b.dataset.tab);
+  });
+  return { showTab, tab: () => tab };
+}
+
 function start() {
   const raw = phoneStorage();
   let keyHere = takeKey(raw);
@@ -88,12 +160,17 @@ function start() {
   });
   store = createStore({ api, storage });
 
+  // The one clock the Days screen reads, in the trip's time zone.
+  const clock = createClock({ getTz: () => (store.state.trip && store.state.trip.tz) || "Asia/Tokyo" });
+  const tabs = mountTabs(store, raw);
+
   const phone = document.getElementById("phone");
   const register = mountRegister(phone, store, { storage: raw });
   // One sheet at a time: opening one closes the others.
   const history = mountHistory(phone, store);
   const you = mountYou(phone, store, {
     getKey: () => storage.getItem("mat.key"),
+    screen: () => (tabs.tab() === "days" ? "Days" : "Money"),
     onHistory: () => {
       you.close(false);
       history.open();
@@ -112,6 +189,7 @@ function start() {
     you.close(false);
     register.open(day);
   };
+  mountDays(document.getElementById("vDays"), store, { clock });
   mountMoney(document.getElementById("vMoney"), store, {
     onRing: ring,
     onLine: (id) => {

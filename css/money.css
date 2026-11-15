@@ -140,16 +140,22 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 .bars{width:178px;height:34px;margin:12px auto 2px;background:repeating-linear-gradient(90deg,var(--print) 0 2px,transparent 2px 3px,var(--print) 3px 4px,transparent 4px 7px,var(--print) 7px 10px,transparent 10px 12px,var(--print) 12px 13px,transparent 13px 16px,var(--print) 16px 18px,transparent 18px 19px)}
 
 /* ---------- the bottom bar ---------- */
-.nav{position:absolute;left:0;right:0;bottom:0;z-index:6;height:calc(74px + env(safe-area-inset-bottom, 0px));display:flex;justify-content:flex-start;gap:14px;align-items:center;
+.nav{position:absolute;left:0;right:0;bottom:0;z-index:6;height:calc(74px + env(safe-area-inset-bottom, 0px));display:flex;justify-content:flex-start;gap:6px;align-items:center;
   padding:0 var(--gr) env(safe-area-inset-bottom, 0px) calc(var(--gl) - 6px);
   background:var(--ground);transition:opacity .16s}
 /* The receipt fades out above the bar; behind the buttons the bar is solid. */
 .nav::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:22px;pointer-events:none;
   background:linear-gradient(to top,var(--ground),rgba(26,22,20,0))}
-.nav button{border:0;background:none;color:var(--dim);display:grid;justify-items:center;font-weight:900;font-size:17px;line-height:1.2;padding:6px 10px}
+.nav button{flex:none;border:0;background:none;color:var(--dim);display:grid;justify-items:center;font-weight:900;font-size:17px;line-height:1.2;padding:6px 8px;white-space:nowrap}
 .nav button small{font-size:11px;font-weight:700}
-.nav #youBtn{color:var(--text)}
-.nav .ring{margin-left:auto;display:block;height:48px;padding:0 20px;border-radius:24px;background:var(--paper);color:var(--print);font-size:15.5px;transition:transform .15s ease-out}
+.nav button.is-active{color:var(--text)}
+.nav .ring{margin-left:auto;display:block;height:48px;padding:0 18px;border-radius:24px;background:var(--paper);color:var(--print);font-size:15.5px;transition:transform .15s ease-out}
+/* A small phone (320 wide): the same type, closer together. */
+@media (max-width:359px){
+  .nav{gap:2px;padding-left:calc(var(--gl) - 12px);padding-right:calc(var(--gr) - 8px)}
+  .nav button{padding:6px 4px}
+  .nav .ring{padding:0 11px}
+}
 .nav .ring:active{transform:scale(.97)}
 .nav .ring[hidden]{display:none}
 .phone.reg-open .nav{opacity:0;pointer-events:none}
