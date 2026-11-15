@@ -20,42 +20,50 @@ const SEEDED_AT = "2026-11-20T00:00:00.000Z";
 
 const copy = (v) => JSON.parse(JSON.stringify(v));
 
-// backend = { handle(body) -> Promise<envelope>, fake, requests, failWith }.
+// backend = { handle(body) -> Promise<envelope>, fake, requests, failWith, now }.
 // failWith: null (normal), "network" (handle rejects, so the page's call
 // fails as if there were no signal), or any other string (handle resolves
 // { ok: false, error: <that string>, message: "test" }).
-// Seed items with no addedAt / stampedAt get SEEDED_AT; later writes are
-// dated by `clock` (default: the real time).
-function makeBackend(seed, { clock } = {}) {
+// now: the backend's clock in ms (starts at `now`, default the real time).
+// Every write is dated backend.now; it only moves when a test moves it, so
+// use advance(page, backend, ms) to move it together with the page's clock.
+// Seed items with no addedAt / stampedAt are dated SEEDED_AT instead.
+// An explicit `clock` (() => ISO string) replaces backend.now for writes.
+function makeBackend(seed, { clock, now = Date.now() } = {}) {
   let seeding = true;
-  const now = clock || (() => new Date().toISOString());
-  const fake = createFakeBackend(copy(seed || {}), { clock: () => (seeding ? SEEDED_AT : now()) });
-  seeding = false;
   const backend = {
-    fake,
-    requests: fake.requests,
+    fake: null,
+    requests: null,
     failWith: null,
+    now,
     async handle(body) {
       if (backend.failWith === "network") throw new Error("network");
       if (backend.failWith) return { ok: false, error: backend.failWith, message: "test" };
-      return fake(body);
+      return backend.fake(body);
     },
   };
+  const writeTime = clock || (() => new Date(backend.now).toISOString());
+  backend.fake = createFakeBackend(copy(seed || {}), { clock: () => (seeding ? SEEDED_AT : writeTime()) });
+  backend.requests = backend.fake.requests;
+  seeding = false;
   return backend;
 }
 
 // Opens the app on `page` against a fake backend and returns that backend.
 // - seed / backend: build a backend from `seed`, or use the one given (pass
 //   the same backend to two pages to share it).
-// - key, me: put into localStorage as mat.key / mat.me; null leaves it unset.
+// - key, me, how: put into localStorage as mat.key / mat.me / mat.how; null
+//   leaves it unset. how defaults to "1" (the how-this-works lines already
+//   seen), so only first-open tests see them.
 // - storage: more localStorage keys. Every key is only written when not set
 //   already, so a reload keeps whatever the app stored.
-// - nowMs: the page's clock is installed and paused at this time; move it
-//   with page.clock.fastForward / runFor.
 // - hash: appended to the address (for example "#k=test-key").
-async function open(page, { seed = SEED, key = "test-key", me = "Mo", nowMs = NOON12, storage = {}, backend, hash = "" } = {}) {
-  const startedAt = Date.now();
-  const be = backend || makeBackend(seed, { clock: () => new Date(nowMs + (Date.now() - startedAt)).toISOString() });
+// Time: the page's clock is installed and paused at nowMs, and a backend
+// built here starts its clock (backend.now) at nowMs too. Neither moves on
+// its own: call advance(page, backend, ms) to move both together, so the
+// backend never dates a write ahead of (or behind) what the page shows.
+async function open(page, { seed = SEED, key = "test-key", me = "Mo", how = "1", nowMs = NOON12, storage = {}, backend, hash = "" } = {}) {
+  const be = backend || makeBackend(seed, { now: nowMs });
 
   await page.exposeFunction("__matBridge", async (body) => {
     try {
@@ -72,7 +80,8 @@ async function open(page, { seed = SEED, key = "test-key", me = "Mo", nowMs = NO
     };
   });
 
-  const entries = Object.entries({ ...(key === null ? {} : { "mat.key": key }), ...(me === null ? {} : { "mat.me": me }), ...storage })
+  const own = { "mat.key": key, "mat.me": me, "mat.how": how };
+  const entries = Object.entries({ ...own, ...storage })
     .filter(([, v]) => v !== null && v !== undefined)
     .map(([k, v]) => [k, String(v)]);
   await page.addInitScript((pairs) => {
@@ -87,6 +96,13 @@ async function open(page, { seed = SEED, key = "test-key", me = "Mo", nowMs = NO
   await page.clock.pauseAt(nowMs);
   await page.goto(ORIGIN + "/" + hash);
   return be;
+}
+
+// Moves the page's clock (running any timers due) and the backend's clock
+// forward together by `ms`.
+async function advance(page, backend, ms) {
+  await page.clock.fastForward(ms);
+  backend.now += ms;
 }
 
 // Polls `check` (sync or async, run in Node) until it returns something
@@ -136,4 +152,4 @@ function visible(page, selector) {
   }, selector);
 }
 
-module.exports = { ORIGIN, SEED, NOON12, SEEDED_AT, makeBackend, open, until, text, expectText, visible };
+module.exports = { ORIGIN, SEED, NOON12, SEEDED_AT, makeBackend, open, advance, until, text, expectText, visible };

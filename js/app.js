@@ -22,12 +22,14 @@ function phoneStorage() {
 
 // The invite link carries the key as #k=<key>. Keep it on the phone and take
 // it out of the address bar, so it is not left in history or a shared URL.
+// Returns the key found (or null), so it still works for this visit when the
+// phone will not store it.
 function takeKey(storage) {
   const hash = location.hash.replace(/^#/, "");
-  if (!hash) return;
+  if (!hash) return null;
   const parts = hash.split("&");
   const found = parts.find((p) => p.startsWith("k="));
-  if (found === undefined) return;
+  if (found === undefined) return null;
   let key = found.slice(2);
   try {
     key = decodeURIComponent(key);
@@ -43,11 +45,29 @@ function takeKey(storage) {
   }
   const rest = parts.filter((p) => p !== found).join("&");
   history.replaceState(history.state, "", location.pathname + location.search + (rest ? "#" + rest : ""));
+  return key || null;
+}
+
+// The phone's storage, except that mat.key falls back to the key from this
+// visit's link when the phone could not keep it.
+function withKey(storage, keyHere) {
+  return {
+    getItem(k) {
+      let v = null;
+      try {
+        v = storage.getItem(k);
+      } catch {
+        v = null;
+      }
+      return v === null && k === "mat.key" ? keyHere : v;
+    },
+    setItem: (k, v) => storage.setItem(k, v),
+  };
 }
 
 function start() {
-  const storage = phoneStorage();
-  takeKey(storage);
+  const raw = phoneStorage();
+  const storage = withKey(raw, takeKey(raw));
 
   const connected = !!API_URL || typeof globalThis.MAT_FAKE_API === "function";
   let store;

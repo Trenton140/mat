@@ -22,25 +22,34 @@ const ROOT = path.join(__dirname, "..", "..");
 const SHOTS = "/private/tmp/claude-501/mat-shots/failures";
 const CASE_TIMEOUT_MS = 30000;
 
-function serverUp() {
+// What is on port 4173: null (nothing), or the body of its front page.
+function frontPage() {
   return new Promise((resolve) => {
     const req = http.get("http://localhost:4173/", (res) => {
-      res.resume();
-      resolve(true);
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (c) => (body += c));
+      res.on("end", () => resolve(body));
     });
-    req.on("error", () => resolve(false));
+    req.on("error", () => resolve(null));
     req.setTimeout(1000, () => {
       req.destroy();
-      resolve(false);
+      resolve(null);
     });
   });
 }
+const isThisApp = (body) => typeof body === "string" && body.includes("<title>MAT</title>");
 
 async function startServer() {
-  if (await serverUp()) return null; // one is already running (npm run serve)
+  const already = await frontPage();
+  if (already !== null) {
+    // One is already running (npm run serve): use it only if it is this app.
+    if (isThisApp(already)) return null;
+    throw new Error("Port 4173 is taken by something that is not this app. Stop it and run the tests again.");
+  }
   const child = spawn(process.execPath, [path.join(ROOT, "scripts", "serve.mjs")], { stdio: "ignore" });
   for (let i = 0; i < 100; i++) {
-    if (await serverUp()) return child;
+    if (isThisApp(await frontPage())) return child;
     await new Promise((r) => setTimeout(r, 50));
   }
   child.kill();

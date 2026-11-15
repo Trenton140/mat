@@ -78,10 +78,18 @@ function drawLine(e, ctx) {
   const payer = ctx.people.find((p) => p.name === e.paidBy);
   const t = el("span", "rc-t", e.title);
   if (e.note) t.append(el("small", "rc-note", e.note));
-  const notes = [];
-  if (!ctx.names.every((n) => e.split.includes(n))) notes.push(e.split.join(" + ") + " only");
-  if (e.splitMode && e.splitMode !== "equal") notes.push("uneven");
-  if (notes.length) t.append(el("small", "", notes.join(" · ")));
+  const only = !ctx.names.every((n) => e.split.includes(n));
+  const uneven = !!e.splitMode && e.splitMode !== "equal";
+  if (only || uneven) {
+    // "Ajen + Trenton only · uneven", the names in bold
+    const small = el("small");
+    if (only) {
+      e.split.forEach((n, i) => small.append(...(i ? [" + "] : []), el("b", "", n)));
+      small.append(" only");
+    }
+    if (uneven) small.append((only ? " · " : "") + "uneven");
+    t.append(small);
+  }
   if (e.failed) t.append(el("small", "rc-fail", "not saved, tap to retry"));
   row.append(el("span", "mini", (payer && payer.initials) || String(e.paidBy).slice(0, 2).toUpperCase()), t, fig("span", "rc-amt", typed(e)));
   return row;
@@ -194,8 +202,9 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     const mine = s.people.find((p) => p.name === s.me);
     const list = owedList(names, live, s.payments, mine ? mine.simplify !== false : true);
     say.textContent = s.me ? sentence(standing(s.me, list, balances(names, live, s.payments))) : "";
-    sayP.textContent = "The trip so far is " + yen(sum(live, jpyOf)) + ", about " + dollars(sum(live, cadCents)) +
-      ", across " + live.length + (live.length === 1 ? " receipt." : " receipts.");
+    // The words stay dim; the three figures are bold and bright.
+    sayP.replaceChildren("The trip so far is ", el("b", "", yen(sum(live, jpyOf))), ", about ", el("b", "", dollars(sum(live, cadCents))),
+      ", across ", el("b", "", String(live.length)), live.length === 1 ? " receipt." : " receipts.");
 
     const ctx = { me: s.me, seenAt: s.seenAt, people: s.people, names, days: s.days, nowMs: now() };
     const fresh = live.filter((e) => isNewLine(e, s.me, s.seenAt)).length + s.payments.filter((p) => isNewStamp(p, s.me, s.seenAt)).length;

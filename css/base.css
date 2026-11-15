@@ -47,7 +47,7 @@ i{font-style:normal}
 /* ---------- payer seals (also the register's) ---------- */
 .seal{width:38px;height:38px;border-radius:50%;border:1.6px solid var(--dim);background:none;color:var(--dim);font-weight:900;font-size:12px;padding:0;
   transition:background .12s,color .12s,border-color .12s,transform .12s ease-out}
-.seal:active{transform:scale(.94)}
+.seal:active{transform:scale(.97)}
 .seal.is-on{background:var(--shu);border-color:var(--shu);color:#fff}
 
 /* ---------- first open: the gate, which one are you, how this works ---------- */

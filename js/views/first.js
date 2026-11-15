@@ -86,19 +86,16 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
 
   root.append(first.layer, how.layer, gate);
 
-  // "How this works" follows choosing who you are, once per phone.
-  let justChose = false;
+  // "How this works" shows once you are someone, until you tap "Got it" (R19).
   let shownPeople = "";
 
   pick.addEventListener("click", (ev) => {
     const b = ev.target.closest("[data-me]");
     if (!b) return;
-    justChose = true;
     store.setMe(b.dataset.me);
   });
   ok.addEventListener("click", () => {
     set("mat.how", "1");
-    justChose = false;
     render(store.state);
   });
 
@@ -124,7 +121,7 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
     const needMe = !blocked && s.status === "ready" && !s.me && s.people.length > 0;
     if (needMe) drawPeople(s.people);
     setOpen(first, needMe);
-    setOpen(how, !blocked && !needMe && !!s.me && justChose && get("mat.how") !== "1");
+    setOpen(how, !blocked && !needMe && !!s.me && get("mat.how") !== "1");
   }
 
   render(store.state);

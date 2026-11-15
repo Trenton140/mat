@@ -1,7 +1,7 @@
 // The shell, first open and the receipt (Task 7).
 
 const assert = require("node:assert/strict");
-const { ORIGIN, SEED, NOON12, open, until, text, expectText, visible } = require("./helpers.cjs");
+const { ORIGIN, SEED, NOON12, makeBackend, open, until, text, expectText, visible } = require("./helpers.cjs");
 
 const NAMES = ["Mo", "Ajen", "Trenton"];
 const lib = async () => ({ ...(await import("../../js/money.js")), ...(await import("../../js/format.js")) });
@@ -31,11 +31,19 @@ module.exports = [
       await waitRows(page, 8);
 
       const exps = live(SEED);
-      const bal = balances(NAMES, exps, []);
-      await expectText(page, "#say", sentence(standing("Mo", owedList(NAMES, exps, [], true), bal)));
+      const bal = balances(NAMES, exps, SEED.payments);
+      await expectText(page, "#say", sentence(standing("Mo", owedList(NAMES, exps, SEED.payments, true), bal)));
       const cents = exps.reduce((a, e) => a + cadCents(e), 0);
       await expectText(page, "#sayP", "The trip so far is ¥438,340, about " + dollars(cents) + ", across 8 receipts.");
       assert.equal(dollars(cents), "$3,949.01");
+      // Figures in the summary are bold and bright; the words around them stay dim.
+      const figs = await page.$$eval("#sayP b", (els) => els.map((b) => [b.textContent, getComputedStyle(b).fontWeight, getComputedStyle(b).color]));
+      assert.deepEqual(figs.map((f) => f[0]), ["¥438,340", "$3,949.01", "8"]);
+      const textColour = await page.evaluate(() => getComputedStyle(document.body).color);
+      for (const [, weight, colour] of figs) {
+        assert.equal(weight, "700");
+        assert.equal(colour, textColour);
+      }
 
       const heads = await page.$$eval("#rc .rc-day", (els) => els.map((e) => e.textContent));
       assert.equal(heads.length, 4, "four day headings");
@@ -62,6 +70,8 @@ module.exports = [
       assert.ok((await text(page, '.rc-group[data-day="2026-12-11"] .rc-sub')).includes("¥27,400"));
 
       assert.ok((await text(page, '.rc-row[data-id="seedexp008"]')).includes("Ajen + Trenton only"));
+      const onlyNames = await page.$$eval('.rc-row[data-id="seedexp008"] small b', (els) => els.map((b) => [b.textContent, getComputedStyle(b).fontWeight]));
+      assert.deepEqual(onlyNames, [["Ajen", "700"], ["Trenton", "700"]]);
       await expectText(page, '.rc-row[data-id="seedexp001"] .rc-note', "ref NK-4471");
       assert.equal(await page.locator("#rc .rc-note").count(), 1, "only the line with a note has .rc-note");
 
@@ -76,8 +86,29 @@ module.exports = [
       assert.equal(await visible(page, "#first"), false);
       assert.equal(await visible(page, "#how"), false);
 
-      const { sw, cw } = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
-      assert.equal(sw, cw, "no sideways scroll");
+      // No sideways scroll: the page, and the boxes that clip their own overflow.
+      for (const sel of [":root", "#vMoney", "#rc", "#slip"]) {
+        const { sw, cw } = await page.evaluate((s) => {
+          const el = document.querySelector(s);
+          return { sw: el.scrollWidth, cw: el.clientWidth };
+        }, sel);
+        assert.equal(sw, cw, "no sideways scroll in " + sel);
+      }
+
+      // Nothing covers the bottom bar's buttons at the top of the page.
+      await page.evaluate(() => { document.getElementById("vMoney").scrollTop = 0; });
+      for (const sel of ["#youBtn", "#ring"]) {
+        const ok = await page.evaluate((s) => {
+          const b = document.querySelector(s);
+          const r = b.getBoundingClientRect();
+          const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+          return !!hit && (hit === b || b.contains(hit));
+        }, sel);
+        assert.ok(ok, sel + " is the element at its own centre");
+      }
+      // ...and the bar behind them is solid, so no paper shows through.
+      const nav = await page.evaluate(() => ({ bg: getComputedStyle(document.getElementById("nav")).backgroundColor, image: getComputedStyle(document.getElementById("nav")).backgroundImage }));
+      assert.deepEqual(nav, { bg: "rgb(26, 22, 20)", image: "none" }, "the bottom bar is solid --ground");
     },
   },
   {
@@ -142,15 +173,25 @@ module.exports = [
   {
     name: "not connected: says so and calls nothing",
     async run({ page }) {
+      // A bridge is there but no MAT_FAKE_API, and API_URL is empty: the app
+      // must not call anything at all.
+      const backend = makeBackend(SEED, { now: NOON12 });
+      await page.exposeFunction("__matBridge", (body) => backend.handle(body));
+      const outside = [];
+      page.on("request", (r) => {
+        if (new URL(r.url()).hostname !== "localhost" && !r.url().includes("fonts.googleapis.com")) outside.push(r.url());
+      });
       await page.goto(ORIGIN + "/");
       await expectText(page, "#gate", "This app isn't connected yet.");
       assert.equal(await page.evaluate(() => document.getElementById("rc").childElementCount), 0);
+      assert.deepEqual(outside, [], "no request to any other host (fonts aside)");
+      assert.equal(backend.requests.length, 0, "the bridge received nothing");
     },
   },
   {
     name: "first open: which one are you, then how this works",
     async run({ page }) {
-      await open(page, { seed: SEED, nowMs: NOON12, key: null, me: null, hash: "#k=test-key" });
+      await open(page, { seed: SEED, nowMs: NOON12, key: null, me: null, how: null, hash: "#k=test-key" });
       await until(() => visible(page, "#first"), "#first shows");
       assert.equal(await page.locator("#first [data-me]").count(), 3, "three seals");
       assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), "test-key");
@@ -175,6 +216,40 @@ module.exports = [
       await waitRows(page, 8);
       assert.equal(await visible(page, "#first"), false, "no identity sheet on the next load");
       assert.equal(await visible(page, "#how"), false, "no how-this-works on the next load");
+    },
+  },
+  {
+    name: "how this works survives a reload before Got it",
+    async run({ page }) {
+      await open(page, { seed: SEED, nowMs: NOON12, key: null, me: null, how: null, hash: "#k=test-key" });
+      await until(() => visible(page, "#first"), "#first shows");
+      await page.click('#first [data-me="Trenton"]');
+      await until(() => visible(page, "#how"), "#how shows");
+      await page.reload();
+      await waitRows(page, 8);
+      await until(() => visible(page, "#how"), "#how still shows after a reload");
+      assert.equal(await visible(page, "#first"), false);
+      await page.click("#howOk");
+      await until(async () => !(await visible(page, "#how")), "#how closes");
+    },
+  },
+  {
+    name: "a key the phone cannot store still works for this visit",
+    async run({ page }) {
+      await page.addInitScript(() => {
+        const set = Storage.prototype.setItem;
+        Storage.prototype.setItem = function (k, v) {
+          if (k === "mat.key") throw new Error("QuotaExceededError");
+          return set.call(this, k, v);
+        };
+      });
+      const backend = await open(page, { seed: SEED, nowMs: NOON12, key: null, hash: "#k=test-key" });
+      await waitRows(page, 8);
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), null, "nothing was stored");
+      assert.equal(await page.evaluate(() => location.hash), "", "key gone from the address");
+      assert.equal(await visible(page, "#gate"), false);
+      const loads = backend.requests.filter((r) => r.action === "load");
+      assert.ok(loads.length >= 1 && loads.every((r) => r.key === "test-key"), "loads carry the key from the link");
     },
   },
 ];
