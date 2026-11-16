@@ -189,7 +189,7 @@ function start() {
   // The Days sheets: the hotel card, the list of every day and the stop sheet.
   const stayCard = mountStayCard(phone, store);
   const allDays = mountAllDays(phone, store, { clock, onPick: (i) => days.goDay(i) });
-  const stopSheet = mountStopSheet(phone, store, { clock });
+  const stopSheet = mountStopSheet(phone, store);
   const closeDaySheets = () => {
     stayCard.close(false);
     allDays.close(false);

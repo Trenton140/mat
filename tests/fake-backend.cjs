@@ -202,6 +202,35 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   fake.requests = requests;
   fake.primitives = primitives;
   fake.lockWaitedMs = () => lockWaited;
+  // Test-only: what the Plan 1 backend (0a66cbd) answered to load, for a
+  // phone still holding that cache: days, stops and stays as plainRow_ made
+  // them (the Sheet's columns camel-cased, a Date cell as its date, an empty
+  // cell ""; stops with deletedAt and no deleted; stays with no deleted_at
+  // column yet), and the rest as now.
+  fake.plan1Load = async () => {
+    const env = await fake({ key: TRIP_KEY, action: "load", args: {} });
+    requests.pop();
+    const camel = (k) => k.replace(/_([a-z])/g, (m, c) => c.toUpperCase());
+    const plain = (o, drop = []) => {
+      const out = {};
+      for (const k of Object.keys(o)) {
+        if (drop.includes(k)) continue;
+        const v = o[k];
+        out[camel(k)] = v instanceof Date ? P.cellDate_(v) : v === null || v === undefined ? "" : v;
+      }
+      return out;
+    };
+    const rows = (tab) => primitives.readTable_(tab).filter((r) => String(r[tab === "Days" ? "date" : "id"] || "") !== "");
+    return {
+      rev: env.rev,
+      data: {
+        ...env.data,
+        days: rows("Days").map((r) => plain(r)),
+        stops: rows("Stops").map((r) => plain(r)),
+        stays: rows("Stays").map((r) => plain(r, ["deleted_at"])),
+      },
+    };
+  };
   fake.props = props;
   fake.propReads = propReads;
   fake.setRate = (r, source) => {

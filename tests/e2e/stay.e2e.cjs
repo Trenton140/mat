@@ -225,18 +225,24 @@ module.exports = [
     name: "one sheet at a time",
     async run({ page }) {
       await ready(page);
+      // Settings is under the list's and the card's dimmed area: a person
+      // closes the sheet first, then taps it.
       await page.click("#dayCount");
       await until(() => isOpen(page, "allDays"), "the list opens");
-      await page.evaluate(() => document.getElementById("youBtn").click());
-      await until(() => isOpen(page, "you"), "Settings opens");
+      await page.click("#allDaysDone");
       await until(async () => !(await isOpen(page, "allDays")), "the list closed");
+      await page.click("#youBtn");
+      await until(() => isOpen(page, "you"), "Settings opens");
+      assert.equal(await isOpen(page, "allDays"), false);
 
       await page.click("#youDone");
       await until(async () => !(await isOpen(page, "you")), "Settings closed");
       await openCard(page, "2026-12-12");
-      await page.evaluate(() => document.getElementById("youBtn").click());
-      await until(() => isOpen(page, "you"), "Settings opens");
+      await page.click("#stayDone");
       await until(async () => !(await isOpen(page, "stay")), "the card closed");
+      await page.click("#youBtn");
+      await until(() => isOpen(page, "you"), "Settings opens");
+      assert.equal(await isOpen(page, "stay"), false);
 
       // Opening the card or the list closes Settings, and each closes the other.
       await page.evaluate(() => document.querySelector('#rail .pg[data-date="2026-12-12"] .tk-stay').click());

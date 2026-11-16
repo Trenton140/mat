@@ -2161,6 +2161,31 @@ test("a cache from before the plan existed still paints, and the load fills in t
   assert.equal(stopOf(p.store, SKY.id).title, "Shibuya Sky");
 });
 
+test("a cache in the real Plan 1 shape paints Days and the same money before the load lands (M4)", async () => {
+  const plan = require("./fixtures/plan.json");
+  const seedAll = { ...SEED, ...plan };
+  const p0 = phone({ seed: seedAll });
+  const old = await p0.fake.plan1Load();
+  assert.equal("deleted" in old.data.stops[0], false, "Plan 1 stops have deletedAt, not deleted");
+  const storage = memStorage({ "mat.key": KEY, "mat.me": "Mo" });
+  storage.setItem("mat.cache", JSON.stringify({ data: old.data, rev: old.rev, loadedAt: 1 }));
+  const p = phone({ fake: p0.fake, storage });
+  const hold = p.net.hold("load");
+  const booting = p.store.boot();
+  await until(() => p.store.state.status === "ready");
+  const painted = p.store.state;
+  assert.equal(painted.days.length, 11);
+  assert.deepEqual(painted.stops.map((x) => x.title), plan.stops.map((x) => x.title));
+  assert.equal(painted.stays[0].name, plan.stays[0].name);
+  const money = (st) => JSON.stringify([balances(st.people.map((x) => x.name), st.expenses, st.payments), st.expenses.length, st.payments.length, st.setAside]);
+  const before = money(painted);
+  hold();
+  await booting;
+  await p.store.idle();
+  assert.equal(money(p.store.state), before, "Money is the same once the load lands");
+  assert.equal(p.store.state.stops.every((x) => x.deleted === false), true);
+});
+
 test("a stop write with no reply asks the backend at once, so the truth is back before anyone types it again", async () => {
   const p = phone({ seed: {} });
   await p.store.boot();

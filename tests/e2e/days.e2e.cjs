@@ -3,7 +3,7 @@
 // Dec 12 in Japan, Day 3.
 
 const assert = require("node:assert/strict");
-const { WITH_PLAN, open, advance, until, text, expectText } = require("./helpers.cjs");
+const { WITH_PLAN, NOON12, makeBackend, open, advance, until, text, expectText } = require("./helpers.cjs");
 
 async function ready(page, opts = {}) {
   const backend = await open(page, { seed: WITH_PLAN, tab: "days", ...opts });
@@ -158,6 +158,34 @@ module.exports = [
       await page.click('[data-tab="money"]');
       await until(() => page.evaluate(() => document.getElementById("vMoney").classList.contains("is-active")), "Money shows");
       assert.equal(await flat(), true, "on Money");
+    },
+  },
+  {
+    name: "a phone holding the Plan 1 cache: Days paints from it without error, and Money is the same once the load lands (M4)",
+    async run({ page }) {
+      const backend = makeBackend(WITH_PLAN, { now: NOON12 });
+      const old = await backend.fake.plan1Load();
+      // The load waits, so the first paint is the Plan 1 cache alone.
+      const real = backend.handle;
+      let release;
+      const gate = new Promise((r) => (release = r));
+      backend.handle = async (body) => {
+        if (body.action === "load") await gate;
+        return real(body);
+      };
+      await open(page, { backend, tab: "days", storage: { "mat.cache": JSON.stringify({ data: old.data, rev: old.rev, loadedAt: NOON12 }) } });
+      await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw from the cache");
+      await expectText(page, "#dayCount", /^Day 3 of 11/);
+      assert.ok((await text(page, tk("2026-12-12"))).includes("Shibuya Sky"), "the cached stops are on the ticket");
+      assert.ok((await text(page, tk("2026-12-11") + " .tk-stay")).includes("Asakusa hotel"), "the cached stay is on its night");
+      await page.click('#nav button[data-tab="money"]');
+      const money = () => page.evaluate(() => ["say", "slip", "rc", "asideNote"].map((id) => (document.getElementById(id) || { textContent: "" }).textContent.replace(/\s+/g, " ").trim()));
+      const before = await money();
+      assert.ok(before[2].length > 0, "the receipt prints");
+      release();
+      await page.evaluate(() => globalThis.__matTest.store.idle());
+      assert.equal(backend.requests.filter((r) => r.action === "load").length, 1, "the load landed");
+      assert.deepEqual(await money(), before);
     },
   },
 ];

@@ -1,7 +1,7 @@
 // The stop sheet: adding a stop to a day, or changing or removing one. Opened
 // from a ticket's ＋ Add a stop row or an open stop's Edit button.
 //
-// mountStopSheet(root, store, { clock }) -> { add(date), edit(id), close(restoreFocus), isOpen() }
+// mountStopSheet(root, store) -> { add(date), edit(id), close(restoreFocus), isOpen() }
 // root is the phone. The fields are filled once, when the sheet opens; a
 // sync or another phone's change never rewrites them while it is open, so
 // nothing half-typed is lost. Save sends the stop (store.addStop), or only
@@ -17,8 +17,7 @@
 // are off and the sheet says so. While changing a stop that another phone
 // removes, the sheet says so and keeps what was typed. The fields are
 // words, so the phone's own keyboard is used; the field being typed in is
-// kept in view above it. `clock` is taken for the Days sheets' common shape;
-// nothing here depends on the time.
+// kept in view above it. Nothing here depends on the time.
 
 import { dayHead } from "../format.js";
 import { newId } from "../time.js";

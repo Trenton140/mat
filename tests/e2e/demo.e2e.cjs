@@ -346,10 +346,15 @@ module.exports = [
     name: "R34 b: a visible phone on Days ends the demo when the real day rolls over, and its timers stop",
     async run({ page }) {
       const backend = await ready(page, { nowMs: Date.parse("2026-11-15T23:55:00+09:00") });
+      // Every interval set from here on, with how often its callback has run.
       await page.evaluate(() => {
         const orig = window.setInterval.bind(window);
         window.__iv = [];
-        window.setInterval = (f, d, ...a) => (window.__iv.push(d), orig(f, d, ...a));
+        window.setInterval = (f, d, ...a) => {
+          const rec = { d, fires: 0 };
+          window.__iv.push(rec);
+          return orig((...x) => { rec.fires += 1; return f(...x); }, d, ...a);
+        };
       });
       await tryDay(page, "Sat 12");
       await advance(page, backend, 600000); // the demo holds at 23:30; the real time is 00:05 on Nov 16
@@ -357,11 +362,19 @@ module.exports = [
       assert.equal(await demoDay(page), null);
       await expectText(page, "#dayCount", /^Day 1 of 11 in 24 days/);
       await until(async () => (await inView(page)) === "2026-12-10", "the rail is on the real today's ticket");
-      assert.equal((await page.evaluate(() => window.__iv)).pop(), 15000, "the normal tick");
-      // Nothing is left running for the demo: a long wait starts no new timer.
-      const timers = (await page.evaluate(() => window.__iv)).length;
+      const ivs = () => page.evaluate(() => window.__iv.map((r) => ({ ...r })));
+      assert.equal((await ivs()).pop().d, 15000, "the normal tick");
+      const guards = (list) => list.filter((r) => r.d === 30000);
+      const fast = (list) => list.filter((r) => r.d === 500);
+      const before = await ivs();
+      assert.ok(guards(before).length >= 1 && guards(before).some((r) => r.fires > 0), "the demo's guard ran while it lasted: " + JSON.stringify(before));
+      // Nothing is left running for the demo: over a long wait no new timer
+      // starts, and neither the guard nor the fast tick fires again.
       await advance(page, backend, 120000);
-      assert.equal((await page.evaluate(() => window.__iv)).length, timers);
+      const after = await ivs();
+      assert.equal(after.length, before.length, "no new timer");
+      assert.deepEqual(guards(after).map((r) => r.fires), guards(before).map((r) => r.fires), "the guard interval was cleared");
+      assert.deepEqual(fast(after).map((r) => r.fires), fast(before).map((r) => r.fires), "the fast tick was cleared");
     },
   },
   {
