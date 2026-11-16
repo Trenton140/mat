@@ -113,6 +113,15 @@ export function changeText(c) {
       default: return "Undone.";
     }
   }
+  if (c.kind === "todo") {
+    switch (c.action) {
+      case "tick": return "Ticked off " + item.item + ".";
+      case "claim": return "You’re on " + item.item + ".";
+      case "takeover": return "Took over " + item.item + ".";
+      case "unclaim": return "Handed back " + item.item + ".";
+      default: return "Undone.";
+    }
+  }
   switch (c.action) {
     case "add": return "Rang up " + item.title + " " + typed(item) + ".";
     case "edit": return "Changed " + item.title + ".";

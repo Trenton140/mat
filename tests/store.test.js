@@ -2451,3 +2451,120 @@ test("syncPayments with no reply says it couldn't confirm and the next contact r
   await p.store.idle();
   assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass"), "what landed shows after the next contact");
 });
+
+// ---------- "Before we go" (Task 20): the planner's Book Now list ----------
+
+const BHEAD = ["#", "Item", "Book by", "Status", "Notes", "Booking link"];
+const brow = (o) => BHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
+const CHEAD = ["#", "Date / time", "Agent / session", "Tab", "Cell(s)", "Item", "Old value", "New value", "Why", "Proof / source", "Verified?"];
+function bookSeed(n = 3, over = {}) {
+  const rows = [BHEAD];
+  for (let i = 1; i <= n; i++) rows.push(brow({ "#": i, Item: "Made-up booking " + i, "Book by": "2026-12-0" + ((i % 9) + 1), Status: "Not booked" }));
+  return { ...SEED, plannerId: PLANNER_ID, plannerTabs: { "Book Now": rows, "Change Log": [CHEAD] }, ...over };
+}
+
+test("syncTodos puts the list into state and asks again while the backend says more remain, at most 4 calls", async () => {
+  const p = phone({ seed: bookSeed(17) });
+  await p.store.boot();
+  assert.deepEqual(p.store.state.todos, []);
+  assert.equal(p.store.state.todosPulledAt, "");
+  const r = await p.store.syncTodos();
+  const calls = p.net.sent.filter((b) => b.action === "syncTodos");
+  assert.deepEqual(calls.map((b) => b.args), [{ force: false }, { force: true }], "15 rows, then the 2 left");
+  assert.equal(r.ok, true);
+  assert.equal(r.more, false);
+  assert.equal(p.store.state.todos.length, 17);
+  assert.ok(p.store.state.todosPulledAt);
+  assert.equal(r.pulledAt, p.store.state.todosPulledAt);
+  assert.equal(JSON.parse(p.storage.map.get("mat.cache")).data.todos.length, 17, "kept in the cache");
+
+  // A backend that always says more: four calls, then it stops and says so.
+  p.net.override = (b) => (b.action === "syncTodos" ? { ok: true, rev: 0, data: { todos: [], pulledAt: "", more: true, problems: [] } } : null);
+  const before = p.net.sent.length;
+  const again = await p.store.syncTodos({ force: true });
+  assert.equal(p.net.sent.length - before, 4);
+  assert.equal(again.more, true);
+  assert.ok(p.store.state.todosPulledAt, "an unfinished pull leaves the last fetched time");
+});
+
+test("syncTodos: quiet says nothing when it fails; otherwise the usual notice; never queued", async () => {
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  p.net.knownOffline = true;
+  let r = await p.store.syncTodos({ quiet: true });
+  assert.equal(r.ok, false);
+  assert.equal(p.store.state.notice, null);
+  r = await p.store.syncTodos();
+  assert.equal(p.store.state.notice, "No signal. Try again.");
+  p.net.knownOffline = false;
+  p.store.clearNotice();
+  p.net.override = (b) => (b.action === "syncTodos" ? { ok: false, error: "planner_unreadable", message: "Couldn’t read the planner sheet." } : null);
+  r = await p.store.syncTodos();
+  assert.equal(r.ok, false);
+  assert.equal(r.message, "Couldn’t read the planner sheet.");
+  assert.equal(p.store.state.notice, "Couldn’t read the planner sheet.");
+});
+
+test("tickTodo shows the tick at once, keeps what the backend saved, and Undo puts it back", async () => {
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  await p.store.syncTodos();
+  const token = p.store.tickTodo("1");
+  let t = byId(p.store.state.todos, "1");
+  assert.equal(t.tickedBy, "Mo");
+  assert.equal(t.done, true);
+  assert.equal(t.pending, true);
+  assert.equal(p.store.state.lastChange.kind, "todo");
+  assert.equal(p.store.state.lastChange.action, "tick");
+  await p.store.idle();
+  t = byId(p.store.state.todos, "1");
+  assert.equal(t.pending, undefined);
+  assert.equal(t.status, "Booked", "the planner took it");
+  assert.deepEqual(p.net.sent.filter((b) => b.action === "tickTodo").map((b) => b.args), [{ id: "1" }]);
+
+  await p.store.undo(token);
+  await p.store.idle();
+  t = byId(p.store.state.todos, "1");
+  assert.equal(t.tickedBy, "");
+  assert.equal(t.done, false);
+});
+
+test("tickTodo refused rolls back with the backend's sentence; offline it says not saved", async () => {
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  await p.store.syncTodos();
+  await backend(p.fake, "tickTodo", { id: "2" }, "Ajen"); // another phone ticked it first
+  p.store.tickTodo("2");
+  await p.store.idle();
+  assert.equal(p.store.state.notice, "That one is already done.");
+  assert.equal(byId(p.store.state.todos, "2").tickedBy, "", "rolled back to what this phone knew");
+
+  p.store.clearNotice();
+  p.net.knownOffline = true;
+  p.store.tickTodo("1");
+  await p.store.idle();
+  assert.equal(p.store.state.notice, "No signal. That wasn’t saved.");
+  assert.equal(byId(p.store.state.todos, "1").tickedBy, "");
+  assert.equal(p.fake.tables.Todos.find((r) => r.id === "1").ticked_by, "");
+});
+
+test("claimTodo: I’ll do it, take it over, hand it back, each with its own words on the undo bar", async () => {
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  await p.store.syncTodos();
+  p.store.claimTodo("1", true);
+  assert.equal(byId(p.store.state.todos, "1").claimedBy, "Mo");
+  assert.equal(p.store.state.lastChange.action, "claim");
+  await p.store.idle();
+  p.store.claimTodo("1", false);
+  assert.equal(byId(p.store.state.todos, "1").claimedBy, "");
+  assert.equal(p.store.state.lastChange.action, "unclaim");
+  await p.store.idle();
+  await backend(p.fake, "claimTodo", { id: "2", on: true }, "Ajen");
+  await p.store.refresh();
+  p.store.claimTodo("2", true);
+  assert.equal(p.store.state.lastChange.action, "takeover");
+  await p.store.idle();
+  assert.equal(byId(p.store.state.todos, "2").claimedBy, "Mo");
+  assert.deepEqual(p.net.sent.filter((b) => b.action === "claimTodo").map((b) => b.args), [{ id: "1", on: true }, { id: "1", on: false }, { id: "2", on: true }]);
+});

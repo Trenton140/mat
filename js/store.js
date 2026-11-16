@@ -43,13 +43,17 @@ const NOT_SAVED = "No signal. That wasn’t saved.";
 const UNCONFIRMED = "Couldn’t confirm that. Checking…";
 const STALE = "That was changed again since. Undo the newer change first.";
 const NO_SIGNAL = "No signal. Try again.";
+// A pull from the planner writes a few rows at a time: asked again while more
+// remain, up to this many calls in a row.
+const TODO_PULLS = 4;
 
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked"];
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt"];
 // Every kind of item the store keeps, the field it is found by and the flag
 // that marks it gone. Stays and day headers only ever change here through an
-// undo from History (their writes come in later tasks).
-const LIST = { expense: "expenses", payment: "payments", person: "people", stop: "stops", stay: "stays", day: "days" };
-const KEY_FIELD = { expense: "id", payment: "id", person: "name", stop: "id", stay: "id", day: "date" };
+// undo from History (their writes come in later tasks). A todo is an item
+// of the planner's Book Now list ("Before we go"): ticked and claimed here.
+const LIST = { expense: "expenses", payment: "payments", person: "people", stop: "stops", stay: "stays", day: "days", todo: "todos" };
+const KEY_FIELD = { expense: "id", payment: "id", person: "name", stop: "id", stay: "id", day: "date", todo: "id" };
 const FLAG = { expense: "deleted", payment: "removed", stop: "deleted", stay: "deleted" };
 // Adds kept in mat.queue and resent with the same id until the backend has
 // them. A stop add is not one of them: stop writes need a connection, so
@@ -152,7 +156,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false,
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "",
     loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
@@ -652,11 +656,12 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   // opts.quiet: the caller waits on store.outcome(token) and tells the
   // person itself (a stop sheet); opts.onUnsure: called when no reply came.
-  function change(kind, id, action, apiAction, patch, { quiet = false, onUnsure = null } = {}) {
+  // opts.args: what to send, when it is not { id } (or { id, patch } for an edit).
+  function change(kind, id, action, apiAction, patch, { quiet = false, onUnsure = null, args: given = null } = {}) {
     const before = find(kind, id);
     if (!before) return null;
     const after = { ...bare(before), ...patch };
-    const args = action === "edit" ? { id, patch: copy(patch) } : { id };
+    const args = given ? copy(given) : action === "edit" ? { id, patch: copy(patch) } : { id };
     return begin({
       token: newId(), kind, id, action, api: apiAction, args, patch: copy(patch),
       before: bare(before), after,
@@ -1064,6 +1069,54 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems, more: !!d.more, capped: !!d.capped };
   }
 
+  // ---- "Before we go": the planner's Book Now list ----
+
+  // Brings the list in from the planner: a plain call, never queued. While
+  // the backend says more rows remain it is asked again (force), up to
+  // TODO_PULLS calls in a row. Resolves { ok: true, more, pulledAt } or
+  // { ok: false, code, message }; unless quiet, a failure is said the usual
+  // way. An unfinished pull keeps the last fetched time.
+  async function syncTodos({ force = false, quiet = false } = {}) {
+    let r = null;
+    let more = false;
+    try {
+      for (let n = 0; n < TODO_PULLS; n++) {
+        r = await call("syncTodos", { force: n === 0 ? force : true });
+        more = !!(r.data && r.data.more);
+        if (!more) break;
+      }
+    } catch (err) {
+      if (!quiet) {
+        state.notice = neverSent(err) ? NO_SIGNAL : failNotice(err);
+        changed();
+      }
+      return { ok: false, code: codeOf(err), message: (err && err.message) || "" };
+    }
+    const d = r.data || {};
+    if (base && Array.isArray(d.todos)) {
+      const pulledAt = typeof d.pulledAt === "string" && d.pulledAt ? d.pulledAt : base.todosPulledAt || "";
+      base = { ...base, todos: copy(d.todos), todosPulledAt: pulledAt };
+      saveCache();
+    }
+    changed();
+    return { ok: true, more, pulledAt: state.todosPulledAt || "" };
+  }
+
+  // A tick, shown at once (done, by me, now); the backend then tries to
+  // write Booked into the planner.
+  function tickTodo(id) {
+    return change("todo", id, "tick", "tickTodo", { tickedBy: myName, tickedAt: new Date(now()).toISOString(), done: true });
+  }
+
+  // on: I take it (from anyone: "claim", or "takeover" from someone else);
+  // off: I hand it back ("unclaim").
+  function claimTodo(id, on) {
+    const cur = find("todo", id);
+    if (!cur) return null;
+    const action = !on ? "unclaim" : cur.claimedBy && cur.claimedBy !== myName ? "takeover" : "claim";
+    return change("todo", id, action, "claimTodo", { claimedBy: on ? myName : "" }, { args: { id, on: !!on } });
+  }
+
   // ---- history ----
 
   let historySeq = 0; // numbers each first-page load
@@ -1192,6 +1245,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     },
     boot, refresh, checkRev, flush, idle,
     setMe, setPerson, markSeen, notify, clearNotice, claudeToken, syncPayments,
+    syncTodos, tickTodo, claimTodo,
     addExpense,
     updateExpense: (id, patch) => change("expense", id, "edit", "updateExpense", patch),
     deleteExpense: (id) => takeBackLive("expense", id) || change("expense", id, "delete", "deleteExpense", { deleted: true }),

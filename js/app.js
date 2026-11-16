@@ -19,6 +19,7 @@ import { mountAllDays } from "./views/alldays.js";
 import { mountStopSheet } from "./views/stopsheet.js";
 import { mountUndoBar } from "./views/ubar.js";
 import { mountNet } from "./views/net.js";
+import { mountTodos } from "./views/todos.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -283,8 +284,11 @@ function start() {
     you.close(false);
     closeDaySheets();
   };
+  // "Before we go": the bookings and prep from the planner, under the counter.
+  const todos = mountTodos(store, { clock, screen: document.getElementById("vDays") });
   const days = mountDays(document.getElementById("vDays"), store, {
     clock,
+    under: todos.el,
     onStay: (id) => {
       closeForDays();
       stayCard.open(id);
@@ -388,7 +392,8 @@ function start() {
     store.flush().then(check);
   });
 
-  if (connected) store.boot();
+  // Once started, the list is fetched if it is an hour old.
+  if (connected) store.boot().then(() => todos.wake());
   if (document.visibilityState !== "hidden") startChecking();
 }
 
