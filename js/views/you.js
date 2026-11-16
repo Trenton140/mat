@@ -1,7 +1,7 @@
 // Settings (the "You 設定" sheet): who you are, your e-Transfer address, the
 // stamp sound, History, when the figures were last fetched, how this works,
-// the invite link, the Google Sheet and "Report a problem". One sheet, no
-// sub-pages.
+// the invite link, the Claude link, the Google Sheet and "Report a problem".
+// One sheet, no sub-pages.
 //
 // mountYou(root, store, { onHistory(), onDemo(date), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
 // onDemo(date): a trip day was picked under "Try another day". demo: the trip's
@@ -9,9 +9,11 @@
 // screen(): the screen showing, "Days" or "Money", for Report a problem.
 // root is the phone. getKey() gives the trip key for the invite link; the key
 // is only ever put on the clipboard, never drawn, logged or put in the report.
+// The same goes for the Claude connector's token (the Claude link row), which
+// is fetched on each tap and kept nowhere.
 // Text from people or the Sheet goes in with textContent / .value only.
 
-import { APP_VERSION } from "../config.js";
+import { API_URL, APP_VERSION } from "../config.js";
 import { soundOn, setSound } from "../sound.js";
 import { clock, dayHead, dayShort, localDay, freshText, historySentence } from "../format.js";
 import { HOW_LINES, standalone } from "./first.js";
@@ -21,6 +23,7 @@ const NOT_YET = "Not updated yet";
 const HISTORY_UNAVAILABLE = "history unavailable";
 const NO_KEY = "This phone has no trip key, so there is no link to copy.";
 const COPY_FAILED = "Couldn’t copy. Try again.";
+const NO_SIGNAL = "No signal. Try again.";
 const REPORT_LINES = 5;
 
 const MARKUP = `
@@ -44,6 +47,7 @@ const MARKUP = `
   <div class="how" id="setHowLines" hidden></div>
   <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
   <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b>Copy</b></button>
+  <button type="button" class="set-r" id="setClaude"><span>Claude link<small>Lets your Claude add stops and expenses. Keep it to yourself.</small></span><b>Copy</b></button>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
   <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b>Copy</b></button>
 </div>`;
@@ -112,6 +116,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   let shownMail = ""; // the address as last drawn; the field follows it until it is typed in
   let sentMail = null; // the text last sent with Save, kept in the field if the save fails
   let reporting = false;
+  let session = 0; // counts each opening and closing of the sheet
 
   const mePerson = (s) => s.people.find((p) => p.name === s.me) || null;
   const addressOf = (s) => {
@@ -204,6 +209,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   function open() {
     if (opened) return;
     opened = true;
+    session++;
     // A fresh look: the field shows what is saved, the lines are folded away.
     sentMail = null;
     mail.value = addressOf(store.state);
@@ -223,6 +229,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   function close(restoreFocus = true) {
     if (!opened) return;
     opened = false;
+    session++; // a Claude link still on its way is dropped, not copied
     sheet.classList.remove("is-open");
     sheet.inert = true;
     scrim.hidden = true;
@@ -298,6 +305,50 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     return true;
   }
   $("setInvite").addEventListener("click", copyInvite);
+
+  // ---- the Claude link ----
+  // The connector's address with its token and the viewer's name. iPhone
+  // Safari only lets a tap write the clipboard in the tap's own turn, so the
+  // link goes to copyText as a promise: it is handed over as a ClipboardItem
+  // at once and filled when the token arrives (older phones fall back to a
+  // plain copy). The token is fetched on each tap and kept nowhere: not on
+  // screen, not in storage, and a reply that comes after Settings closed is
+  // dropped without copying.
+  const claude = $("setClaude");
+  let claudeBusy = false;
+  async function copyClaude() {
+    if (claudeBusy) return;
+    if (globalThis.navigator && navigator.onLine === false) {
+      store.notify(NO_SIGNAL);
+      return;
+    }
+    claudeBusy = true;
+    claude.disabled = true;
+    const asked = session;
+    const me = store.state.me;
+    let failed = null;
+    const link = store.claudeToken().then(
+      (token) => {
+        if (asked !== session) throw new Error("closed");
+        return API_URL + "?t=" + encodeURIComponent(token) + (me ? "&as=" + encodeURIComponent(me) : "");
+      },
+      (err) => {
+        failed = err;
+        throw err;
+      },
+    );
+    try {
+      const copied = await copyText(link);
+      if (asked !== session) return; // Settings closed meanwhile: nothing to say
+      if (copied) store.notify("Claude link copied.");
+      else if (failed) store.notify(failed.code === "network" ? NO_SIGNAL : failed.message || COPY_FAILED);
+      else store.notify(COPY_FAILED);
+    } finally {
+      claudeBusy = false;
+      claude.disabled = false;
+    }
+  }
+  claude.addEventListener("click", copyClaude);
 
   // ---- Add to Home Screen ----
   // An app on the iPhone Home Screen keeps storage of its own, without the key

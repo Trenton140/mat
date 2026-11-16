@@ -7,7 +7,7 @@
     "serve": "node scripts/serve.mjs",
     "test": "node --test",
     "e2e": "node tests/e2e/run.cjs",
-    "stamp": "node scripts/stamp-sw.mjs"
+    "stamp": "node scripts/make-backend-money.mjs && node scripts/stamp-sw.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.48.0"

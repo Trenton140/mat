@@ -936,6 +936,18 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     });
   }
 
+  // The Claude connector's token, for Settings to put into a link. Resolves
+  // with it, or rejects with the call's error (.code "network" for no
+  // signal). Kept nowhere: not in state, storage or the cache.
+  async function claudeToken() {
+    const r = await call("claudeLink", {});
+    const token = r && r.data ? r.data.token : null;
+    if (typeof token === "string" && token) return token;
+    const err = new Error("The trip sheet sent back something unexpected.");
+    err.code = "server";
+    throw err;
+  }
+
   // ---- history ----
 
   let historySeq = 0; // numbers each first-page load
@@ -1061,7 +1073,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       return () => subs.delete(fn);
     },
     boot, refresh, checkRev, flush, idle,
-    setMe, setPerson, markSeen, notify, clearNotice,
+    setMe, setPerson, markSeen, notify, clearNotice, claudeToken,
     addExpense,
     updateExpense: (id, patch) => change("expense", id, "edit", "updateExpense", patch),
     deleteExpense: (id) => takeBackLive("expense", id) || change("expense", id, "delete", "deleteExpense", { deleted: true }),

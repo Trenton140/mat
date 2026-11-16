@@ -54,7 +54,7 @@ module.exports = [
       assert.equal(await text(page, "#you .sheet-top span"), "You設定");
       assert.equal(await page.evaluate(() => document.getElementById("you").contains(document.activeElement)), true, "focus moves into the sheet");
       const order = await page.evaluate(() => {
-        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setDemo", "setHow", "setInstall", "setInvite", "setSheet", "setReport"];
+        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setDemo", "setHow", "setInstall", "setInvite", "setClaude", "setSheet", "setReport"];
         const all = [...document.querySelectorAll("#you *")];
         return ids.map((id) => all.indexOf(document.getElementById(id)));
       });
@@ -416,6 +416,114 @@ module.exports = [
       await expectText(page, "#ubarT", "Couldn’t copy. Try again.");
       await until(async () => !(await page.isDisabled("#setReport")), "the button comes back");
       assert.equal(await clipboard(page), "before", "nothing was copied");
+    },
+  },
+  {
+    name: "Claude link copies the connector address",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      assert.equal(await page.evaluate(() => document.querySelector("#setClaude > span").firstChild.textContent), "Claude link");
+      assert.equal(await text(page, "#setClaude small"), "Lets your Claude add stops and expenses. Keep it to yourself.");
+      assert.equal(await text(page, "#setClaude b"), "Copy");
+      await page.click("#setClaude");
+      await expectText(page, "#ubarT", "Claude link copied.");
+      const { API_URL } = await import("../../js/config.js");
+      assert.equal(await clipboard(page), API_URL + "?t=claude-token&as=Mo");
+      assert.match(await clipboard(page), /\?t=claude-token&as=Mo$/);
+      const seen = await page.evaluate(() => [document.body.innerText, document.body.innerHTML, JSON.stringify({ ...localStorage }), JSON.stringify({ ...sessionStorage }), location.href].join("|"));
+      assert.equal(seen.includes("claude-token"), false, "the token is not drawn, stored or in the address");
+      assert.equal(backend.requests.filter((r) => r.action === "claudeLink").length, 1);
+      assert.equal(await page.isDisabled("#setClaude"), false, "the row can be tapped again");
+
+      // iPhone Safari: the clipboard is written within the tap itself, as a
+      // ClipboardItem whose text arrives later, never after the reply.
+      await page.evaluate(() => globalThis.__matTest.store.clearNotice());
+      const inTap = await page.evaluate(() => {
+        const clip = navigator.clipboard;
+        const write = clip.write.bind(clip);
+        globalThis.__clip = { write: 0, writeText: 0 };
+        clip.write = (items) => {
+          globalThis.__clip.write++;
+          return write(items);
+        };
+        const writeText = clip.writeText.bind(clip);
+        clip.writeText = (t) => {
+          globalThis.__clip.writeText++;
+          return writeText(t);
+        };
+        document.getElementById("setClaude").click();
+        return globalThis.__clip.write;
+      });
+      assert.equal(inTap, 1, "clipboard.write is called before the tap's handler returns");
+      await expectText(page, "#ubarT", "Claude link copied.");
+      assert.deepEqual(await page.evaluate(() => globalThis.__clip), { write: 1, writeText: 0 });
+      assert.match(await clipboard(page), /\?t=claude-token&as=Mo$/);
+    },
+  },
+  {
+    name: "Claude link carries the viewer's own name, URL-encoded, and each tap asks again",
+    async run({ page }) {
+      // A name the URL has to encode (the seed's lines that name Trenton are then set aside).
+      const backend = await open(page, { seed: { ...SEED, people: { Trenton: { name: "Tr én&t" } } }, me: "Tr én&t" });
+      await until(() => page.evaluate(() => globalThis.__matTest.store.state.me === "Tr én&t"), "the app knows who this is");
+      await openYou(page);
+      await page.click("#setClaude");
+      await expectText(page, "#ubarT", "Claude link copied.");
+      assert.match(await clipboard(page), /\?t=claude-token&as=Tr%20%C3%A9n%26t$/);
+      await page.evaluate(() => globalThis.__matTest.store.clearNotice());
+      await pick(page, "Ajen");
+      await page.click("#setClaude");
+      await until(async () => /\?t=claude-token&as=Ajen$/.test(await clipboard(page)), "the second copy names Ajen");
+      assert.equal(backend.requests.filter((r) => r.action === "claudeLink").length, 2, "the token is not kept between taps");
+    },
+  },
+  {
+    name: "Claude link with no signal says so and copies nothing",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      await page.evaluate(() => navigator.clipboard.writeText("before"));
+      backend.failWith = "network";
+      await page.click("#setClaude");
+      await expectText(page, "#ubarT", "No signal. Try again.");
+      await page.evaluate(() => globalThis.__matTest.store.idle());
+      assert.equal(await clipboard(page), "before", "nothing was copied");
+      await until(async () => !(await page.isDisabled("#setClaude")), "the row comes back");
+    },
+  },
+  {
+    name: "Claude link: a trip with no token yet gives the backend's sentence; closing Settings while it is on its way copies nothing",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openYou(page);
+      await page.evaluate(() => navigator.clipboard.writeText("before"));
+      delete backend.fake.props.CLAUDE_TOKEN;
+      await page.click("#setClaude");
+      await expectText(page, "#ubarT", "The Claude link isn’t set up yet. Ask Mo to run migrate.");
+      assert.equal(await clipboard(page), "before");
+
+      backend.fake.props.CLAUDE_TOKEN = "claude-token";
+      let release;
+      let asked = 0;
+      const gate = new Promise((r) => (release = r));
+      const handle = backend.handle;
+      backend.handle = async (body) => {
+        if (body.action === "claudeLink") {
+          asked++;
+          await gate;
+        }
+        return handle(body);
+      };
+      await page.evaluate(() => globalThis.__matTest.store.clearNotice());
+      await page.click("#setClaude");
+      await until(() => asked === 1, "the token is asked for");
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      release();
+      await until(async () => !(await page.isDisabled("#setClaude")), "the tap has finished");
+      assert.equal(await clipboard(page), "before", "nothing was copied after Settings closed");
+      assert.notEqual(await text(page, "#ubarT"), "Claude link copied.");
     },
   },
 ];

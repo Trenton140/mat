@@ -8,13 +8,23 @@ function doGet() {
 }
 
 // One endpoint: the body is { key, actor, via, action, args }; Actions.js does
-// the rest. Always answers JSON, never an HTML error page.
+// the rest. A JSON-RPC 2.0 body is the Claude connector instead (Mcp.js),
+// checked against the token in the address (?t=...). Always answers JSON,
+// never an HTML error page.
 function doPost(e) {
   var body;
   try {
     body = JSON.parse(e && e.postData ? e.postData.contents : undefined);
   } catch (err) {
     return json_({ ok: false, error: "bad_input", message: "That request didn’t come through properly." });
+  }
+  if (body !== null && typeof body === "object" && body.jsonrpc === "2.0") {
+    try {
+      return json_(mcp_(body, (e && e.parameter) || {}));
+    } catch (err) {
+      // mcp_ answers its own errors; this is the last resort, and says nothing more.
+      return json_({ jsonrpc: "2.0", id: null, error: { code: -32603, message: "Internal error" } });
+    }
   }
   try {
     return json_(handle_(body));

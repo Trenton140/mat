@@ -3,7 +3,8 @@
 // elsewhere (Sheets.js, Env.js, Rate.js on Apps Script; in memory in
 // tests/fake-backend.cjs):
 //   readTable_, appendObj_, updateById_, updateWhere_, ensureColumns_,
-//   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_
+//   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_,
+//   claudeToken_, ensureClaudeToken_
 // It also uses the pure helpers from Pure.js.
 
 var MSG_ = {
@@ -29,6 +30,7 @@ var MSG_ = {
   cantUndo: "That change can’t be undone.",
   badHistory: "That history request didn’t come through properly.",
   server: "Something went wrong on our side. Try again.",
+  noClaude: "The Claude link isn’t set up yet. Ask Mo to run migrate.",
 };
 
 // The trip plan: stops, stays and day headers differ only in these. `key` is
@@ -75,7 +77,18 @@ function dispatch_(body) {
   if (action === "load") return load_();
   if (action === "rev") return ok_({}, rev_());
   if (action === "history") return history_(args);
-  if (action === "migrate") return withLock_(function () { return ok_({ added: ensureColumns_() }, rev_()); });
+  if (action === "migrate") {
+    return withLock_(function () {
+      var added = ensureColumns_();
+      ensureClaudeToken_();
+      return ok_({ added: added }, rev_());
+    });
+  }
+  // The Claude connector's token, for Settings to copy into a link. Never logged.
+  if (action === "claudeLink") {
+    var token = claudeToken_();
+    return token ? ok_({ token: token }, rev_()) : err_("not_found", MSG_.noClaude);
+  }
 
   var write;
   switch (action) {
@@ -205,16 +218,21 @@ function paymentEditableOf_(p) {
 
 // ---- reads ----
 
-function load_() {
-  var rev = rev_();
-  var rate = getRateInfo_();
+// The Trip tab as { key: value }.
+function tripInfo_() {
   var trip = {};
   readTable_("Trip").forEach(function (r) {
     var k = cellText_(r.key).trim();
     if (k) trip[k] = cellDate_(r.value);
   });
+  return trip;
+}
+
+function load_() {
+  var rev = rev_();
+  var rate = getRateInfo_();
   return ok_({
-    trip: trip,
+    trip: tripInfo_(),
     people: peopleRows_().map(personFromRow),
     days: readTable_("Days").filter(function (r) { return cellDate_(r.date) !== ""; }).map(dayFromRow),
     stops: readTable_("Stops").filter(function (r) { return cellText_(r.id) !== ""; }).map(stopFromRow),

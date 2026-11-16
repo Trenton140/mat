@@ -50,3 +50,27 @@ function nowIso_() {
 function sheetUrl_() {
   return SpreadsheetApp.getActiveSpreadsheet().getUrl();
 }
+
+// A new id for a stop or stay the connector adds: 20 letters and digits,
+// starting with a letter (the backend's id rule).
+function newId_() {
+  return "m" + Utilities.getUuid().replace(/-/g, "").slice(0, 19);
+}
+
+// Today, "YYYY-MM-DD", in the Trip tab's time zone.
+function today_() {
+  return Utilities.formatDate(new Date(), tripInfo_().tz || "Asia/Tokyo", "yyyy-MM-dd");
+}
+
+// The token the Claude connector checks (Mcp.js), or null when there is none.
+// Never logged, never written into the Sheet.
+function claudeToken_() {
+  return getProp_("CLAUDE_TOKEN") || null;
+}
+
+// Makes CLAUDE_TOKEN (32 hex characters) when it is missing; keeps one that
+// is there. Run by setup() and the migrate action.
+function ensureClaudeToken_() {
+  if (claudeToken_()) return;
+  setProp_("CLAUDE_TOKEN", Utilities.getUuid().replace(/-/g, ""));
+}

@@ -1,7 +1,7 @@
 // The real backend in memory. createFakeBackend(seed, { clock }) evaluates the
-// actual backend/Pure.js and backend/Actions.js source over in-memory versions
-// of the storage primitives Actions.js uses, so tests exercise the real action
-// code. The in-memory sheet helpers mirror backend/Sheets.js: same sanitising
+// actual backend/Pure.js, Actions.js, Money.js and Mcp.js source over
+// in-memory versions of the storage primitives they use, so tests exercise
+// the real action and connector code. The in-memory sheet helpers mirror backend/Sheets.js: same sanitising
 // on write, only patched columns written, same return values, and cells read
 // back the way Sheets hands them back (a stored "'=x" reads as "=x").
 //
@@ -13,7 +13,8 @@
 // Options: clock (() => ISO string); test-only: lockFails (() => boolean),
 // keepsApostrophe (Sheets hands back a text cell's leading ' verbatim).
 // Test handles: fake.tables (live rows per tab), fake.requests (every body
-// received), fake.primitives (the in-memory helpers), fake.props (Script
+// received, including those the connector hands to handle_), fake.mcp(msg,
+// params) (the Claude connector: mcp_, as doPost calls it for a JSON-RPC body), fake.primitives (the in-memory helpers), fake.props (Script
 // Properties), fake.propReads (every Script Properties key read, in order),
 // fake.setRate(rate, source) (today's rate and where it came from: "live",
 // "last" or "fallback"; default 111, "live").
@@ -21,13 +22,17 @@
 const fs = require("fs");
 const path = require("path");
 const vm = require("vm");
+const crypto = require("crypto");
 
 const BACKEND = path.join(__dirname, "..", "backend");
 const script = (name) => new vm.Script(fs.readFileSync(path.join(BACKEND, name), "utf8"), { filename: path.join(BACKEND, name) });
 const PURE = script("Pure.js");
 const ACTIONS = script("Actions.js");
+const MONEY = script("Money.js");
+const MCP = script("Mcp.js");
 
 const TRIP_KEY = "test-key";
+const CLAUDE_TOKEN = "claude-token";
 const RATE = 111;
 const SHEET_URL = "https://example.test/sheet";
 
@@ -56,6 +61,11 @@ function readCell(text, v, keepsApostrophe) {
   return v;
 }
 
+// "YYYY-MM-DD" at this ISO instant in the zone tz.
+function dayIn(iso, tz) {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+}
+
 function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } = {}) {
   const now = clock || (() => new Date().toISOString());
   const world = vm.createContext({});
@@ -66,7 +76,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   for (const tab of Object.keys(P.TABS)) tables[tab] = [];
   // Seeded Log rows are not writes, so REV starts at 0 even when seeded (an
   // unset REV would otherwise fall back to the Log's highest id).
-  const props = { TRIP_KEY, REV: "0" };
+  const props = { TRIP_KEY, CLAUDE_TOKEN, REV: "0" };
   const propReads = [];
   const rate = { rate: RATE, source: "live" };
   const cache = {}; // the script cache, for the trip key
@@ -138,9 +148,21 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     getRateInfo_: () => ({ rate: rate.rate, source: rate.source }),
     nowIso_: () => now(),
     sheetUrl_: () => SHEET_URL,
+    // Same as Env.js: 20 letters and digits, starting with a letter.
+    newId_: () => "m" + crypto.randomBytes(16).toString("hex").slice(0, 19),
+    // Today in the Trip tab's zone, by this backend's clock.
+    today_: () => dayIn(now(), world.tripInfo_().tz || "Asia/Tokyo"),
+    claudeToken_: () => (Object.prototype.hasOwnProperty.call(props, "CLAUDE_TOKEN") && props.CLAUDE_TOKEN) || null,
+    ensureClaudeToken_() {
+      if (!primitives.claudeToken_()) props.CLAUDE_TOKEN = crypto.randomBytes(16).toString("hex");
+    },
   };
   Object.assign(world, primitives);
   ACTIONS.runInContext(world);
+  MONEY.runInContext(world);
+  MCP.runInContext(world);
+  // A request the connector hands to handle_ is recorded like one from a phone.
+  const handle = world.handle_;
 
   seedWorld(P, primitives, tables, props, seed || {}, now);
 
@@ -150,13 +172,18 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     requests.push(copy(body));
     let env;
     try {
-      env = world.handle_(body);
+      env = handle(body);
     } catch (e) {
       // Same as doPost's last-resort catch.
       env = { ok: false, error: "server", message: "Something went wrong on our side. Try again. (" + e.message + ")" };
     }
     return Promise.resolve(copy(env));
   };
+  world.handle_ = (body) => {
+    requests.push(copy(body));
+    return handle(body);
+  };
+  fake.mcp = (msg, params) => copy(world.mcp_(copy(msg), copy(params)));
   fake.tables = tables;
   fake.requests = requests;
   fake.primitives = primitives;

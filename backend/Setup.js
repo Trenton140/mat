@@ -31,6 +31,8 @@ function setup() {
 
   var props = PropertiesService.getScriptProperties();
   if (!props.getProperty("TRIP_KEY")) props.setProperty("TRIP_KEY", Utilities.getUuid().replace(/-/g, "").slice(0, 24));
+  // The Claude connector's token. Not shown here: the app's Settings copies it.
+  ensureClaudeToken_();
 
   // Last, so the tabs are there either way: a rate host that refuses Google's
   // servers must show up now, not as a silent stand-in rate on every line.
