@@ -14,7 +14,9 @@
 // keepsApostrophe (Sheets hands back a text cell's leading ' verbatim).
 // Test handles: fake.tables (live rows per tab), fake.requests (every body
 // received, including those the connector hands to handle_), fake.mcp(msg,
-// params) (the Claude connector: mcp_, as doPost calls it for a JSON-RPC body), fake.primitives (the in-memory helpers), fake.props (Script
+// params) (the Claude connector: mcp_, as doPost calls it for a JSON-RPC body),
+// fake.beforeConnectorWrite (test-only: set it to run code just before a
+// request the connector makes reaches handle_), fake.primitives (the in-memory helpers), fake.props (Script
 // Properties), fake.propReads (every Script Properties key read, in order),
 // fake.setRate(rate, source) (today's rate and where it came from: "live",
 // "last" or "fallback"; default 111, "live").
@@ -181,6 +183,10 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   };
   world.handle_ = (body) => {
     requests.push(copy(body));
+    // Test-only: fake.beforeConnectorWrite(body) runs between whatever the
+    // connector did first and its request reaching handle_ (another phone's
+    // write landing in that gap).
+    if (typeof fake.beforeConnectorWrite === "function") fake.beforeConnectorWrite(copy(body));
     return handle(body);
   };
   fake.mcp = (msg, params) => copy(world.mcp_(copy(msg), copy(params)));

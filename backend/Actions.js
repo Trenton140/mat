@@ -481,10 +481,25 @@ function updateStop_(args, ctx) {
   return editPlanItem_("stop", id, cur, v.value, ctx);
 }
 
-// A new id adds the stay; a known one edits it.
+// A new id adds the stay; a known one edits it. With merge: true (the Claude
+// connector) the stay must already be there, and the fields given are laid
+// over the row as it is now, under the lock, so a field left out keeps
+// whatever another phone just saved. The merged stay is validated whole.
 function saveStay_(args, ctx) {
   var plan = planKind_("stay");
-  var v = validateStay(args.stay);
+  if (args.merge !== undefined && typeof args.merge !== "boolean") return err_("bad_input", MSG_.badRequest);
+  var input = args.stay;
+  if (args.merge === true && isObj_(input) && typeof input.id === "string") {
+    var found = input.id === "" ? null : findPlanRow_(plan, input.id);
+    if (!found) return err_("not_found", plan.missing);
+    var was = plan.fromRow(found);
+    if (was.deleted) return err_("bad_input", MSG_.editDeleted);
+    var merged = planFields_(plan, was);
+    plan.fields.forEach(function (k) { if (input[k] !== undefined) merged[k] = input[k]; });
+    merged.id = was.id;
+    input = merged;
+  }
+  var v = validateStay(input);
   if (!v.ok) return err_("bad_input", v.message);
   var row = findPlanRow_(plan, v.value.id);
   if (!row) return addPlanItem_("stay", v.value, ctx);

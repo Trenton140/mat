@@ -359,26 +359,21 @@ function mcpChangeStop_(args, who) {
   return mcpWrite_("stop", "updateStop", { id: args.id, patch: mcpStopFields_(args) }, who);
 }
 
-// With an id, the stay already there with the fields given laid over it (a
-// field left out keeps its value; "" clears it). Without one, a new stay.
+// With an id, only the fields given, sent with merge: true so saveStay lays
+// them over the stay as it is under the lock (a field left out keeps its
+// value; "" clears it; an unknown or removed stay is refused). Without one,
+// a new stay.
 function mcpSaveStay_(args, who) {
-  var plan = planKind_("stay");
-  var stay;
-  if (args.id !== undefined) {
-    var row = findPlanRow_(plan, args.id);
-    if (!row) return { ok: false, message: MSG_.noStay };
-    var cur = plan.fromRow(row);
-    if (cur.deleted) return { ok: false, message: MSG_.editDeleted };
-    stay = planFields_(plan, cur);
-    stay.id = cur.id;
-  } else {
+  var stay = { id: args.id === undefined ? newId_() : args.id };
+  if (args.id === undefined) {
     ["name", "first_night", "last_night"].forEach(function (k) { if (args[k] === undefined) mcpBad_(k + " is missing."); });
-    stay = { id: newId_() };
   }
   ["name", "first_night", "last_night", "name_jp", "address_jp", "note", "place", "link"].forEach(function (k) {
     if (args[k] !== undefined) stay[mcpCamel_(k)] = args[k];
   });
-  return mcpWrite_("stay", "saveStay", { stay: stay }, who);
+  var request = { stay: stay };
+  if (args.id !== undefined) request.merge = true;
+  return mcpWrite_("stay", "saveStay", request, who);
 }
 
 function mcpSetDay_(args, who) {

@@ -889,6 +889,58 @@ test("a stop or stay write that changes nothing logs nothing and keeps rev", asy
   assert.equal((await call("rev")).rev, before.rev + 1);
 });
 
+test("saveStay without merge replaces the whole stay, as the app sends it", async () => {
+  const call = client({});
+  const full = { id: "stayAAAA0001", name: "Ryokan", nameJp: "旅館", addressJp: "京都", firstNight: "2026-12-14", lastNight: "2026-12-15", note: "late", place: "Gion", link: "https://example.test/r" };
+  await call("saveStay", { stay: full });
+  const r = await call("saveStay", { stay: { id: full.id, name: "Ryokan", firstNight: "2026-12-14", lastNight: "2026-12-16" } });
+  assert.deepEqual(r.data.stay, { id: full.id, name: "Ryokan", nameJp: "", addressJp: "", firstNight: "2026-12-14", lastNight: "2026-12-16", note: "", place: "", link: "", deleted: false });
+  const fresh = await call("saveStay", { stay: { id: "stayAAAA0002", name: "Inn", firstNight: "2026-12-17", lastNight: "2026-12-17" } });
+  assert.equal(fresh.data.stay.id, "stayAAAA0002", "an unknown id is a new stay");
+  assert.equal((await call("saveStay", { stay: { id: full.id, name: "Ryokan", firstNight: "2026-12-16", lastNight: "2026-12-14" } })).message, "The last night can’t be before the first.");
+});
+
+test("saveStay with merge: true lays the given fields over the row as it is under the lock", async () => {
+  const call = client({});
+  const full = { id: "stayAAAA0001", name: "Ryokan", nameJp: "旅館", addressJp: "京都", firstNight: "2026-12-14", lastNight: "2026-12-15", note: "orig", place: "Gion", link: "https://example.test/r" };
+  await call("saveStay", { stay: full });
+  await call("saveStay", { stay: { ...full, note: "phone B edit" } }, AS("Ajen")); // just before Claude's call
+  const m = await call("saveStay", { stay: { id: full.id, lastNight: "2026-12-16" }, merge: true });
+  assert.equal(m.ok, true, JSON.stringify(m));
+  assert.deepEqual(m.data.stay, { ...full, note: "phone B edit", lastNight: "2026-12-16", deleted: false });
+  const log = call.fake.tables.Log.at(-1);
+  const before = JSON.parse(log.before), after = JSON.parse(log.after);
+  assert.deepEqual(Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k])), ["lastNight"]);
+  assert.deepEqual(call.fake.tables.Stays.map((r) => [r.note, r.last_night]), [["phone B edit", "2026-12-16"]]);
+  // A resend changes nothing; undo puts back only the date.
+  assert.equal((await call("saveStay", { stay: { id: full.id, lastNight: "2026-12-16" }, merge: true })).data.logId, null);
+  const u = await call("undo", { logId: m.data.logId });
+  assert.deepEqual([u.data.stay.lastNight, u.data.stay.note], ["2026-12-15", "phone B edit"]);
+  // "" clears; the merged stay is validated whole.
+  assert.equal((await call("saveStay", { stay: { id: full.id, note: "" }, merge: true })).data.stay.note, "");
+  assert.equal((await call("saveStay", { stay: { id: full.id, lastNight: "2026-12-01" }, merge: true })).message, "The last night can’t be before the first.");
+  assert.equal((await call("saveStay", { stay: { id: full.id, link: "javascript:1" }, merge: true })).message, "That link has to start with https://.");
+});
+
+test("saveStay with merge: true never makes or revives a stay, and merge must be true or false", async () => {
+  const call = client({ stays: [{ id: "stayAAAA0009", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15", deleted: true }] });
+  const none = await call("saveStay", { stay: { id: "stayAAAA0001", name: "Inn", firstNight: "2026-12-14", lastNight: "2026-12-14" }, merge: true });
+  assert.deepEqual([none.error, none.message], ["not_found", "That stay isn’t there any more."]);
+  assert.equal(call.fake.tables.Stays.length, 1);
+  const dead = await call("saveStay", { stay: { id: "stayAAAA0009", note: "x" }, merge: true });
+  assert.deepEqual([dead.error, dead.message], ["bad_input", "Bring it back first."]);
+  for (const merge of ["yes", 1, null, {}]) {
+    const r = await call("saveStay", { stay: { id: "stayAAAA0002", name: "Inn", firstNight: "2026-12-14", lastNight: "2026-12-14" }, merge });
+    assert.deepEqual([r.error, r.message], ["bad_input", "That request didn’t come through properly."], JSON.stringify(merge));
+  }
+  assert.equal(call.fake.tables.Stays.length, 1);
+  const off = await call("saveStay", { stay: { id: "stayAAAA0002", name: "Inn", firstNight: "2026-12-14", lastNight: "2026-12-14" }, merge: false });
+  assert.equal(off.data.stay.id, "stayAAAA0002", "merge: false is the plain save");
+  for (const bad of [{ lastNight: "2026-12-16" }, "x", null]) {
+    assert.equal((await call("saveStay", { stay: bad, merge: true })).ok, false, JSON.stringify(bad));
+  }
+});
+
 test("saving a removed stay is refused until it is brought back", async () => {
   const call = client({ stays: [{ id: "stayAAAA0001", name: "Lodge", firstNight: "2026-12-13", lastNight: "2026-12-15", deleted: true }] });
   const r = await call("saveStay", { stay: { id: "stayAAAA0001", name: "Lodge 2", firstNight: "2026-12-13", lastNight: "2026-12-15" } });

@@ -621,3 +621,37 @@ test("an e-Transfer address that is an ordinary word hides only a field that is 
   assert.equal(all.includes("555-0123") || all.includes("trent@example.net"), false);
   assert.ok(all.includes("Tokyo Tower"));
 });
+
+// ---------- fix round 2: another phone's write between the connector's start and its write ----------
+
+test("save_stay never undoes another phone's edit made while Claude's request is on its way", async () => {
+  const fake = createFakeBackend(plan);
+  const s = ok(fake, "save_stay", { name: "Ryokan", first_night: "2026-12-14", last_night: "2026-12-15", note: "orig", address_jp: "京都" }).stay;
+  fake.beforeConnectorWrite = (body) => {
+    if (body.action !== "saveStay") return;
+    fake.beforeConnectorWrite = null;
+    fake({ key: "test-key", actor: "Ajen", action: "saveStay", args: { stay: { id: s.id, name: "Ryokan", firstNight: "2026-12-14", lastNight: "2026-12-15", note: "phone B edit", addressJp: "京都" } } });
+  };
+  const moved = ok(fake, "save_stay", { id: s.id, last_night: "2026-12-16" }).stay;
+  assert.deepEqual([moved.note, moved.lastNight, moved.addressJp], ["phone B edit", "2026-12-16", "京都"]);
+  const loaded = (await app(fake, "load", {})).data.stays.find((x) => x.id === s.id);
+  assert.deepEqual([loaded.note, loaded.lastNight], ["phone B edit", "2026-12-16"]);
+  const log = fake.tables.Log.at(-1);
+  assert.equal(log.via, "claude");
+  const before = JSON.parse(log.before), after = JSON.parse(log.after);
+  assert.deepEqual(Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k])), ["lastNight"]);
+  assert.equal(fake.requests.filter((r) => r.via === "claude" && r.action === "load").length, 0, "the connector reads nothing before writing");
+});
+
+test("change_stop never undoes another phone's edit made while Claude's request is on its way", async () => {
+  const fake = createFakeBackend(plan);
+  fake.beforeConnectorWrite = (body) => {
+    if (body.action !== "updateStop") return;
+    fake.beforeConnectorWrite = null;
+    fake({ key: "test-key", actor: "Ajen", action: "updateStop", args: { id: "planstop1203", patch: { note: "phone B edit" } } });
+  };
+  const c = ok(fake, "change_stop", { id: "planstop1203", time: "15:00" }).stop;
+  assert.deepEqual([c.note, c.time, c.detail], ["phone B edit", "15:00", "Booked for 14:00"]);
+  const before = JSON.parse(fake.tables.Log.at(-1).before), after = JSON.parse(fake.tables.Log.at(-1).after);
+  assert.deepEqual(Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k])), ["time"]);
+});
