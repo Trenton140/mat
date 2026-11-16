@@ -13,6 +13,8 @@
   --seal:"Zen Antique","Hiragino Mincho ProN","Yu Mincho",serif;
   --sheet:cubic-bezier(.32,.72,0,1);
   --gl:max(16px, env(safe-area-inset-left, 0px)); --gr:max(16px, env(safe-area-inset-right, 0px));
+  /* The side insets, read once here (the sideways block uses them; a test can stand in for a notch). */
+  --inset-l:env(safe-area-inset-left, 0px); --inset-r:env(safe-area-inset-right, 0px);
 }
 html,body{height:100%;margin:0}
 *{box-sizing:border-box}
@@ -125,11 +127,13 @@ i{font-style:normal}
    No phone drawn on the table: the app fills the screen's height as one
    block, a reading column of at most 560 px with the bar turned into a rail
    on its right (css/money.css). The block stands inside the notch's insets,
-   so inside it the usual 16 px margins are enough. Tablets and desktop
+   so inside it the usual 16 px margins are enough. It is centred, so it
+   keeps the larger inset's width clear on both sides (the notch side can
+   change as the phone turns). Tablets and desktop
    windows (taller than 520 px) keep the framed phone. */
 @media (orientation:landscape) and (max-height:520px){
   :root{--rail:104px}
-  .phone{width:min(calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)), calc(560px + var(--rail)));height:100%;
+  .phone{width:min(calc(100% - 2 * max(var(--inset-l), var(--inset-r))), calc(560px + var(--rail)));height:100%;
     border-radius:0;box-shadow:none;--gl:16px;--gr:16px}
   .views{right:var(--rail)}
   .view{padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px))}

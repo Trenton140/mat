@@ -124,7 +124,7 @@ test("a picture change reads as a sentence with no pronoun and no picture in it,
   const pic = "data:image/jpeg;base64,AAAA";
   const pic2 = "data:image/jpeg;base64,BBBB";
   assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: "" }, { name: "Mo", photo: pic }), "set a picture");
-  assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: pic }, { name: "Mo", photo: pic2 }), "changed picture");
+  assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: pic }, { name: "Mo", photo: pic2 }), "changed the picture");
   assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: pic }, { name: "Mo", photo: "" }), "removed the picture");
   for (const [before, after] of [["", pic], [pic, pic2], [pic, ""]]) {
     const entry = { id: 4, kind: "picture", ref: "Mo", before: { name: "Mo", photo: before }, after: { name: "Mo", photo: after }, undoneBy: null };

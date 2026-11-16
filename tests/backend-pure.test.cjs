@@ -150,6 +150,9 @@ test("a picture is a small JPEG data address, or \"\" to take it away", () => {
     head + "AAAA===",
     " " + JPEG,
     head + "A".repeat(12001 - head.length),
+    head + "A",
+    head + "AAAAA",
+    head + "AA=",
     12,
     null,
     { src: JPEG },
@@ -159,7 +162,9 @@ test("a picture is a small JPEG data address, or \"\" to take it away", () => {
     assert.equal(v.ok, false, String(photo).slice(0, 40));
     assert.equal(v.message, "That picture couldn’t be used. Try another.");
   }
-  assert.equal(P.validatePersonPatch({ photo: head + "A".repeat(12000 - head.length) }).ok, true, "12,000 characters is the most");
+  assert.equal(P.validatePersonPatch({ photo: head + "A".repeat(11976) }).ok, true, "11,999 characters, whole 4-character groups, is the most");
+  assert.equal(P.validatePersonPatch({ photo: head + "A".repeat(11980) }).ok, false, "past 12,000 characters");
+  assert.equal(P.validatePersonPatch({ photo: head + "AA==" }).ok, true);
   assert.deepEqual(P.validatePersonPatch({ etransfer: "a@example.com", photo: "" }).value, { etransfer: "a@example.com", photo: "" });
 });
 

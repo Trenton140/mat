@@ -13,7 +13,9 @@
 //   Puts the person's picture into a seal (an <img>, its address set as a
 //   property, alt="") or, with none, their initials. named: the seal is on
 //   its own (not inside a labelled button) and says whose it is.
-// isPicture(v): the same check the backend makes (validatePersonPatch).
+// isPicture(v): the same check the backend makes (validatePersonPatch):
+//   a JPEG data address of at most PICTURE_MAX characters whose base64 part
+//   is whole 4-character groups.
 
 export const PICTURE_MAX = 12000;
 export const PICTURE_SIDE = 128;
@@ -21,7 +23,9 @@ export const PICTURE_BAD = "That picture couldn’t be used. Try another.";
 const QUALITIES = [0.8, 0.7, 0.6, 0.5, 0.4];
 const JPEG_RE = /^data:image\/jpeg;base64,[A-Za-z0-9+/]+={0,2}$/;
 
-export const isPicture = (v) => typeof v === "string" && v.length <= PICTURE_MAX && JPEG_RE.test(v);
+const JPEG_HEAD = "data:image/jpeg;base64,";
+
+export const isPicture = (v) => typeof v === "string" && v.length <= PICTURE_MAX && JPEG_RE.test(v) && (v.length - JPEG_HEAD.length) % 4 === 0;
 
 // The first JPEG export, from quality 0.8 down to 0.4, that fits; else null.
 export function fitJpeg(canvas) {
@@ -67,16 +71,22 @@ export async function shrinkPicture(file, { decode = decodeImage, makeCanvas = n
   const h = got && got.height;
   if (!(w > 0 && h > 0)) return null;
   const side = Math.min(w, h);
-  const canvas = makeCanvas();
-  canvas.width = PICTURE_SIDE;
-  canvas.height = PICTURE_SIDE;
-  const g = canvas.getContext("2d");
-  if (!g) return null;
-  // A see-through picture lands on white, not on JPEG's black.
-  g.fillStyle = "#fff";
-  g.fillRect(0, 0, PICTURE_SIDE, PICTURE_SIDE);
-  g.drawImage(got.image || got, (w - side) / 2, (h - side) / 2, side, side, 0, 0, PICTURE_SIDE, PICTURE_SIDE);
-  return fitJpeg(canvas);
+  // Drawing and exporting can throw (out of memory on a huge photo, a codec
+  // the browser half knows): that is a picture that cannot be used too.
+  try {
+    const canvas = makeCanvas();
+    canvas.width = PICTURE_SIDE;
+    canvas.height = PICTURE_SIDE;
+    const g = canvas.getContext("2d");
+    if (!g) return null;
+    // A see-through picture lands on white, not on JPEG's black.
+    g.fillStyle = "#fff";
+    g.fillRect(0, 0, PICTURE_SIDE, PICTURE_SIDE);
+    g.drawImage(got.image || got, (w - side) / 2, (h - side) / 2, side, side, 0, 0, PICTURE_SIDE, PICTURE_SIDE);
+    return fitJpeg(canvas);
+  } catch {
+    return null;
+  }
 }
 
 export async function choosePicture(file, { shrink = shrinkPicture, save, notify }) {

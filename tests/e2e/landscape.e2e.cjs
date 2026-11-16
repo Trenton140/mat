@@ -1,4 +1,6 @@
-// The app held sideways (Task 14): at 667x375, 844x390 and 932x430 the app
+// The app held sideways (Task 14): at 667x375, 844x390 and 932x430 (and,
+// for the frame, the rail and ringing up, a browser tab held sideways at
+// 667x320) the app
 // fills the screen's height as one block, a column with the bar turned into
 // a rail on its right; every sheet's close control is on screen; turning the
 // phone changes the layout only. Tablets, desktop windows and portrait keep
@@ -13,6 +15,8 @@ const SIZES = [
   { width: 844, height: 390 },
   { width: 932, height: 430 },
 ];
+// A browser tab held sideways: Safari's bars leave 320 px.
+const TAB = { width: 667, height: 320 };
 const PORTRAIT = { width: 390, height: 844 };
 const D12 = "2026-12-12";
 const DINNER = "planstop1204";
@@ -110,9 +114,10 @@ function expectFrame(f, where) {
 }
 
 const cases = [];
-for (const size of SIZES) {
+for (const size of [...SIZES, TAB]) {
   const at = " (" + size.width + "x" + size.height + ")";
-  cases.push(
+  const sized = [];
+  sized.push(
     {
       name: "the frame: no sideways scroll on Days and Money, one square block the screen's height" + at,
       viewport: size,
@@ -149,6 +154,13 @@ for (const size of SIZES) {
           [...document.querySelectorAll("#nav button")].map((b) => b.getBoundingClientRect()).filter((r) => r.height < 44 || r.width < 44).length,
         );
         assert.equal(small, 0, "every rail button is at least 44 px each way");
+        // Ring up is a true pill: as tall as its round ends, its words inside it.
+        const ring = await page.evaluate(() => {
+          const r = document.getElementById("ring");
+          return { height: r.getBoundingClientRect().height, radius: parseFloat(getComputedStyle(r).borderTopLeftRadius), over: r.scrollWidth - r.clientWidth };
+        });
+        assert.ok(Math.abs(ring.height - 2 * ring.radius) <= 1, "Ring up is a pill: " + JSON.stringify(ring));
+        assert.ok(ring.over <= 0, "Ring up's words fit inside it: " + JSON.stringify(ring));
         await page.click('#nav [data-tab="money"]');
         await until(async () => (await activeView(page)) === "vMoney", "Money shows");
         assert.equal(await page.evaluate(() => document.querySelector('#nav [data-tab="money"]').classList.contains("is-active")), true, "Money is marked");
@@ -226,6 +238,14 @@ for (const size of SIZES) {
         await until(() => page.evaluate(() => !!document.querySelector("#slip .spot.is-armed")), "armed");
         await expectReach(page, "#stampAmt", true);
         await expectReach(page, "#slip .spot.is-armed", true);
+        // Stamped, then the stamp tapped: Keep it, the control that dismisses the ask, is in reach.
+        await page.click("#slip .spot.is-armed");
+        await until(() => page.evaluate(() => !!document.querySelector("#slip .s-row.is-paid .spot")), "stamped");
+        await page.click("#slip .s-row.is-paid .spot");
+        await until(() => page.evaluate(() => !!document.querySelector("#slip .rm-keep")), "the remove ask shows");
+        await expectReach(page, "#slip .rm-keep", true);
+        await page.click("#slip .rm-keep");
+        await until(() => page.evaluate(() => !document.querySelector("#slip .rm-keep")), "Keep it dismisses the ask");
       },
     },
     {
@@ -315,7 +335,77 @@ for (const size of SIZES) {
       },
     },
   );
+  // The tab held sideways runs the frame, the rail and ringing up.
+  const tabCases = ["the frame:", "the rail:", "ring up an expense"];
+  cases.push(...(size === TAB ? sized.filter((c) => tabCases.some((t) => c.name.startsWith(t))) : sized));
 }
+
+cases.push({
+  name: "at 932x430 the block stands in the middle of the screen",
+  viewport: { width: 932, height: 430 },
+  async run({ page }) {
+    await money(page);
+    const p = await page.evaluate(() => {
+      const r = document.getElementById("phone").getBoundingClientRect();
+      return { left: r.left, right: innerWidth - r.right, width: r.width };
+    });
+    assert.ok(p.left > 0, "there is room either side: " + JSON.stringify(p));
+    assert.ok(Math.abs(p.left - p.right) <= 1, "centred: " + JSON.stringify(p));
+  },
+});
+
+cases.push({
+  name: "with unequal side insets the block starts outside the larger one, on both sides",
+  viewport: { width: 667, height: 375 },
+  async run({ page }) {
+    await money(page);
+    // Chromium has no notch: the insets are stood in for by the properties the CSS reads them through.
+    for (const [l, r] of [[60, 0], [0, 60], [44, 20]]) {
+      const p = await page.evaluate(([l, r]) => {
+        const root = document.documentElement.style;
+        root.setProperty("--inset-l", l + "px");
+        root.setProperty("--inset-r", r + "px");
+        const b = document.getElementById("phone").getBoundingClientRect();
+        return { left: b.left, right: innerWidth - b.right };
+      }, [l, r]);
+      const big = Math.max(l, r);
+      assert.ok(p.left >= big - 0.5 && p.right >= big - 0.5, "insets " + l + "/" + r + ": the block is clear of both: " + JSON.stringify(p));
+    }
+  },
+});
+
+cases.push({
+  name: "turned sideways and back, a view keeps its scroll position",
+  viewport: PORTRAIT,
+  async run({ page }) {
+    await money(page);
+    const top = () => page.evaluate(() => document.getElementById("vMoney").scrollTop);
+    await page.evaluate(() => (document.getElementById("vMoney").scrollTop = 300));
+    const before = await top();
+    assert.ok(before > 0, "the view scrolled");
+    await page.setViewportSize({ width: 844, height: 390 });
+    await until(() => page.evaluate(() => document.getElementById("nav").getBoundingClientRect().width < 200), "the rail stands");
+    await page.setViewportSize(PORTRAIT);
+    await until(() => page.evaluate(() => document.getElementById("nav").getBoundingClientRect().width > 200), "the bar is back");
+    assert.equal(await top(), before, "the same scroll position after turning back");
+  },
+});
+
+cases.push({
+  name: "the uneven panel is never squeezed below 120 px",
+  viewport: { width: 844, height: 390 },
+  async run({ page }) {
+    await money(page);
+    await page.click("#ring");
+    await waitOpen(page, "reg");
+    await keys(page, "3 0 0 0");
+    await page.click("#xUneven");
+    await until(() => visible(page, "#un"), "the panel opens");
+    // As a keyboard would: the layout viewport shrinks to almost nothing.
+    await page.setViewportSize({ width: 844, height: 140 });
+    await until(() => page.evaluate(() => document.getElementById("un").style.getPropertyValue("--un-room") === "120px"), "the panel keeps 120 px");
+  },
+});
 
 cases.push({
   name: "a desktop window and a phone in portrait keep the phone as it was",

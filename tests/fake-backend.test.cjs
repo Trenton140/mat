@@ -1436,7 +1436,7 @@ test("each person sets, changes and removes their own picture: one History sente
     const h = await historyAll(call);
     assert.deepEqual(h.map((e) => [e.who, e.kind, e.ref, e.summary, e.canUndo]), [
       [name, "picture", name, "removed the picture", true],
-      [name, "picture", name, "changed picture", false],
+      [name, "picture", name, "changed the picture", false],
       [name, "picture", name, "set a picture", false],
     ]);
     assert.equal(JSON.stringify(h).includes("data:image"), false, "history never carries the picture");
@@ -1482,6 +1482,24 @@ test("undo of a picture puts back what was there: none, the earlier picture, or 
   assert.equal(await photoOf(), JPEG, "removal undone: the picture is back");
   assert.equal((await top()).canUndo, true, "and that undo can itself be undone");
   assert.equal(JSON.stringify(u).includes("undid: removed the picture"), true);
+});
+
+test("undo refuses to put back a picture a hand in the Log has spoiled", async () => {
+  const call = client();
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG } });
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG2 } });
+  const log = call.fake.tables.Log;
+  const row = log[log.length - 1];
+  for (const spoiled of ["javascript:alert(1)", "data:image/png;base64,iVBORw0KGgo=", "data:image/jpeg;base64,A", 12]) {
+    row.before = JSON.stringify({ name: "Mo", photo: spoiled });
+    const u = await call("undo", { logId: row.id });
+    assert.deepEqual([u.ok, u.error, u.message], [false, "stale", "That change can’t be undone."], String(spoiled));
+    assert.equal((await call("load")).data.people.find((p) => p.name === "Mo").photo, JPEG2, "the picture is left as it was");
+  }
+  row.before = JSON.stringify({ name: "Mo", photo: "" });
+  const none = await call("undo", { logId: row.id });
+  assert.equal(none.ok, true, "an empty picture can be put back: " + JSON.stringify(none));
+  assert.equal((await call("load")).data.people.find((p) => p.name === "Mo").photo, "");
 });
 
 test("an older picture change cannot be undone over a newer one, and only its owner can undo it", async () => {

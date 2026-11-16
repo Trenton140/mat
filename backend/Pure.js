@@ -158,6 +158,11 @@ function validatePayment(input, peopleNames) {
 var PHOTO_RE_ = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+={0,2}$/;
 var PHOTO_MAX_ = 12000;
 var PHOTO_BAD_ = "That picture couldn\u2019t be used. Try another.";
+var PHOTO_HEAD_ = "data:image/jpeg;base64,";
+// The address's shape, and its base64 part in whole 4-character groups.
+function isPhoto_(ph) {
+  return PHOTO_RE_.test(ph) && (ph.length - PHOTO_HEAD_.length) % 4 === 0;
+}
 
 function validatePersonPatch(patch) {
   if (!isObj_(patch)) return fail_("That didn’t come through properly.");
@@ -176,7 +181,7 @@ function validatePersonPatch(patch) {
       out.simplify = patch.simplify;
     } else if (k === "photo") {
       var ph = patch.photo;
-      if (typeof ph !== "string" || ph.length > PHOTO_MAX_ || (ph !== "" && !PHOTO_RE_.test(ph))) return fail_(PHOTO_BAD_);
+      if (typeof ph !== "string" || ph.length > PHOTO_MAX_ || (ph !== "" && !isPhoto_(ph))) return fail_(PHOTO_BAD_);
       out.photo = ph;
     } else {
       return fail_("You can only change the e-Transfer address, Simplify and your picture.");
@@ -655,7 +660,7 @@ function summarize(action, kind, before, after) {
   if (kind === "picture") {
     if (!before || !before.photo) return "set a picture";
     if (!after || !after.photo) return "removed the picture";
-    return "changed picture";
+    return "changed the picture";
   }
   if (kind === "payment") {
     var pay = after || before;

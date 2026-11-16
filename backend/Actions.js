@@ -562,7 +562,8 @@ function setPerson_(args, ctx) {
   return ok_({ person: saved }, bumpRev_());
 }
 
-// Undoing a picture change puts back the picture that was there (or none).
+// Undoing a picture change puts back the picture that was there (or none),
+// only when it passes the same check as a new one (validatePersonPatch).
 // Only its owner may: nobody changes another person's picture (Task 16).
 // Answers like any undo, with the person as the item.
 function undoPicture_(entry, rows, ctx) {
@@ -576,7 +577,10 @@ function undoPicture_(entry, rows, ctx) {
   if (!hasColumn_("People", "photo")) return err_("needs_migrate", MSG_.needsMigrate);
   var cur = personFromRow(row);
   var target = undoTarget(entry);
-  var photo = typeof target.photo === "string" ? target.photo : "";
+  // What is put back is checked like a new picture: a Log cell changed by
+  // hand can never put anything else into the People tab.
+  var photo = target.photo === undefined || target.photo === null ? "" : target.photo;
+  if (!validatePersonPatch({ photo: photo }).ok) return err_("stale", MSG_.cantUndo); // "" (none) passes
   var saved = personFromRow(updateWhere_("People", "name", entry.ref, { photo: photo }));
   var log = appendLog_(ctx, "undo", "picture", entry.ref, "undid: " + entry.summary, { name: cur.name, photo: cur.photo }, { name: saved.name, photo: saved.photo }, entry.id);
   updateById_("Log", entry.id, { undone_by: log.id });

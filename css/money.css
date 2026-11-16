@@ -168,5 +168,7 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
     padding:calc(10px + env(safe-area-inset-top, 0px)) 8px calc(12px + env(safe-area-inset-bottom, 0px));border-left:1.5px dashed var(--key-hi)}
   .nav::before{display:none}
   .nav button{min-height:56px;padding:6px 4px;align-content:center}
-  .nav .ring{margin:auto 0 0;height:52px;padding:0 6px;border-radius:26px;font-size:14.5px}
+  /* Ring up is a true pill: its own height, not the tabs' 56 px, and its
+     words fit inside it. */
+  .nav .ring{margin:auto 0 0;min-height:0;height:52px;padding:0 4px;border-radius:26px;font-size:13.5px}
 }

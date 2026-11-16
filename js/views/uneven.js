@@ -12,6 +12,8 @@ import { yen, dollars } from "../format.js";
 
 export const MAX_PARTS = 99;
 const MAX_DIGITS = 8;
+// The least height the panel is ever given, in px.
+const UN_MIN_ROOM = 120;
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -202,7 +204,9 @@ export function mountUneven(host, { onChange }) {
     const phone = host.parentElement;
     if (!phone) return;
     const room = phone.clientHeight - host.offsetHeight - 16; // 8 px gap below, 8 above
-    un.style.setProperty("--un-room", Math.max(0, room) + "px");
+    // Never so small that its title and Done are squeezed away (a keyboard
+    // can shrink the layout viewport to almost nothing).
+    un.style.setProperty("--un-room", Math.max(UN_MIN_ROOM, room) + "px");
   }
 
   function open() {

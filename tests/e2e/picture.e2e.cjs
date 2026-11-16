@@ -131,7 +131,29 @@ async function checkLine(page) {
   await waitClosed(page, "line");
 }
 
+const JPEG = require("../fixtures/picture.json").jpeg;
+
 module.exports = [
+  {
+    name: "a picture that arrives while a line is open is drawn on its seals without reopening",
+    async run({ page }) {
+      const backend = await ready(page);
+      await page.click('#rc .rc-row[data-id="seedexp001"]');
+      await until(() => page.evaluate(() => document.getElementById("line").classList.contains("is-open")), "the line sheet opens");
+      const seals = () => page.evaluate(() => ({
+        paid: document.querySelector("#line .ln-paid .mini").classList.contains("has-pic"),
+        shared: [...document.querySelectorAll("#line .ln-d .mini")].map((e) => (e.classList.contains("has-pic") ? "pic" : e.textContent)),
+      }));
+      assert.deepEqual(await seals(), { paid: false, shared: ["MO", "AJ", "TR"] });
+      // Mo (the payer) sets a picture on this phone; Ajen (shares it) on another.
+      await page.evaluate((pic) => globalThis.__matTest.store.setPerson("Mo", { photo: pic }), JPEG);
+      await until(async () => (await seals()).paid, "the payer's seal shows the picture");
+      backend.fake.primitives.updateWhere_("People", "name", "Ajen", { photo: JPEG });
+      await page.evaluate(() => globalThis.__matTest.store.refresh());
+      await until(async () => JSON.stringify((await seals()).shared) === JSON.stringify(["pic", "pic", "TR"]), "the sharers' seals show theirs");
+      assert.equal(await page.evaluate(() => document.getElementById("line").classList.contains("is-open")), true, "the sheet stayed open");
+    },
+  },
   {
     name: "a picture chosen in You shows in every seal (on and off told apart), on a second phone after refresh; removed, then put back from History",
     async run(ctx) {
