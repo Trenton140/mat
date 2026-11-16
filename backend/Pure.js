@@ -10,7 +10,7 @@ var TABS = {
   Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at", "planner_id"],
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
-  Todos: ["id", "item", "book_by", "status", "note", "link", "claimed_by", "ticked_by", "ticked_at", "planner_written", "gone"],
+  Todos: ["id", "item", "book_by", "status", "note", "link", "claimed_by", "ticked_by", "ticked_at", "ticked_item", "planner_written", "planner_was", "gone"],
 };
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
@@ -716,6 +716,8 @@ function undoTarget(entry) {
 
 function canUndo(entry, allEntries) {
   if (entry.kind === "person") return false;
+  // A tick or claim the planner took off (Task 19, R49) is a fact, not a change to undo.
+  if (entry.kind === "todo" && entry.action === "takeoff") return false;
   if (entry.undoneBy !== null && entry.undoneBy !== undefined && entry.undoneBy !== "") return false;
   for (var i = 0; i < allEntries.length; i++) {
     var o = allEntries[i];
@@ -943,6 +945,16 @@ var TODO_NEEDS_ = ["#", "item", "book by", "status"];
 var CHANGE_LOG_NEEDS_ = ["#", "tab", "old value", "new value"];
 var MONTHS_ = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
+// Planner text cut to max characters (never inside a surrogate pair), with "…".
+var TODO_ITEM_MAX_ = 300;
+var TODO_NOTE_MAX_ = 2000;
+function cutText_(s, max) {
+  if (s.length <= max) return s;
+  var t = s.slice(0, max - 1);
+  if (/[\uD800-\uDBFF]$/.test(t)) t = t.slice(0, -1);
+  return t + "…";
+}
+
 // A whole number from 0 up, as a number or as text such as "17" or "17.0";
 // null for anything else.
 function wholeNum_(v) {
@@ -1002,7 +1014,10 @@ function headOf_(row) {
 }
 
 // rows: the Book Now tab as Sheets hands it back from A1 (null or [] when
-// there is no tab or it is empty); year: the trip's.
+// there is no tab or it is empty); year: the trip's. The table ends at the
+// first fully blank row after an item, or at a row that is the header again
+// (a second table below is never read with the first one's columns). Item is
+// cut to 300 characters and Notes to 2,000.
 // -> { items: [{ id, item, bookBy, status, note, link, row, statusCol }],
 // problems: [{ id, message }], missing }: missing is why the tab can't be
 // read at all (else null); row is the item's 1-based row in the tab and
@@ -1023,7 +1038,9 @@ function todosFromRows(rows, year) {
   var seen = {};
   for (var r = h + 1; r < list.length; r++) {
     var row = list[r];
-    var item = plannerText_(cell(row, "item"));
+    if (items.length && plannerBlank_(row)) break;
+    if (headerAt_([row], TODO_NEEDS_) === 0) break;
+    var item = cutText_(plannerText_(cell(row, "item")), TODO_ITEM_MAX_);
     if (item === "") continue;
     var num = wholeNum_(cell(row, "#"));
     if (num === null) continue;
@@ -1039,7 +1056,7 @@ function todosFromRows(rows, year) {
       item: item,
       bookBy: bookByDay(cell(row, "book by"), year),
       status: plannerText_(cell(row, "status")),
-      note: plannerText_(cell(row, "notes")),
+      note: cutText_(plannerText_(cell(row, "notes")), TODO_NOTE_MAX_),
       link: /^https:\/\//i.test(link) ? link : "",
       row: r + 1,
       statusCol: head.indexOf("status"),
@@ -1080,7 +1097,8 @@ function colLetter(i) {
 
 // The row to append to the planner's Change Log, from its rows as Sheets
 // hands them back from A1 and the values by column name (any case): # is one
-// above the largest whole number in that column; a column the log lacks is
+// above the largest whole number in that column, or blank when it has none
+// (never a guessed 1); a column the log lacks is
 // skipped, one this does not fill is left blank. -> { headerRow (1-based),
 // values } | null when there is no tab or no row with #, Tab, Old value and
 // New value.
@@ -1090,15 +1108,15 @@ function changeLogRow(rows, fields) {
   if (h === -1) return null;
   var head = headOf_(list[h]);
   var numCol = head.indexOf("#");
-  var max = 0;
+  var max = null;
   for (var r = h + 1; r < list.length; r++) {
     var n = Array.isArray(list[r]) ? wholeNum_(list[r][numCol]) : null;
-    if (n !== null && n > max) max = n;
+    if (n !== null && (max === null || n > max)) max = n;
   }
   var named = {};
   Object.keys(fields).forEach(function (k) { named[k.trim().toLowerCase()] = fields[k]; });
   var values = head.map(function (name, c) {
-    if (c === numCol) return max + 1;
+    if (c === numCol) return max === null ? "" : max + 1;
     return Object.prototype.hasOwnProperty.call(named, name) ? named[name] : "";
   });
   return { headerRow: h + 1, values: values };

@@ -211,3 +211,29 @@ test("the two planner writers: one cell, RAW; one row appended under the table, 
   const refused = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), update: () => { throw new Error("no permission"); } });
   assert.throws(() => refused.ctx.plannerSetCell_("Book Now", "E4", "Booked"), /no permission/);
 });
+
+test("withPlannerLock_ takes the document lock, never the script lock withLock_ uses; null when it can't be had (R49)", () => {
+  const seen = [];
+  const lock = (name, ok) => ({ tryLock: (ms) => { seen.push(name + ".tryLock:" + ms); return ok; }, releaseLock: () => seen.push(name + ".release") });
+  const mk = (docOk, doc = true) => vm.createContext({
+    LockService: {
+      getScriptLock: () => { seen.push("script"); return lock("script", true); },
+      getDocumentLock: () => (doc ? lock("doc", docOk) : null),
+      getUserLock: () => lock("user", true),
+    },
+  });
+  const w = mk(true);
+  vm.runInContext(src("Env.js"), w, { filename: "Env.js" });
+  assert.equal(w.withPlannerLock_(() => 5), 5);
+  assert.deepEqual(seen, ["doc.tryLock:5000", "doc.release"]);
+  seen.length = 0;
+  const busy = mk(false);
+  vm.runInContext(src("Env.js"), busy, { filename: "Env.js" });
+  assert.equal(busy.withPlannerLock_(() => { throw new Error("not run"); }), null);
+  assert.deepEqual(seen, ["doc.tryLock:5000"]);
+  seen.length = 0;
+  const unbound = mk(true, false);
+  vm.runInContext(src("Env.js"), unbound, { filename: "Env.js" });
+  assert.equal(unbound.withPlannerLock_(() => 1), 1);
+  assert.deepEqual(seen, ["user.tryLock:5000", "user.release"]);
+});

@@ -43,6 +43,22 @@ function withLock_(fn) {
   }
 }
 
+// Runs fn under the planner lock, a different lock from withLock_'s (the
+// script lock): the document lock of the Sheet this script is bound to (the
+// user lock if it has none; the web app always runs as its deployer, so that
+// is one lock too). The app's lock covers only the app's own Sheet; planner
+// reads and writes happen under this one, never under both (R49). null when
+// it cannot be had within 5 seconds: the planner write stays pending.
+function withPlannerLock_(fn) {
+  var lock = LockService.getDocumentLock() || LockService.getUserLock();
+  if (!lock || !lock.tryLock(5000)) return null;
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 // Milliseconds now, for timing retries (the connector's wait for the lock).
 function clockMs_() {
   return Date.now();

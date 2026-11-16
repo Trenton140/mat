@@ -354,6 +354,8 @@ module.exports = [
       await advance(page, backend, 4000);
       await expectText(page, "#bwFetch", "Fetch");
 
+      // A forced fetch within 30 seconds of the last answers the stored list (R49 M3): go past that.
+      await advance(page, backend, 30 * 1000);
       backend.fake.planner.fails = true;
       await page.click("#bwFetch");
       await expectText(page, "#bwFetch", "Not fetched");

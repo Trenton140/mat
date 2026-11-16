@@ -33,7 +33,12 @@
 // other tabs by name, which its writes change as Sheets would), writes (every
 // write the planner received, in order: { kind: "cell", tab, cell, value } or
 // { kind: "append", tab, headerRow, values }), cellFails and appendFails (make
-// that kind of write throw, received as nothing)), fake.tableReads
+// that kind of write throw, received as nothing), lockFails (the planner lock
+// can't be had), calls (every planner read or write, in order: { op, tab,
+// appLock, plannerLock }: whether the app's lock and the planner lock were
+// held at that moment), and between (test-only: a function run once, just
+// before the planner lock is taken: another hand editing the planner)),
+// fake.tableReads
 // (readTable_ calls per tab).
 
 const fs = require("fs");
@@ -98,7 +103,10 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const planner = {
     rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0,
     tabs: copy((seed && seed.plannerTabs) || {}), writes: [], cellFails: false, appendFails: false,
+    lockFails: false, calls: [], between: null,
   };
+  const held = { app: false, planner: false };
+  const plannerCall = (op, tab) => planner.calls.push({ op, tab, appLock: held.app, plannerLock: held.planner });
   const missing = new Set((seed && seed.missingColumns) || []);
   const missingTabs = new Set((seed && seed.missingTabs) || []);
   const tableReads = {};
@@ -183,7 +191,29 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
         lockWaited += 8000;
         return { ok: false, error: "busy", message: "Someone else is saving right now. Try again in a moment." };
       }
-      return fn();
+      const was = held.app;
+      held.app = true;
+      try {
+        return fn();
+      } finally {
+        held.app = was;
+      }
+    },
+    // Same as Env.js: the planner lock, a different lock; null when busy.
+    withPlannerLock_(fn) {
+      if (typeof planner.between === "function") {
+        const f = planner.between;
+        planner.between = null;
+        f();
+      }
+      if (planner.lockFails) return null;
+      const was = held.planner;
+      held.planner = true;
+      try {
+        return fn();
+      } finally {
+        held.planner = was;
+      }
     },
     clockMs_: () => Date.now() + lockWaited,
     getRate_: () => rate.rate,
@@ -205,18 +235,21 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       props.PLANNER_ID = String(id);
     },
     plannerRows_() {
+      plannerCall("read", "Payments");
       planner.reads++;
       if (planner.fails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
       return planner.rows === null ? null : copy(planner.rows);
     },
     // Same as Env.js: another planner tab from A1, null when it is not there.
     plannerTab_(tab) {
+      plannerCall("read", tab);
       planner.reads++;
       if (planner.fails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
       return Object.prototype.hasOwnProperty.call(planner.tabs, tab) ? copy(planner.tabs[tab]) : null;
     },
     // Same as Env.js: one cell ("E4") of a planner tab, written as given (RAW).
     plannerSetCell_(tab, cell, value) {
+      plannerCall("cell", tab);
       if (planner.cellFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
       const m = /^([A-Z]+)(\d+)$/.exec(cell);
       if (!m) throw new Error("bad cell " + cell);
@@ -230,6 +263,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     },
     // Same as Env.js: one row appended under the table whose header is headerRow.
     plannerAppendRow_(tab, headerRow, values) {
+      plannerCall("append", tab);
       if (planner.appendFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
       planner.tabs[tab].push(copy(values));
       planner.writes.push({ kind: "append", tab, headerRow, values: copy(values) });
