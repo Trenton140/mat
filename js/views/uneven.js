@@ -114,6 +114,9 @@ export function mountUneven(host, { onChange }) {
     close();
     onChange();
   });
+  // The phone turned sideways or back: the room above the register is not
+  // what it was, and nothing else measures it again while the panel is open.
+  if (typeof globalThis.addEventListener === "function") globalThis.addEventListener("resize", () => { if (!un.hidden) fit(); });
 
   function buildRows() {
     const exact = draft.mode === "exact";

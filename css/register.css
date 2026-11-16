@@ -96,3 +96,19 @@ input.un-val:focus{box-shadow:inset 0 2px 5px rgba(0,0,0,.3),0 0 0 2px var(--pri
 .ubar button:active{transform:scale(.97)}
 /* While the register is open the bar sits at the top, clear of the keys and the new line. */
 .phone.reg-open .ubar{top:calc(12px + env(safe-area-inset-top, 0px));bottom:auto}
+
+/* ---------- held sideways ----------
+   The register in two columns, so the keys and Ring it up are on screen
+   without scrolling at 375 px high: the display, the quick chips and the
+   seals on the left, the keys on the right. The undo bar sits clear of the rail. */
+@media (orientation:landscape) and (max-height:520px){
+  .reg{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-rows:auto auto auto 1fr;column-gap:14px;
+    grid-template-areas:"top pad" "lcd pad" "chips pad" "who pad";padding-top:8px;padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px))}
+  .reg-top{grid-area:top}
+  .lcd{grid-area:lcd}
+  .chips{grid-area:chips;margin:8px 0 0;padding:0}
+  .who{grid-area:who;align-self:start;margin-top:8px}
+  .pad{grid-area:pad;margin-top:4px;align-self:end}
+  .reg:not(.is-open){box-shadow:none}
+  .ubar{right:calc(var(--rail) + var(--gr));bottom:calc(12px + env(safe-area-inset-bottom, 0px))}
+}

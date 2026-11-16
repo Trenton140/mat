@@ -178,7 +178,9 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     const banner = demo.hidden ? 0 : demo.offsetHeight;
     const nav = document.getElementById("nav");
     const box = root.getBoundingClientRect();
-    const under = nav && nav.offsetHeight ? Math.max(0, box.bottom - nav.getBoundingClientRect().top) : 0;
+    // Held sideways the bar is a rail beside the view, not over its foot.
+    const bar = nav && nav.offsetHeight ? nav.getBoundingClientRect() : null;
+    const under = bar && bar.left < box.right && bar.right > box.left ? Math.max(0, box.bottom - bar.top) : 0;
     const top = root.scrollTop + pad + banner + 8;
     return { top, bottom: Math.max(top, root.scrollTop + root.clientHeight - under - 8) };
   }

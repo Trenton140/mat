@@ -160,3 +160,13 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 .nav .ring:active{transform:scale(.97)}
 .nav .ring[hidden]{display:none}
 .phone.reg-open .nav{opacity:0;pointer-events:none}
+
+/* Held sideways: the same bar stands as a rail on the right of the column,
+   Days, Money and You stacked at the top, Ring up at its foot. */
+@media (orientation:landscape) and (max-height:520px){
+  .nav{left:auto;top:0;width:var(--rail);height:auto;flex-direction:column;align-items:stretch;gap:4px;
+    padding:calc(10px + env(safe-area-inset-top, 0px)) 8px calc(12px + env(safe-area-inset-bottom, 0px));border-left:1.5px dashed var(--key-hi)}
+  .nav::before{display:none}
+  .nav button{min-height:56px;padding:6px 4px;align-content:center}
+  .nav .ring{margin:auto 0 0;height:52px;padding:0 6px;border-radius:26px;font-size:14.5px}
+}

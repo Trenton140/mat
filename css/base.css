@@ -104,3 +104,25 @@ i{font-style:normal}
 .gate-key button:active{transform:scale(.97)}
 .gate-key-m{min-height:1.35em;color:var(--text);font-weight:700;font-size:14px}
 .gate-key-m:empty{min-height:0}
+
+/* ---------- held sideways (a phone in landscape) ----------
+   No phone drawn on the table: the app fills the screen's height as one
+   block, a reading column of at most 560 px with the bar turned into a rail
+   on its right (css/money.css). The block stands inside the notch's insets,
+   so inside it the usual 16 px margins are enough. Tablets and desktop
+   windows (taller than 520 px) keep the framed phone. */
+@media (orientation:landscape) and (max-height:520px){
+  :root{--rail:104px}
+  .phone{width:min(calc(100% - env(safe-area-inset-left, 0px) - env(safe-area-inset-right, 0px)), calc(560px + var(--rail)));height:100%;
+    border-radius:0;box-shadow:none;--gl:16px;--gr:16px}
+  .views{right:var(--rail)}
+  .view{padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px))}
+  .net{right:var(--rail)}
+  .sheet{max-height:calc(100% - 16px)}
+  /* Done stays in reach while a sheet's contents scroll under it: the bar
+     spans the sheet's padding box, so its paper or ticket stock lines up. */
+  .sheet-top{position:sticky;top:-12px;z-index:1;margin:-12px calc(var(--gr) * -1) 8px calc(var(--gl) * -1);padding:12px var(--gr) 0 var(--gl);background:inherit}
+  /* A sheet waiting below the screen casts no shadow up into it: sideways
+     there is no bar along the bottom to hide it. */
+  .sheet:not(.is-open){box-shadow:none}
+}

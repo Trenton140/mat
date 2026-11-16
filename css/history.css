@@ -37,3 +37,8 @@
 
 /* While the tape is open the undo bar sits at the top, clear of its buttons. */
 .phone.hist-open .ubar{top:calc(12px + env(safe-area-inset-top, 0px));bottom:auto}
+
+/* Held sideways: the tape waiting below the screen casts no shadow up into it. */
+@media (orientation:landscape) and (max-height:520px){
+  .hist:not(.is-open){box-shadow:none}
+}
