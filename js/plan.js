@@ -94,7 +94,9 @@ const clock = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(
 export function nextLine(stop, minutes) {
   const at = minutesOf(stop.time);
   if (at === null) return "";
-  const travel = Number(stop.travelMin);
+  // Whole minutes, even from an old cache made before the backend rounded them.
+  const raw = Number(stop.travelMin);
+  const travel = isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
   if (travel > 0) {
     const leave = Math.max(0, at - travel);
     return minutes >= leave ? "Leave now." : "Leave by " + clock(leave) + ", in " + span(leave - minutes) + ".";

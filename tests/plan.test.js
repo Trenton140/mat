@@ -38,6 +38,10 @@ test("next and past", () => {
 test("the next stop's line", () => {
   assert.equal(nextLine(stop("b", "14:00", { travelMin: 30 }), 800), "Leave by 13:30, in 10 min.");
   assert.equal(nextLine(stop("b", "14:00", { travelMin: 30 }), 815), "Leave now.");
+  // Minutes from an old cache made before the backend rounded them: never a fraction.
+  assert.equal(nextLine(stop("b", "14:00", { travelMin: 12.5 }), 800), "Leave by 13:47, in 27 min.");
+  assert.equal(nextLine(stop("b", "14:00", { travelMin: "20" }), 800), "Leave by 13:40, in 20 min.");
+  assert.equal(nextLine(stop("b", "14:00", { travelMin: -10 }), 800), "Next, in 40 min.");
   assert.equal(nextLine(stop("b", "14:00"), 800), "Next, in 40 min.");
   assert.equal(nextLine(stop("b", "15:25"), 800), "Next, in 2 h 5 min.");
   assert.equal(nextLine(stop("b", "14:20"), 800), "Next, in 1 h.");

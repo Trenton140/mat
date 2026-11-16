@@ -309,6 +309,48 @@ test("stop rows round-trip, and a hand-typed row reads safely", () => {
   const hand = P.stopFromRow({ id: "h1", date: new Date(Date.UTC(2026, 11, 12)), time: "9:5", title: 7, travel_min: "abc", fixed: "TRUE", link: "javascript:x", photo: "ftp://x", deleted_at: "2026-12-01T00:00:00Z" });
   assert.deepEqual([hand.time, hand.title, hand.travelMin, hand.fixed, hand.link, hand.photo, hand.deleted], ["", "7", 0, true, "", "", true]);
 });
+test("hand-typed stop times and minutes read as the app writes them (I5)", () => {
+  const read = (cells) => P.stopFromRow({ id: "h1", date: "2026-12-12", title: "x", ...cells });
+  assert.equal(read({ time: "9:30" }).time, "09:30");
+  assert.equal(read({ time: "9:05" }).time, "09:05");
+  assert.equal(read({ time: " 7:45 " }).time, "07:45");
+  assert.equal(read({ time: "09:30" }).time, "09:30");
+  for (const bad of ["9:5", "25:00", "9:60", "930", "nine", "19:30:00x", "-1:00"]) assert.equal(read({ time: bad }).time, "", bad);
+  // A time cell Sheets hands back as a fraction of a day.
+  assert.equal(read({ time: 0.5 }).time, "12:00");
+  assert.equal(read({ time: 0.3958333333 }).time, "09:30");
+  assert.equal(read({ time: 0 }).time, "00:00");
+  assert.equal(read({ time: 0.99999 }).time, "", "rounds to 24:00: no time");
+  for (const bad of [1, 1.5, -0.25, NaN]) assert.equal(read({ time: bad }).time, "", String(bad));
+  // A time cell handed back as a Date: read only where the script's own zone
+  // can be asked (Apps Script); here in Node there is none, so no time.
+  assert.equal(read({ time: new Date(Date.UTC(1899, 11, 30, 0, 30)) }).time, "");
+  // Minutes to get there: whole, from 0 up.
+  assert.equal(read({ travel_min: 12.5 }).travelMin, 13);
+  assert.equal(read({ travel_min: "12.4" }).travelMin, 12);
+  assert.equal(read({ travel_min: 20 }).travelMin, 20);
+  for (const bad of [-5, "-5", "abc", "", null, undefined, Infinity]) assert.equal(read({ travel_min: bad }).travelMin, 0, String(bad));
+});
+
+test("a Date time cell on Apps Script is read in the script's zone, and a seconds offset (an old zone's local mean time) counts as no time", () => {
+  const saved = { U: global.Utilities, S: global.Session };
+  try {
+    global.Session = { getScriptTimeZone: () => "Asia/Tokyo" };
+    global.Utilities = { formatDate: (d, tz, fmt) => {
+      const parts = new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23" }).formatToParts(d);
+      const get = (t) => parts.find((p) => p.type === t).value;
+      return fmt.replace("HH", get("hour")).replace("mm", get("minute")).replace("ss", get("second"));
+    } };
+    // 09:30 on Sheets' zero day in Tokyo.
+    assert.equal(P.stopFromRow({ id: "h1", time: new Date(Date.UTC(1899, 11, 30, 0, 30)) }).time, "09:30");
+    assert.equal(P.stopFromRow({ id: "h1", time: new Date(Date.UTC(1899, 11, 30, 0, 30, 28)) }).time, "");
+    assert.equal(P.stopFromRow({ id: "h1", time: new Date(NaN) }).time, "");
+  } finally {
+    global.Utilities = saved.U;
+    global.Session = saved.S;
+  }
+});
+
 test("validateStay", () => {
   const stay = { id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12" };
   assert.deepEqual(P.validateStay(stay).value, { ...stay, nameJp: "", addressJp: "", note: "", place: "", link: "" });

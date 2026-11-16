@@ -984,6 +984,19 @@ test("a hand-typed time and link survive a stop edit and its undo; changed and b
   assert.deepEqual([row.title, row.note, row.detail, row.time, row.link], ["Shibuya Sky", "Bring cash", "Floor 14", "9:30", "www.booking.com/x"]);
 });
 
+test("I5: a stop typed 9:30 with 12.5 minutes by hand reads 09:30 and 13; editing another field succeeds and leaves both cells as typed", async () => {
+  const call = client({ stops: [{ id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky" }] });
+  const row = call.fake.tables.Stops[0];
+  row.time = "9:30";
+  row.travel_min = 12.5;
+  const loaded = (await call("load")).data.stops[0];
+  assert.deepEqual([loaded.time, loaded.travelMin], ["09:30", 13]);
+  const e = await call("updateStop", { id: "stopAAAA0001", patch: { detail: "Floor 14" } });
+  assert.equal(e.ok, true, JSON.stringify(e));
+  assert.deepEqual([e.data.stop.time, e.data.stop.travelMin, e.data.stop.detail], ["09:30", 13, "Floor 14"]);
+  assert.deepEqual([row.time, row.travel_min, row.detail], ["9:30", 12.5, "Floor 14"]);
+});
+
 test("a hand-typed day colour survives a day edit and its undo; changed and blanked fields are written", async () => {
   const call = client({ days: { "2026-12-12": { city: "Tokyo", title: "Shrines", line_colour: "orange" } } });
   const row = call.fake.tables.Days.find((r) => r.date === "2026-12-12");

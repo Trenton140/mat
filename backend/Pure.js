@@ -386,16 +386,44 @@ function personFromRow(o) {
 
 function cellBool_(v) { return v === true || String(v).trim().toUpperCase() === "TRUE"; }
 
+// A stop's time cell as "HH:MM", or "" when it holds no readable time. Typed
+// by hand it may lack the leading zero (9:30). Sheets may hand a time cell
+// back as a fraction of a day (0.5 is 12:00) or as a Date on its zero day in
+// the sheet's zone: like cellDate_, that Date is read in the script's zone,
+// and only on Apps Script; a reading with stray seconds (an old zone's local
+// mean time on that 1899 day) is not trusted and counts as no time.
+function cellTime_(v) {
+  if (v instanceof Date) {
+    if (isNaN(v.getTime()) || typeof Utilities === "undefined" || typeof Session === "undefined") return "";
+    var hms = Utilities.formatDate(v, Session.getScriptTimeZone(), "HH:mm:ss");
+    return /^([01]\d|2[0-3]):[0-5]\d:00$/.test(hms) ? hms.slice(0, 5) : "";
+  }
+  if (typeof v === "number") {
+    if (!isFinite(v) || v < 0 || v >= 1) return "";
+    var m = Math.round(v * 1440);
+    if (m >= 1440) return "";
+    return (m < 600 ? "0" : "") + Math.floor(m / 60) + ":" + (m % 60 < 10 ? "0" : "") + (m % 60);
+  }
+  var t = cellText_(v).trim();
+  if (/^\d:[0-5]\d$/.test(t)) t = "0" + t;
+  return TIME_RE_.test(t) ? t : "";
+}
+
+// Minutes to get there: a whole number from 0 up (rounded); anything else 0.
+function cellMinutes_(v) {
+  var n = cellNum_(v);
+  return n > 0 ? Math.round(n) : 0;
+}
+
 function stopFromRow(o) {
-  var time = cellText_(o.time).trim();
   return {
     id: cellText_(o.id),
     date: cellDate_(o.date),
-    time: TIME_RE_.test(time) ? time : "",
+    time: cellTime_(o.time),
     title: cellText_(o.title),
     detail: cellText_(o.detail),
     gettingThere: cellText_(o.getting_there),
-    travelMin: cellNum_(o.travel_min),
+    travelMin: cellMinutes_(o.travel_min),
     fixed: cellBool_(o.fixed),
     place: cellText_(o.place),
     signJp: cellText_(o.sign_jp),
