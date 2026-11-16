@@ -33,7 +33,8 @@
 // other tabs by name, which its writes change as Sheets would), writes (every
 // write the planner received, in order: { kind: "cell", tab, cell, value } or
 // { kind: "append", tab, headerRow, values }), cellFails and appendFails (make
-// that kind of write throw, received as nothing), lockFails (the planner lock
+// that kind of write throw, received as nothing; cellFails may also be a
+// function (cell, value) => boolean), lockFails (the planner lock
 // can't be had), calls (every planner read or write, in order: { op, tab,
 // appLock, plannerLock }: whether the app's lock and the planner lock were
 // held at that moment), and between (test-only: a function run once, just
@@ -106,7 +107,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     lockFails: false, calls: [], between: null,
   };
   const held = { app: false, planner: false };
-  const plannerCall = (op, tab) => planner.calls.push({ op, tab, appLock: held.app, plannerLock: held.planner });
+  const plannerCall = (op, tab, cell) => planner.calls.push({ op, tab, ...(cell ? { cell } : {}), appLock: held.app, plannerLock: held.planner });
   const missing = new Set((seed && seed.missingColumns) || []);
   const missingTabs = new Set((seed && seed.missingTabs) || []);
   const tableReads = {};
@@ -249,8 +250,9 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     },
     // Same as Env.js: one cell ("E4") of a planner tab, written as given (RAW).
     plannerSetCell_(tab, cell, value) {
-      plannerCall("cell", tab);
-      if (planner.cellFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
+      plannerCall("cell", tab, cell);
+      const fails = typeof planner.cellFails === "function" ? planner.cellFails(cell, value) : planner.cellFails;
+      if (fails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
       const m = /^([A-Z]+)(\d+)$/.exec(cell);
       if (!m) throw new Error("bad cell " + cell);
       const col = m[1].split("").reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;

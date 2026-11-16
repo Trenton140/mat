@@ -718,6 +718,8 @@ function canUndo(entry, allEntries) {
   if (entry.kind === "person") return false;
   // A tick or claim the planner took off (Task 19, R49) is a fact, not a change to undo.
   if (entry.kind === "todo" && entry.action === "takeoff") return false;
+  // A note that the planner kept a Booked the app could not record (round 2).
+  if (entry.kind === "planner") return false;
   if (entry.undoneBy !== null && entry.undoneBy !== undefined && entry.undoneBy !== "") return false;
   for (var i = 0; i < allEntries.length; i++) {
     var o = allEntries[i];

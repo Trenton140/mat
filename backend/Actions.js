@@ -44,6 +44,9 @@ var MSG_ = {
   todoDone: "That one is already done.",
   tickTakenOff: "That number is another item in the planner now: its tick was taken off.",
   claimTakenOff: "That number is another item in the planner now: nobody is on it any more.",
+  bothTakenOff: "That number is another item in the planner now: its tick was taken off and nobody is on it any more.",
+  claudeTick: "Tick this one in the app.",
+  claudeRetick: "Undo this one in the app.",
 };
 
 // A Google spreadsheet id, as linkPlanner takes it.
@@ -788,6 +791,14 @@ var TODO_BOOK_TAB_ = "Book Now";
 var TODO_LOG_TAB_ = "Change Log";
 var TODO_TICK_WHY_ = "Ticked off in the MAT app";
 var TODO_UNTICK_WHY_ = "Tick undone in the MAT app";
+var TODO_UNRECORDED_WHY_ = "The MAT app couldn’t record the tick; put back";
+
+// Item texts compared as the same item: runs of spaces (non-breaking ones
+// too) count as one, and the ends are trimmed, on both sides.
+function sameItem_(a, b) {
+  var norm = function (s) { return cellText_(s).replace(/[\s\u00a0]+/g, " ").trim(); };
+  return norm(a) === norm(b);
+}
 
 // Whether the Sheet has the Todos tab with every column the actions write.
 function todosReady_() {
@@ -820,12 +831,19 @@ function tripYear_() {
   return DAY_RE_.test(start) ? Number(start.slice(0, 4)) : Number(nowIso_().slice(0, 4));
 }
 
-// Runs an env's then_ (the planner part of a write) once the app's lock is let go.
+// Runs an env's then_ (the planner part of a write) once the app's lock is
+// let go. The app's change is saved by then: a throw here only means the
+// planner part is not known to have happened.
 function thenOutsideLock_(env) {
   if (!env || typeof env.then_ !== "function") return env;
   var next = env.then_;
   delete env.then_;
-  return next(env);
+  try {
+    return next(env);
+  } catch (e) {
+    env.data.planner = "pending";
+    return env;
+  }
 }
 
 function syncTodos_(args) {
@@ -836,7 +854,7 @@ function syncTodos_(args) {
   var since = Date.parse(nowIso_()) - Date.parse(last);
   // Within 10 minutes the stored list is the answer; a forced pull too, within 30 seconds.
   if (since >= 0 && (since < TODO_FORCE_GAP_MS_ || (args.force !== true && since < TODO_PULL_GAP_MS_))) {
-    return ok_({ todos: todosShown_(), pulledAt: last, more: false, problems: [] }, rev_());
+    return ok_({ todos: todosShown_(), pulledAt: last, more: false, problems: [], stored: true }, rev_());
   }
   // A refusal still carries the list as stored, so a phone keeps showing it.
   var refuse = function (code, message) {
@@ -855,22 +873,31 @@ function syncTodos_(args) {
   var pulled = withLock_(function () { return pullTodos_(read); });
   if (!pulled.ok) return pulled;
 
-  // Ticks the planner has not taken yet, at most two a pull, each under the
-  // planner lock against a fresh read, then recorded under the app's lock.
-  var more = pulled.more;
-  pulled.retry.forEach(function (job, i) {
-    if (i >= TODO_MAX_RETRIES_) {
-      more = true;
-      return;
-    }
-    settleTick_(job.id, job.item, job.by, plannerTick_(job.id, job.item, job.by));
-  });
+  // The pull is complete once its row writes are: what the retries do never
+  // holds it open (a tick that keeps failing must not keep every pull open).
   var pulledAt = "";
-  if (!more) {
+  if (!pulled.more) {
     pulledAt = nowIso_();
     setProp_("TODOS_PULLED_AT", pulledAt);
   }
-  return ok_({ todos: todosShown_(), pulledAt: pulledAt, more: more, problems: pulled.problems }, rev_());
+  // Ticks the planner has not taken yet: two a pull, oldest tick first, going
+  // on each pull from after the last one tried (TODOS_RETRY_AFTER) and round
+  // to the start, so one that always fails starves no other. Each under the
+  // planner lock against a fresh read, then recorded under the app's lock.
+  var queue = pulled.retry.slice().sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
+  var after = getProp_("TODOS_RETRY_AFTER") || "";
+  var start = 0;
+  while (start < queue.length && queue[start].key <= after) start++;
+  queue = queue.slice(start).concat(queue.slice(0, start)).slice(0, TODO_MAX_RETRIES_);
+  queue.forEach(function (job) {
+    setProp_("TODOS_RETRY_AFTER", job.key);
+    try {
+      settleTick_(job.id, job.item, job.by, plannerTick_(job.id, job.item, job.by));
+    } catch (e) {
+      // Best effort (R45): the tick stands and a later pull tries again.
+    }
+  });
+  return ok_({ todos: todosShown_(), pulledAt: pulledAt, more: pulled.more, problems: pulled.problems }, rev_());
 }
 
 // The pull's writes to the app's own Sheet, under its lock: read is
@@ -898,10 +925,10 @@ function pullTodos_(read) {
     var claimer = cellText_(r.claimed_by);
     var bound = ticked ? tickedItemOf_(r) : cellText_(r.item);
     var takeoff = null;
-    if ((ticked || claimer !== "") && it.item !== bound) {
+    if ((ticked || claimer !== "") && !sameItem_(it.item, bound)) {
       ["ticked_by", "ticked_at", "ticked_item", "planner_written", "planner_was", "claimed_by"].forEach(function (k) { patch[k] = ""; });
       takeoff = { old: bound, ticked: ticked, claimer: claimer, row: r };
-      problems.push({ id: it.id, message: ticked ? MSG_.tickTakenOff : MSG_.claimTakenOff });
+      problems.push({ id: it.id, message: ticked && claimer !== "" ? MSG_.bothTakenOff : ticked ? MSG_.tickTakenOff : MSG_.claimTakenOff });
     }
     if (Object.keys(patch).length) jobs.push({ id: it.id, patch: patch, takeoff: takeoff });
   });
@@ -930,14 +957,20 @@ function pullTodos_(read) {
 
   var retry = todoRows_().filter(function (r) {
     return cellText_(r.ticked_by) !== "" && cellText_(r.planner_written) === "" && cellText_(r.gone) !== "yes" && !isBooked(r.status);
-  }).map(function (r) { return { id: cellText_(r.id), item: tickedItemOf_(r), by: cellText_(r.ticked_by) }; });
+  }).map(function (r) {
+    // Oldest tick first; the key orders the retries and marks where they stopped.
+    return { id: cellText_(r.id), item: tickedItemOf_(r), by: cellText_(r.ticked_by), key: cellStamp_(r.ticked_at) + "|" + cellText_(r.id) };
+  });
   return { ok: true, more: more, problems: problems, retry: retry };
 }
 
 // The one History line for a tick or claim a pull took off. Not undoable.
 function logTakeoff_(t, beforeTodo, afterRow) {
   var after = todoFromRow(afterRow);
-  var said = "changed “" + plannerCut_(t.old, 60) + "”: " + (t.ticked ? "the tick was taken off" : t.claimer + " is no longer on it");
+  var gone = [];
+  if (t.ticked) gone.push("the tick was taken off");
+  if (t.claimer !== "") gone.push(t.claimer + " is no longer on it");
+  var said = "changed “" + plannerCut_(t.old, 60) + "”: " + gone.join(" and ");
   appendLog_({ actor: "The planner", via: "app" }, "takeoff", "todo", beforeTodo.id, said, todoSnap_(beforeTodo, t.row), todoSnap_(after, afterRow));
 }
 
@@ -946,17 +979,19 @@ function logTakeoff_(t, beforeTodo, afterRow) {
 // removed).
 function plannerTodo_(bookRows, id, item) {
   var items = todosFromRows(bookRows, tripYear_()).items;
-  for (var i = 0; i < items.length; i++) if (items[i].id === id) return items[i].item === item ? items[i] : null;
+  for (var i = 0; i < items.length; i++) if (items[i].id === id) return sameItem_(items[i].item, item) ? items[i] : null;
   return null;
 }
 
-// Under the planner lock, on a read just made: writes `to` into found's
-// Status cell, then appends one Change Log row (its # from a fresh read of
-// the log); if the append fails, puts the old Status back (best effort).
-// Writes nothing when the Change Log has no header. -> "written" | "pending"
-function plannerWriteStatus_(found, to, why, actor) {
+// Under the planner lock: the Change Log as just read (logRows) and the
+// Book Now row just found on a read made after it, so the row checked is the
+// row written with the smallest gap. Writes `to` into found's Status cell,
+// then appends one Change Log row; if the append fails, puts the old Status
+// back (best effort). Writes nothing when the Change Log has no header.
+// -> "written" | "pending"
+function plannerWriteStatus_(logRows, found, to, why, actor) {
   var cell = colLetter(found.statusCol) + found.row;
-  var log = changeLogRow(plannerTab_(TODO_LOG_TAB_), {
+  var log = changeLogRow(logRows, {
     "Date / time": torontoNow_(), "Agent / session": "MAT app (" + actor + ")", Tab: TODO_BOOK_TAB_, "Cell(s)": cell, Item: found.item,
     "Old value": found.status === "" ? "(empty)" : found.status, "New value": to === "" ? "(empty)" : to,
     Why: why, "Proof / source": "MAT app History", "Verified?": "By " + actor,
@@ -981,11 +1016,12 @@ function plannerWriteStatus_(found, to, why, actor) {
 function plannerTick_(id, item, actor) {
   var out = withPlannerLock_(function () {
     try {
+      var logRows = plannerTab_(TODO_LOG_TAB_);
       var found = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), id, item);
       if (!found) return { result: "pending" };
       // Booked there already (by hand): nothing to write; the app takes its word.
       if (isBooked(found.status)) return { result: "already", status: found.status };
-      return plannerWriteStatus_(found, "Booked", TODO_TICK_WHY_, actor) === "written" ? { result: "written", was: found.status } : { result: "pending" };
+      return plannerWriteStatus_(logRows, found, "Booked", TODO_TICK_WHY_, actor) === "written" ? { result: "written", was: found.status } : { result: "pending" };
     } catch (e) {
       return { result: "pending" };
     }
@@ -997,14 +1033,15 @@ function plannerTick_(id, item, actor) {
 // back `was` only while the row still holds this item and says exactly
 // Booked. -> "written" | "kept" (someone changed it since: left alone) |
 // "pending" (could not; the planner may still say Booked)
-function plannerUntick_(id, item, was, actor) {
+function plannerUntick_(id, item, was, actor, why) {
   if (typeof was !== "string") return "pending";
   var out = withPlannerLock_(function () {
     try {
+      var logRows = plannerTab_(TODO_LOG_TAB_);
       var found = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), id, item);
       if (!found) return "pending";
       if (found.status !== "Booked") return "kept";
-      return plannerWriteStatus_(found, was, TODO_UNTICK_WHY_, actor);
+      return plannerWriteStatus_(logRows, found, was, why || TODO_UNTICK_WHY_, actor);
     } catch (e) {
       return "pending";
     }
@@ -1013,14 +1050,16 @@ function plannerUntick_(id, item, was, actor) {
 }
 
 // Records what the planner did with a tick, under the app's lock, only while
-// the tick is still there and bound to the same text. A tick undone while
-// its write was on its way is taken back out of the planner (outside the
-// lock). -> "written" | "pending"
+// the tick is still there and bound to the same text. A Booked the app
+// cannot record (its lock busy, or the tick undone while the write was on
+// its way) is taken back out of the planner (outside the lock), so every
+// Booked the app wrote is one it knows of; if even that fails, History says
+// so. -> "written" | "pending"
 function settleTick_(id, item, by, out) {
   if (out.result === "pending") return "pending";
   var rec = withLock_(function () {
     var row = findRow_("Todos", id);
-    var still = row && cellText_(row.ticked_by) !== "" && tickedItemOf_(row) === item && cellText_(row.gone) !== "yes";
+    var still = row && cellText_(row.ticked_by) !== "" && sameItem_(tickedItemOf_(row), item) && cellText_(row.gone) !== "yes";
     if (!still) return { ok: true, revert: out.result === "written" };
     if (out.result === "written") {
       updateById_("Todos", id, { planner_written: "yes", planner_was: out.was, status: "Booked" });
@@ -1031,12 +1070,23 @@ function settleTick_(id, item, by, out) {
     }
     return { ok: true, revert: false };
   });
-  if (!rec.ok) return "pending";
-  if (rec.revert) {
-    plannerUntick_(id, item, out.was, by);
+  if (out.result === "written" && (!rec.ok || rec.revert)) {
+    var back = plannerUntick_(id, item, out.was, by, rec.ok ? TODO_UNTICK_WHY_ : TODO_UNRECORDED_WHY_);
+    if (back === "pending") logBookedLeft_(id, item, by);
     return "pending";
   }
-  return "written";
+  return rec.ok ? "written" : "pending";
+}
+
+// History's note that a Booked the app wrote is still in the planner and the
+// app has no record of it (round 2): a person must look. Not undoable.
+function logBookedLeft_(id, item, by) {
+  withLock_(function () {
+    var said = "left “" + plannerCut_(item, 60) + "” marked Booked in the planner: the app couldn’t record it";
+    appendLog_({ actor: by, via: "app" }, "note", "planner", id, said, null, null);
+    bumpRev_();
+    return { ok: true };
+  });
 }
 
 // The item an action names, when the Todos tab has it and it is not gone.
@@ -1056,11 +1106,13 @@ function tickTodo_(args, ctx) {
   if (got.env) return got.env;
   var cur = got.todo;
   if (cur.done) return err_("bad_input", MSG_.todoDone);
+  // The connector never makes a tick (R49 M1): a tick is what reaches the planner.
+  if (ctx.via === "claude") return err_("bad_input", MSG_.claudeTick);
   var row = updateById_("Todos", got.id, { ticked_by: ctx.actor, ticked_at: nowIso_(), ticked_item: cur.item });
   var saved = todoFromRow(row);
   var log = appendLog_(ctx, "tick", "todo", got.id, summarize("tick", "todo", todoSnap_(cur, got.row), todoSnap_(saved, row)), todoSnap_(cur, got.row), todoSnap_(saved, row));
   var env = ok_({ todo: saved, planner: "pending", logId: log.id }, bumpRev_());
-  if (ctx.via !== "claude") env.then_ = function (e) { return afterTick_(e, got.id, cur.item, ctx.actor); };
+  env.then_ = function (e) { return afterTick_(e, got.id, cur.item, ctx.actor); };
   return env;
 }
 
@@ -1114,6 +1166,8 @@ function undoTodo_(entry, rows, ctx) {
   if (tickedBy !== "" && tickedItem === "") tickedItem = cur.item;
   var untick = cur.tickedBy !== "" && tickedBy === "";
   var retick = cur.tickedBy === "" && tickedBy !== "";
+  // Nor does it put one back (R49 M1); taking one off is fine.
+  if (retick && ctx.via === "claude") return err_("bad_input", MSG_.claudeRetick);
   var patch = { claimed_by: claimedBy, ticked_by: tickedBy, ticked_at: tickedAt, ticked_item: tickedBy === "" ? "" : tickedItem };
   if (untick) {
     patch.planner_written = "";
