@@ -47,7 +47,20 @@ async function openAdd(page, date = D12) {
 async function openEdit(page, id) {
   const opened = await page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row(id));
   if (!opened) await page.click(row(id) + " .r-b");
-  await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row(id)), "the stop opens");
+  // Opened all the way: on its ticket every stop's details have finished
+  // sliding open or shut (0.2 s). Tapped while they still move, Playwright
+  // finds Edit "not stable" and its retries scroll Edit into view with
+  // inline "end" or "start", which snaps the rail to the next or previous day.
+  await until(
+    () => page.evaluate((sel) => {
+      const r = document.querySelector(sel);
+      return r.classList.contains("is-open") && [...r.closest(".tk").querySelectorAll(".r[data-id]")].every((x) => {
+        const d = x.querySelector(".r-more > div");
+        return !d || d.clientHeight === (x.classList.contains("is-open") ? d.scrollHeight : 0);
+      });
+    }, row(id)),
+    "the stop opens",
+  );
   await page.click(row(id) + " .r-edit");
   await waitSheet(page);
 }
