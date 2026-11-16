@@ -6,8 +6,9 @@
 // mountRegister(root, store, { now, storage, onClose }) -> { open(day?), edit(id), close(), isOpen() }
 // onClose(): called each time the register closes.
 // root is the phone; the register sits at its bottom over the Money view.
-// A new expense always opens in dollars (CAD); the ¥/$ key switches the one in
-// hand. storage is only used to clear the old mat.cur memory once.
+// Every new entry starts in dollars (CAD), also the next one after ringing up; the ¥/$ key
+// switches the one in hand, and a half-typed entry keeps its currency when put away and reopened.
+// storage is only used to clear the old mat.cur memory once.
 
 import { defaultRingDay, newId } from "../time.js";
 import { yen, dollars, pt, dayShort } from "../format.js";
@@ -282,6 +283,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
       store.addExpense({ id, ...line, note: "" }); // draws the line before it returns
     } finally {
       resetLine();
+      draft.cur = "CAD"; // the next entry is a new expense
       render();
     }
     printLine(id);

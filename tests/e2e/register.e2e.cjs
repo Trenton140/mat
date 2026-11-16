@@ -115,7 +115,8 @@ module.exports = [
       assert.equal(row.day, "2026-12-12");
       assert.equal(row.amt, "¥14,500");
       assert.equal(await isOpen(page), true, "the register stays open");
-      await expectText(page, "#xAmt", "¥0");
+      await expectText(page, "#xAmt", "$0");
+      await expectText(page, "#kCur", "$ → ¥");
       assert.equal(await page.inputValue("#xWhat"), "");
       assert.equal(await isOn(page, seal("xPayer", "Mo")), true, "Mo is still the payer");
       await expectText(page, "#xDay", "Sat 12");
@@ -146,6 +147,7 @@ module.exports = [
       assert.equal(savedTitled(backend, "Dinner").length, 0, "undone on the backend too");
 
       // Left alone, the bar goes after 6 seconds.
+      await page.click("#kCur");
       await ringUp(page, { chip: "Lunch", seq: "9 0 0" });
       await expectText(page, "#ubarT", "Rang up Lunch ¥900.");
       await advance(page, backend, 5900);
@@ -162,6 +164,7 @@ module.exports = [
       await ringUp(page, { chip: "Lunch", seq: "9 0 0" });
       await expectText(page, "#ubarT", "Rang up Lunch ¥900.");
       await advance(page, backend, 4000);
+      await page.click("#kCur");
       await ringUp(page, { chip: "Coffee", seq: "4 5 0" });
       await expectText(page, "#ubarT", "Rang up Coffee ¥450.");
       await advance(page, backend, 4000);
@@ -278,7 +281,9 @@ module.exports = [
       await expectText(page, "#xAmt", "$0");
       await expectText(page, "#kCur", "$ → ¥");
       await ringUp(page, { title: "Tea", seq: "1 2 . 3 4" });
-      await waitRow(page, "Tea");
+      const tea = await waitRow(page, "Tea");
+      assert.equal(tea.amt, "$12.34");
+      assert.equal((await until(() => savedTitled(backend, "Tea")[0], "Tea saved")).currency, "CAD");
       await page.click("#regDone");
       await waitClosed(page);
       await ringOpen(page);
@@ -299,6 +304,42 @@ module.exports = [
       await waitOpen(page);
       await expectText(page, "#xAmt", "¥500");
       await expectText(page, "#kCur", "¥ → $");
+    },
+  },
+  {
+    name: "after ringing up in yen with the keypad open, the next entry is in dollars",
+    async run({ page }) {
+      const backend = await ready(page);
+      await ringOpenYen(page);
+      await ringUp(page, { title: "Ramen", seq: "5 0 0" });
+      await waitRow(page, "Ramen");
+      assert.equal(await isOpen(page), true);
+      await expectText(page, "#xAmt", "$0");
+      await expectText(page, "#kCur", "$ → ¥");
+      await ringUp(page, { title: "Cab", seq: "1 2 . 3 4" });
+      await waitRow(page, "Cab");
+      const cab = await until(() => savedTitled(backend, "Cab")[0], "Cab saved");
+      assert.deepEqual([cab.amount, cab.currency], [12.34, "CAD"]);
+    },
+  },
+  {
+    name: "a half-typed entry keeps its currency when put away; an entry with no amount reopens in dollars",
+    async run({ page }) {
+      await ready(page);
+      await ringOpenYen(page);
+      await keys(page, "5 0 0");
+      await page.click("#regDone");
+      await waitClosed(page);
+      await ringOpen(page);
+      await expectText(page, "#xAmt", "¥500");
+      await expectText(page, "#kCur", "¥ → $");
+      await keys(page, "del del del");
+      await page.fill("#xWhat", "Snack");
+      await page.click("#regDone");
+      await waitClosed(page);
+      await ringOpen(page);
+      await expectText(page, "#xAmt", "$0");
+      await expectText(page, "#kCur", "$ → ¥");
     },
   },
   {
