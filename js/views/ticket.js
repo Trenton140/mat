@@ -13,10 +13,12 @@
 //   1-based; mark: the issuer's mark ("MAT"); tripName: printed when the day
 //   has no route and no city.
 // - state: dayState(...) ("used", "today", "ahead"); minutes: the trip zone's
-//   minutes past midnight; nextId: today's next stop (nextStopId), else null;
+//   minutes past midnight; nextId: today's next stop (nextStopId, which keeps
+//   a stop just started for a while, R38), else null;
 //   total: the day's logged yen (dayTotalYen), printed as the fare when above
 //   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1.
-// - stay: the night's stay (stayFor), or null. Drawn after the stops as one
+// - stay: the night's stay (stayShownFor: on today's ticket before 04:00,
+//   last night's), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
 // After the stops (before the stay) every ticket has ＋ Add a stop, a button
 // .tk-add[data-date]; each open stop has an Edit button, .r-edit, beside its
@@ -155,7 +157,7 @@ function row(stop, i, model) {
   const next = state === "today" && stop.id === nextId;
   const r = el("div", "r");
   r.dataset.id = stop.id;
-  if (state === "used" || (state === "today" && isPast(stop, minutes))) r.classList.add("is-done");
+  if (state === "used" || (state === "today" && isPast(stop, minutes, nextId))) r.classList.add("is-done");
   if (next) r.classList.add("is-next");
 
   // The name and the line under it: the part that opens and closes the stop.

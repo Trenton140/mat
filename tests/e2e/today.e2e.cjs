@@ -82,6 +82,16 @@ async function seedWithSky(patch) {
   return seed;
 }
 
+// Every stop on the ticket has finished sliding open or shut: each open
+// row's details at full height, each closed one's at none (flake-report.md:
+// a tap inside a ticket while a row still moves can scroll the rail).
+const settled = (page, date) => until(() => page.evaluate((sel) => [...document.querySelectorAll(sel + " .r[data-id]")].every((r) => {
+  const inner = r.querySelector(".r-more > div");
+  if (!inner) return true;
+  const h = inner.getBoundingClientRect().height;
+  return r.classList.contains("is-open") ? Math.abs(h - inner.scrollHeight) < 1 : h < 1;
+}), tk(date)), "the stops have stopped moving");
+
 module.exports = [
   {
     name: "past, next and later",
@@ -181,12 +191,79 @@ module.exports = [
       const backend = await ready(page);
       await advance(page, backend, 11 * 60000);
       await until(async () => (await text(page, row(SKY) + " .r-s")).includes("Leave now."), "Sky says Leave now.");
-      await advance(page, backend, 30 * 60000); // 14:01
+      await advance(page, backend, 30 * 60000); // 14:01: Sky has started, and is still next (R38)
+      await until(async () => (await text(page, row(SKY) + " .r-lv")) === "Now.", "Sky says Now.");
+      assert.equal(await has(page, row(SKY), "is-done"), false, "Sky is not faded");
+      assert.equal(await has(page, row(DINNER), "is-next"), false, "Dinner is not next yet");
+      await advance(page, backend, 29 * 60000); // 14:30: Sky's half hour is up
       await until(() => has(page, row(SKY), "is-done"), "Sky is done");
       await until(() => has(page, row(DINNER), "is-next"), "Dinner is next");
       const dinner = await text(page, row(DINNER));
-      assert.ok(dinner.includes("Next, in 4 h 59 min."), dinner);
+      assert.ok(dinner.includes("Next, in 4 h 30 min."), dinner);
       assert.equal(await has(page, row(DINNER), "is-open"), true, "the next stop opens itself");
+    },
+  },
+  {
+    name: "a late stop stays next for half an hour (R38)",
+    // A phone short enough that the ticket still fills the screen once Sky
+    // closes (the browser itself pulls a page back up that got shorter).
+    viewport: { width: 390, height: 600 },
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: jp("2026-12-12T13:59:00") });
+      await until(async () => (await has(page, row(SKY), "is-next")) && (await has(page, row(SKY), "is-open")), "Sky is next and open");
+      await settled(page, "2026-12-12");
+      // Scrolled down a little, as someone reading the ticket would be.
+      await page.evaluate(() => { document.getElementById("vDays").scrollTop = 120; });
+      const mark = () => page.evaluate((ids) => ids.forEach((id) => { document.querySelector('.r[data-id="' + id + '"]').__kept = 1; }), [MEIJI, LUNCH, SKY, GLOVES]);
+      const kept = () => page.evaluate((ids) => ids.filter((id) => document.querySelector('.r[data-id="' + id + '"]').__kept === 1), [MEIJI, LUNCH, SKY, GLOVES]);
+      await mark();
+      const before = await page.evaluate(() => ({ top: document.getElementById("vDays").scrollTop, left: document.getElementById("rail").scrollLeft }));
+      assert.equal(before.top, 120, "the screen is scrolled");
+
+      await advance(page, backend, 2 * 60000); // 14:01
+      await until(async () => (await text(page, row(SKY) + " .r-lv")) === "Now.", "Sky says Now.");
+      const sky = await classes(page, row(SKY));
+      assert.ok(sky.includes("is-next") && sky.includes("is-open") && !sky.includes("is-done"), sky.join(" "));
+      assert.ok((await text(page, row(SKY) + " .r-n")).includes("こんど"));
+      assert.equal(/Leave|min/.test(await text(page, row(SKY) + " .r-s")), false, "no countdown");
+      assert.deepEqual(await kept(), [MEIJI, LUNCH, SKY, GLOVES], "no row was made again");
+      assert.equal(await count(page, "#rail .tag"), 1, "one こんど on the rail");
+
+      await advance(page, backend, 29 * 60000); // 14:30, on the ordinary tick
+      await until(() => has(page, row(DINNER), "is-next"), "Dinner is next");
+      assert.equal(await has(page, row(SKY), "is-done"), true, "Sky is faded");
+      assert.equal(await has(page, row(SKY), "is-next"), false);
+      assert.deepEqual(await openRows(page), [DINNER], "Dinner opens itself");
+      assert.deepEqual((await kept()).filter((id) => id !== SKY), [MEIJI, LUNCH, GLOVES], "rows that did not change are kept");
+      const after = await page.evaluate(() => ({ top: document.getElementById("vDays").scrollTop, left: document.getElementById("rail").scrollLeft }));
+      assert.deepEqual(after, before, "the screen did not move");
+      await expectText(page, "#dayCount", /^Day 3 of 11 ?today$/);
+    },
+  },
+  {
+    name: "a stop opened by hand stays open when a late stop stops being next (R38, R32)",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: jp("2026-12-12T14:01:00") });
+      await until(async () => (await text(page, row(SKY) + " .r-lv")) === "Now.", "Sky says Now.");
+      await settled(page, "2026-12-12");
+      await tap(page, MEIJI);
+      await until(async () => JSON.stringify(await openRows(page)) === JSON.stringify([MEIJI]), "only Meiji Shrine is open");
+      await settled(page, "2026-12-12");
+      await advance(page, backend, 29 * 60000); // 14:30
+      await until(() => has(page, row(DINNER), "is-next"), "Dinner is next");
+      assert.deepEqual(await openRows(page), [MEIJI], "Meiji Shrine stays open");
+      assert.equal(await inView(page), "2026-12-12");
+    },
+  },
+  {
+    name: "a late stop on a phone in Toronto (R38)",
+    timezoneId: "America/Toronto",
+    async run({ page }) {
+      await ready(page, { nowMs: jp("2026-12-12T14:20:00") });
+      assert.notEqual(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone), "Asia/Tokyo");
+      await until(() => has(page, row(SKY), "is-next"), "Sky is next");
+      assert.equal(await text(page, row(SKY) + " .r-lv"), "Now.");
+      assert.equal(await has(page, row(SKY), "is-done"), false);
     },
   },
   {
@@ -196,7 +273,7 @@ module.exports = [
       await until(() => has(page, row(SKY), "is-open"), "Sky is open");
       await tap(page, SKY);
       await until(async () => (await openRows(page)).length === 0, "Sky is closed");
-      await advance(page, backend, 41 * 60000); // 14:01
+      await advance(page, backend, 70 * 60000); // 14:30 (R38: Sky is next until then)
       await until(() => has(page, row(DINNER), "is-next"), "Dinner is next");
       assert.deepEqual(await openRows(page), [], "Dinner does not open itself");
       await page.click("#pager .sq:nth-child(4)");

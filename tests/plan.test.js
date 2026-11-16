@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { minutesOf, nowIn, instantOf, openDayIndex, dayState, daysToGo, stopsFor, nextStopId, isPast, nextLine, stayFor, safeHref, originFor, mapsUrl, stayMapsUrl, inkFor, header, dayTotalYen, gateDate, issueLine } from "../js/plan.js";
+import { minutesOf, nowIn, instantOf, openDayIndex, dayState, daysToGo, stopsFor, nextStopId, isPast, nextLine, stayFor, stayShownFor, NEXT_GRACE_MIN, NIGHT_ENDS_MIN, safeHref, originFor, mapsUrl, stayMapsUrl, inkFor, header, dayTotalYen, gateDate, issueLine } from "../js/plan.js";
 
 const TZ = "Asia/Tokyo";
 const TRIP = { start: "2026-12-10", end: "2026-12-20", tz: TZ };
@@ -32,7 +32,8 @@ test("next and past", () => {
   const day = [stop("a", "09:00"), stop("b", "14:00"), stop("late", "23:50"), stop("x", "")];
   assert.equal(nextStopId(day, 800), "b");
   assert.equal(nextStopId(day, 23 * 60 + 40), "late");
-  assert.equal(nextStopId(day, 23 * 60 + 55), null);
+  // R38: a stop just started is still next (until midnight, for the last one).
+  assert.equal(nextStopId(day, 23 * 60 + 55), "late");
   assert.deepEqual(day.map((s) => isPast(s, 800)), [true, false, false, false]);
 });
 test("the next stop's line", () => {
@@ -115,4 +116,97 @@ test("the open day when today is inside the trip but missing from the list", () 
   assert.equal(dayState("2026-12-11", "2026-12-12"), "used");
   assert.equal(dayState("2026-12-12", "2026-12-12"), "today");
   assert.equal(dayState("2026-12-13", "2026-12-12"), "ahead");
+});
+
+// R38: a late stop stays "next" for a while. One day: A 14:00, B 19:00 with
+// 30 minutes to get there, C untimed.
+const hm = (h, m) => h * 60 + m;
+const lateDay = (bTime = "19:00", bTravel = 30) => [stop("A", "14:00"), stop("B", bTime, { travelMin: bTravel }), stop("C", "")];
+const lineOf = (day, minutes) => {
+  const id = nextStopId(day, minutes);
+  return id ? nextLine(day.find((s) => s.id === id), minutes) : "";
+};
+test("R38: 13:59, A is next and counts down as before", () => {
+  assert.equal(NEXT_GRACE_MIN, 30);
+  assert.equal(nextStopId(lateDay(), hm(13, 59)), "A");
+  assert.equal(lineOf(lateDay(), hm(13, 59)), "Next, in 1 min.");
+});
+test("R38: 14:00, A is next and reads Now.", () => {
+  assert.equal(nextStopId(lateDay(), hm(14, 0)), "A");
+  assert.equal(lineOf(lateDay(), hm(14, 0)), "Now.");
+});
+test("R38: 14:29, A is still next and reads Now.; it is not past", () => {
+  assert.equal(nextStopId(lateDay(), hm(14, 29)), "A");
+  assert.equal(lineOf(lateDay(), hm(14, 29)), "Now.");
+  assert.equal(isPast(lateDay()[0], hm(14, 29), "A"), false);
+});
+test("R38: 14:30, B is next with its leave-by, and A is past", () => {
+  assert.equal(nextStopId(lateDay(), hm(14, 30)), "B");
+  assert.equal(lineOf(lateDay(), hm(14, 30)), "Leave by 18:30, in 4 h.");
+  assert.equal(isPast(lateDay()[0], hm(14, 30), "B"), true);
+});
+test("R38: a started stop with minutes to get there reads Now., not Leave now.", () => {
+  assert.equal(nextLine(stop("A", "14:00", { travelMin: 30 }), hm(14, 1)), "Now.");
+  assert.equal(nextLine(stop("A", "14:00", { travelMin: 30 }), hm(13, 59)), "Leave now.");
+});
+test("R38: the grace ends when it is time to leave for the following stop", () => {
+  assert.equal(nextStopId(lateDay("14:20", 5), hm(14, 14)), "A");
+  assert.equal(lineOf(lateDay("14:20", 5), hm(14, 14)), "Now.");
+  assert.equal(nextStopId(lateDay("14:20", 5), hm(14, 15)), "B");
+  // The following stop with no minutes to get there: its own time.
+  assert.equal(nextStopId(lateDay("14:20", 0), hm(14, 19)), "A");
+  assert.equal(nextStopId(lateDay("14:20", 0), hm(14, 20)), "B");
+});
+test("R38: the grace never holds back a stop whose leave-by has come", () => {
+  assert.equal(nextStopId(lateDay("14:10", 30), hm(13, 59)), "A");
+  assert.equal(nextStopId(lateDay("14:10", 30), hm(14, 0)), "B");
+});
+test("R38: the last timed stop of the day", () => {
+  assert.equal(nextStopId(lateDay(), hm(19, 29)), "B");
+  assert.equal(lineOf(lateDay(), hm(19, 29)), "Now.");
+  assert.equal(nextStopId(lateDay(), hm(19, 30)), null);
+});
+test("R38: untimed stops are never next", () => {
+  assert.equal(nextStopId([stop("C", ""), stop("D", "9:5")], hm(10, 0)), null);
+  assert.equal(nextStopId(lateDay(), hm(23, 0)), null);
+});
+test("R38: the grace does not cross midnight", () => {
+  const all = [stop("late", "23:50"), stop("bus", "", { date: "2026-12-13" })];
+  // At 00:10 on Dec 13 the 23:50 stop is on yesterday's ticket, not today's.
+  assert.equal(nextStopId(stopsFor(all, "2026-12-13"), hm(0, 10)), null);
+  // On its own day it is next until midnight.
+  assert.equal(nextStopId(stopsFor(all, "2026-12-12"), hm(23, 59)), "late");
+});
+
+// R37: before 04:00, today's ticket shows last night's stay.
+const X = { id: "X", name: "Asakusa", firstNight: "2026-12-11", lastNight: "2026-12-12", deleted: false };
+const Y = { id: "Y", name: "Niseko", firstNight: "2026-12-13", lastNight: "2026-12-14", deleted: false };
+const DEC13 = "2026-12-13";
+test("R37: 00:30 on a hotel-change day shows last night's stay; 04:00 today's", () => {
+  assert.equal(NIGHT_ENDS_MIN, 240);
+  assert.equal(stayShownFor([X, Y], DEC13, { today: DEC13, minutes: hm(0, 30) }).id, "X");
+  assert.equal(stayShownFor([X, Y], DEC13, { today: DEC13, minutes: hm(3, 59) }).id, "X");
+  assert.equal(stayShownFor([X, Y], DEC13, { today: DEC13, minutes: hm(4, 0) }).id, "Y");
+});
+test("R37: the same stay both nights", () => {
+  const Z = { id: "Z", name: "One", firstNight: "2026-12-11", lastNight: "2026-12-14", deleted: false };
+  assert.equal(stayShownFor([Z], DEC13, { today: DEC13, minutes: hm(0, 30) }).id, "Z");
+});
+test("R37: no stay covers last night (first day, or a gap)", () => {
+  assert.equal(stayShownFor([Y], DEC13, { today: DEC13, minutes: hm(0, 30) }).id, "Y");
+  assert.equal(stayShownFor([X, Y], "2026-12-11", { today: "2026-12-11", minutes: hm(0, 30) }).id, "X");
+});
+test("R37: a stay covers last night but none tonight", () => {
+  assert.equal(stayShownFor([X], DEC13, { today: DEC13, minutes: hm(0, 30) }).id, "X");
+  assert.equal(stayShownFor([X], DEC13, { today: DEC13, minutes: hm(4, 0) }), null);
+});
+test("R37: a deleted stay never shows", () => {
+  assert.equal(stayShownFor([{ ...X, deleted: true }, Y], DEC13, { today: DEC13, minutes: hm(0, 30) }).id, "Y");
+  assert.equal(stayShownFor([{ ...X, deleted: true }], DEC13, { today: DEC13, minutes: hm(0, 30) }), null);
+});
+test("R37: other days' tickets are unchanged", () => {
+  assert.equal(stayShownFor([X, Y], "2026-12-14", { today: DEC13, minutes: hm(0, 30) }).id, "Y");
+  assert.equal(stayShownFor([X, Y], "2026-12-12", { today: DEC13, minutes: hm(0, 30) }).id, "X");
+  assert.equal(stayShownFor([X, Y], DEC13, { today: "2026-12-14", minutes: hm(0, 30) }).id, "Y");
+  assert.equal(stayShownFor([X, Y], DEC13, {}).id, "Y");
 });

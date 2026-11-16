@@ -107,6 +107,42 @@ module.exports = [
     },
   },
   {
+    name: "after midnight on a hotel-change day, last night's stay (R37)",
+    async run({ page }) {
+      const backend = await ready(page, { nowMs: Date.parse("2026-12-13T00:30:00+09:00") });
+      await expectText(page, "#dayCount", /^Day 4 of 11 ?today$/);
+      const stayOf = (date) => page.evaluate((sel) => {
+        const b = document.querySelector(sel + " .tk-stay");
+        return b ? { id: b.dataset.stay, text: b.textContent } : null;
+      }, tk(date));
+      const d13 = await stayOf("2026-12-13");
+      assert.equal(d13.id, "planstay0001");
+      for (const s of ["宿泊", "Tonight", "Asakusa hotel"]) assert.ok(d13.text.includes(s), d13.text);
+      // Other tickets are as they were.
+      assert.equal((await stayOf("2026-12-14")).id, "planstay0002");
+      assert.equal((await stayOf("2026-12-12")).id, "planstay0001");
+      await openCard(page, "2026-12-13");
+      const t = await cardText(page);
+      for (const s of ["浅草ホテル", "東京都台東区浅草1-1-1"]) assert.ok(t.includes(s), "the card reads " + s + ": " + t);
+      await page.click("#stayDone");
+      await until(async () => !(await isOpen(page, "stay")), "the card closed");
+      await advance(page, backend, 3.5 * 3600000); // 04:00
+      await until(async () => (await stayOf("2026-12-13")).id === "planstay0002", "from 04:00, tonight's stay");
+      assert.ok((await stayOf("2026-12-13")).text.includes("Niseko lodge"));
+      await expectText(page, "#dayCount", /^Day 4 of 11 ?today$/);
+    },
+  },
+  {
+    name: "after midnight on a phone in Toronto, last night's stay (R37)",
+    timezoneId: "America/Toronto",
+    async run({ page }) {
+      await ready(page, { nowMs: Date.parse("2026-12-13T00:30:00+09:00") });
+      assert.notEqual(await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone), "Asia/Tokyo");
+      await expectText(page, "#dayCount", /^Day 4 of 11 ?today$/);
+      assert.equal(await page.evaluate((sel) => document.querySelector(sel + " .tk-stay").dataset.stay, tk("2026-12-13")), "planstay0001");
+    },
+  },
+  {
     name: "the hotel card",
     async run({ page }) {
       await ready(page);

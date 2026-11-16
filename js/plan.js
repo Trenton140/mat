@@ -73,14 +73,36 @@ export function stopsFor(stops, date) {
   return timed.concat(mine.filter((s) => minutesOf(s.time) === null));
 }
 
+// A stop that has started stays the day's next stop for this long (R38).
+export const NEXT_GRACE_MIN = 30;
+
+// Whole minutes to get to a stop, even from an old cache made before the
+// backend rounded them; 0 when there are none.
+const travelOf = (stop) => {
+  const raw = Number(stop.travelMin);
+  return isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+};
+
+// The day's next stop: the first timed stop still to come, or one that has
+// started and is still in its grace (R38): NEXT_GRACE_MIN minutes after its
+// time, or until it is time to leave for the following timed stop, whichever
+// comes first. `dayStops` in stopsFor order.
 export function nextStopId(dayStops, minutes) {
-  const s = dayStops.find((x) => { const m = minutesOf(x.time); return m !== null && m >= minutes; });
+  const timed = dayStops.filter((x) => minutesOf(x.time) !== null);
+  const s = timed.find((x, i) => {
+    const m = minutesOf(x.time);
+    if (m > minutes) return true;
+    const after = timed[i + 1];
+    const leave = after ? minutesOf(after.time) - travelOf(after) : Infinity;
+    return minutes < Math.min(m + NEXT_GRACE_MIN, leave);
+  });
   return s ? s.id : null;
 }
 
-export function isPast(stop, minutes) {
+// A timed stop whose time has gone, unless it is still the next stop (R38).
+export function isPast(stop, minutes, nextId = null) {
   const m = minutesOf(stop.time);
-  return m !== null && m < minutes;
+  return m !== null && m < minutes && stop.id !== nextId;
 }
 
 const span = (n) => {
@@ -94,14 +116,14 @@ const clock = (n) => String(Math.floor(n / 60)).padStart(2, "0") + ":" + String(
 export function nextLine(stop, minutes) {
   const at = minutesOf(stop.time);
   if (at === null) return "";
-  // Whole minutes, even from an old cache made before the backend rounded them.
-  const raw = Number(stop.travelMin);
-  const travel = isFinite(raw) && raw > 0 ? Math.round(raw) : 0;
+  // Started and still next (R38): no countdown.
+  if (minutes >= at) return "Now.";
+  const travel = travelOf(stop);
   if (travel > 0) {
     const leave = Math.max(0, at - travel);
     return minutes >= leave ? "Leave now." : "Leave by " + clock(leave) + ", in " + span(leave - minutes) + ".";
   }
-  return at - minutes <= 0 ? "Now." : "Next, in " + span(at - minutes) + ".";
+  return "Next, in " + span(at - minutes) + ".";
 }
 
 export function stayFor(stays, date) {
@@ -111,6 +133,20 @@ export function stayFor(stays, date) {
     if (s.firstNight <= date && date <= s.lastNight && (!best || s.firstNight < best.firstNight)) best = s;
   }
   return best;
+}
+
+// The night ends at 04:00 in the trip's zone (R37).
+export const NIGHT_ENDS_MIN = 240;
+
+// The stay a ticket shows: the night's stay (stayFor), except on today's
+// ticket before NIGHT_ENDS_MIN, when it is the stay of the night just begun
+// (last night's) if there is one and it differs from tonight's (R37).
+// `today` and `minutes`: the Days clock in the trip's zone.
+export function stayShownFor(stays, date, { today, minutes } = {}) {
+  const tonight = stayFor(stays, date);
+  if (date !== today || !(minutes < NIGHT_ENDS_MIN)) return tonight;
+  const last = stayFor(stays, dayBefore(date));
+  return last && last !== tonight ? last : tonight;
 }
 
 export function safeHref(v) {
