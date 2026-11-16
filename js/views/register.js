@@ -6,7 +6,8 @@
 // mountRegister(root, store, { now, storage, onClose }) -> { open(day?), edit(id), close(), isOpen() }
 // onClose(): called each time the register closes.
 // root is the phone; the register sits at its bottom over the Money view.
-// storage keeps mat.cur, the currency last used on this phone.
+// A new expense always opens in dollars (CAD); the ¥/$ key switches the one in
+// hand. storage is only used to clear the old mat.cur memory once.
 
 import { defaultRingDay, newId } from "../time.js";
 import { yen, dollars, pt, dayShort } from "../format.js";
@@ -34,7 +35,7 @@ const FIELDS = ["title", "amount", "currency", "paidBy", "day", "kind"]; // spli
 const MARKUP = `
 <div class="reg-top"><span id="regTitle">Ring up</span><button type="button" id="regDone">Done</button></div>
 <div class="lcd">
-  <div class="lcd-1"><input id="xWhat" type="text" maxlength="80" placeholder="what was it?" autocomplete="off" enterkeyhint="done" aria-label="What was it"><span id="xAmt">¥0</span></div>
+  <div class="lcd-1"><input id="xWhat" type="text" maxlength="80" placeholder="what was it?" autocomplete="off" enterkeyhint="done" aria-label="What was it"><span id="xAmt">$0</span></div>
   <div class="lcd-2">
     <div class="step"><button type="button" id="dPrev" aria-label="Earlier day">‹</button><span id="xDay"></span><button type="button" id="dNext" aria-label="Later day">›</button></div>
     <span id="xConv"></span>
@@ -47,7 +48,7 @@ const MARKUP = `
 </div>
 <div class="pad" id="pad">
   <button type="button" class="key" data-k="7">7</button><button type="button" class="key" data-k="8">8</button><button type="button" class="key" data-k="9">9</button><button type="button" class="key" data-k="del" aria-label="Delete">⌫</button>
-  <button type="button" class="key" data-k="4">4</button><button type="button" class="key" data-k="5">5</button><button type="button" class="key" data-k="6">6</button><button type="button" class="key" data-k="cur" id="kCur">¥ → $</button>
+  <button type="button" class="key" data-k="4">4</button><button type="button" class="key" data-k="5">5</button><button type="button" class="key" data-k="6">6</button><button type="button" class="key" data-k="cur" id="kCur">$ → ¥</button>
   <button type="button" class="key" data-k="1">1</button><button type="button" class="key" data-k="2">2</button><button type="button" class="key" data-k="3">3</button><button type="button" class="key go" data-k="go" id="kGo" disabled>Ring<br>it up</button>
   <button type="button" class="key" data-k="0">0</button><button type="button" class="key" data-k="00">00</button><button type="button" class="key" data-k=".">.</button>
 </div>`;
@@ -122,20 +123,13 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     }),
   );
 
-  const storedCur = () => {
-    try {
-      return storage && storage.getItem("mat.cur") === "CAD" ? "CAD" : "JPY";
-    } catch {
-      return "JPY";
-    }
-  };
-  const keepCur = (cur) => {
-    try {
-      if (storage) storage.setItem("mat.cur", cur);
-    } catch {
-      // private mode: it starts in yen next time
-    }
-  };
+  // Older versions remembered the last currency here; a new expense now always
+  // starts in dollars, so the leftover is cleared once.
+  try {
+    if (storage) storage.removeItem("mat.cur");
+  } catch {
+    // storage missing or blocked: nothing to clear
+  }
 
   const names = () => store.state.people.map((p) => p.name);
   const me = () => store.state.me || names()[0] || "";
@@ -143,7 +137,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
 
   // tagged: the label whose kind the line carries while its title still reads so.
   const blank = () => ({ amt: "", tagged: null, split: names(), mode: null, parts: {}, exact: {} });
-  let draft = { ...blank(), editId: null, orig: null, cur: storedCur(), payer: "", day: "pre", rate: null };
+  let draft = { ...blank(), editId: null, orig: null, cur: "CAD", payer: "", day: "pre", rate: null };
   let opened = false;
   let peopleShown = "";
 
@@ -157,7 +151,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
 
   function startFresh(day) {
     resetLine();
-    Object.assign(draft, { editId: null, orig: null, cur: storedCur(), payer: me(), day: day || today() });
+    Object.assign(draft, { editId: null, orig: null, cur: "CAD", payer: me(), day: day || today() });
   }
 
   const kindNow = () => (draft.tagged && what.value.trim() === draft.tagged.label ? draft.tagged.kind : "");
@@ -231,7 +225,6 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
         draft.amt = draft.amt.split(".")[0];
         for (const n of Object.keys(draft.exact)) draft.exact[n] = draft.exact[n].split(".")[0];
       }
-      keepCur(draft.cur);
     } else if (k === "del") {
       draft.amt = draft.amt.slice(0, -1);
     } else if (k === ".") {
@@ -336,8 +329,9 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
       if (!names().includes(draft.payer)) draft.payer = me();
       if (!draft.split.length) draft.split = names();
       draft.day = day || today();
-      draft.cur = storedCur();
-      if (draft.cur === "JPY") draft.amt = draft.amt.split(".")[0];
+      // A half-typed entry put away with Done keeps its own currency, so its
+      // digits never change meaning; an empty one starts in dollars.
+      if (draft.amt === "") draft.cur = "CAD";
     }
     show();
   }

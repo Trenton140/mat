@@ -45,6 +45,13 @@ async function ringOpen(page) {
   await waitOpen(page);
 }
 
+// The register opens in dollars; this switches the entry in hand to yen.
+async function ringOpenYen(page) {
+  await ringOpen(page);
+  await page.click("#kCur");
+  await expectText(page, "#xAmt", "¥0");
+}
+
 // Types a line in and rings it up.
 async function ringUp(page, { title, chip, seq }) {
   if (chip) await page.click('#xQuick .chip[data-q="' + chip + '"]');
@@ -74,7 +81,8 @@ module.exports = [
       await ringOpen(page);
       await expectText(page, "#regTitle", "Ring up");
       await expectText(page, "#xDay", "Sat 12");
-      await expectText(page, "#xAmt", "¥0");
+      await expectText(page, "#xAmt", "$0");
+      await expectText(page, "#kCur", "$ → ¥");
       assert.equal(await isOn(page, seal("xPayer", "Mo")), true, "Mo paid");
       assert.equal(await isOn(page, seal("xPayer", "Ajen")), false);
       for (const n of ["Mo", "Ajen", "Trenton"]) assert.equal(await isOn(page, seal("xSplit", n)), true, n + " shares");
@@ -89,7 +97,7 @@ module.exports = [
     name: "keys and a chip ring up a line; the register resets; the undo bar undoes it",
     async run({ page }) {
       const backend = await ready(page);
-      await ringOpen(page);
+      await ringOpenYen(page);
       await keys(page, "1 4 5 00");
       await page.click('#xQuick .chip[data-q="Dinner"]');
       await expectText(page, "#xAmt", "¥14,500");
@@ -150,7 +158,7 @@ module.exports = [
     name: "the bar: a newer change restarts the 6 seconds, and a notice shows once",
     async run({ page }) {
       const backend = await ready(page);
-      await ringOpen(page);
+      await ringOpenYen(page);
       await ringUp(page, { chip: "Lunch", seq: "9 0 0" });
       await expectText(page, "#ubarT", "Rang up Lunch ¥900.");
       await advance(page, backend, 4000);
@@ -223,11 +231,10 @@ module.exports = [
     },
   },
   {
-    name: "dollars: two decimals at most, remembered on this phone",
+    name: "dollars: two decimals at most",
     async run({ page }) {
       const backend = await ready(page);
       await ringOpen(page);
-      await page.click("#kCur");
       await expectText(page, "#xAmt", "$0");
       await keys(page, "1 2 . 5 0");
       await expectText(page, "#xAmt", "$12.50");
@@ -245,7 +252,6 @@ module.exports = [
       assert.equal(row.amt, "$12.50");
       const bus = await until(() => savedTitled(backend, "Bus")[0], "Bus saved");
       assert.deepEqual([bus.amount, bus.currency], [12.5, "CAD"]);
-      assert.equal(await page.evaluate(() => localStorage.getItem("mat.cur")), "CAD");
 
       await page.click("#regDone");
       await waitClosed(page);
@@ -260,7 +266,39 @@ module.exports = [
       await expectText(page, "#kCur", "$ → ¥");
       await page.click("#kCur");
       await expectText(page, "#xAmt", "¥0");
-      assert.equal(await page.evaluate(() => localStorage.getItem("mat.cur")), "JPY");
+    },
+  },
+  {
+    name: "a new expense always opens in dollars; an old mat.cur is cleared; editing keeps the line's own currency",
+    async run({ page }) {
+      const backend = await open(page, { seed: SEED, nowMs: NOON12, storage: { "mat.cur": "JPY" } });
+      await waitRows(page, 8);
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.cur")), null, "the old memory is gone");
+      await ringOpen(page);
+      await expectText(page, "#xAmt", "$0");
+      await expectText(page, "#kCur", "$ → ¥");
+      await ringUp(page, { title: "Tea", seq: "1 2 . 3 4" });
+      await waitRow(page, "Tea");
+      await page.click("#regDone");
+      await waitClosed(page);
+      await ringOpen(page);
+      await expectText(page, "#xAmt", "$0");
+      await page.click("#kCur");
+      await ringUp(page, { title: "Noodles", seq: "5 0 0" });
+      await waitRow(page, "Noodles");
+      await page.click("#regDone");
+      await waitClosed(page);
+      await ringOpen(page);
+      await expectText(page, "#xAmt", "$0");
+      await expectText(page, "#kCur", "$ → ¥");
+      await page.click("#regDone");
+      await waitClosed(page);
+      assert.equal(await page.evaluate(() => localStorage.getItem("mat.cur")), null, "the key never writes it");
+      const noodles = await until(() => savedTitled(backend, "Noodles")[0], "Noodles saved");
+      await page.evaluate((id) => globalThis.__matTest.register.edit(id), noodles.id);
+      await waitOpen(page);
+      await expectText(page, "#xAmt", "¥500");
+      await expectText(page, "#kCur", "¥ → $");
     },
   },
   {
@@ -314,7 +352,6 @@ module.exports = [
     async run({ page }) {
       const backend = await ready(page);
       await ringOpen(page);
-      await page.click("#kCur");
       await keys(page, "8 0 . 0 0");
       await page.fill("#xWhat", "Karaoke");
       await page.click("#xUneven");
@@ -375,7 +412,6 @@ module.exports = [
     async run({ page }) {
       const backend = await ready(page);
       await ringOpen(page);
-      await page.click("#kCur");
       await keys(page, "8 0 . 0 0");
       await page.fill("#xWhat", "Hotel bar");
       await page.click("#xUneven");
@@ -404,7 +440,6 @@ module.exports = [
     async run({ page }) {
       const backend = await ready(page);
       await ringOpen(page);
-      await page.click("#kCur");
       await keys(page, "8 0 . 0 0");
       await page.fill("#xWhat", "Hotel bar");
       await page.click("#xUneven");
@@ -447,7 +482,7 @@ module.exports = [
     name: "exact amounts in yen are whole yen",
     async run({ page }) {
       const backend = await ready(page);
-      await ringOpen(page);
+      await ringOpenYen(page);
       await keys(page, "8 0 0 0");
       await page.fill("#xWhat", "Okonomiyaki");
       await page.click("#xUneven");
@@ -510,7 +545,7 @@ module.exports = [
       // After an edit the register opens fresh again.
       await ringOpen(page);
       await expectText(page, "#regTitle", "Ring up");
-      await expectText(page, "#xAmt", "¥0");
+      await expectText(page, "#xAmt", "$0");
       assert.equal(await page.inputValue("#xWhat"), "");
       await expectText(page, "#xDay", "Sat 12");
       assert.equal(await isOn(page, seal("xPayer", "Mo")), true);
@@ -626,7 +661,7 @@ module.exports.push({
   name: "the keypad stops at the backend's limit: ¥10,000,000 and $10,000,000",
   async run({ page }) {
     const backend = await ready(page);
-    await ringOpen(page);
+    await ringOpenYen(page);
     await keys(page, "9 9 9 9 9 9 9 9");
     await expectText(page, "#xAmt", "¥9,999,999", undefined);
     await keys(page, "del del del del del del del 1 0 0 0 0 0 0 1");

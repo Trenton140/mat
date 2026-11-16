@@ -208,7 +208,7 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
     const { live, list, bal } = viewerOwed(s);
     say.textContent = s.me ? sentence(standing(s.me, list, bal)) : "";
     // The words stay dim; the three figures are bold and bright.
-    sayP.replaceChildren("The trip so far is ", el("b", "", yen(sum(live, jpyOf))), ", about ", el("b", "", dollars(sum(live, cadCents))),
+    sayP.replaceChildren("The trip so far is ", el("b", "", dollars(sum(live, cadCents))), ", about ", el("b", "", yen(sum(live, jpyOf))),
       ", across ", el("b", "", String(live.length)), live.length === 1 ? " receipt." : " receipts.");
     rateNote.hidden = s.rateSource !== "fallback";
     rateNote.textContent = rateNote.hidden ? "" : STAND_IN_RATE;

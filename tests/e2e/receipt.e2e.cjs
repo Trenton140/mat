@@ -36,11 +36,11 @@ module.exports = [
       const bal = balances(NAMES, exps, SEED.payments);
       await expectText(page, "#say", sentence(standing("Mo", owedList(NAMES, exps, SEED.payments, true), bal)));
       const cents = exps.reduce((a, e) => a + cadCents(e), 0);
-      await expectText(page, "#sayP", "The trip so far is ¥438,340, about " + dollars(cents) + ", across 8 receipts.");
+      await expectText(page, "#sayP", "The trip so far is " + dollars(cents) + ", about ¥438,340, across 8 receipts.");
       assert.equal(dollars(cents), "$3,949.01");
       // Figures in the summary are bold and bright; the words around them stay dim.
       const figs = await page.$$eval("#sayP b", (els) => els.map((b) => [b.textContent, getComputedStyle(b).fontWeight, getComputedStyle(b).color]));
-      assert.deepEqual(figs.map((f) => f[0]), ["¥438,340", "$3,949.01", "8"]);
+      assert.deepEqual(figs.map((f) => f[0]), ["$3,949.01", "¥438,340", "8"]);
       const textColour = await page.evaluate(() => getComputedStyle(document.body).color);
       for (const [, weight, colour] of figs) {
         assert.equal(weight, "700");

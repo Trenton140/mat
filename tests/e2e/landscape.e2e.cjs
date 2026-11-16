@@ -288,6 +288,7 @@ for (const size of SIZES) {
         await money(page);
         await page.click("#ring");
         await waitOpen(page, "reg");
+        await page.click("#kCur"); // dollars to yen
         await keys(page, "4 5 0");
         const amount = () => page.evaluate(() => document.getElementById("xAmt").textContent);
         assert.equal(await amount(), "¥450");
