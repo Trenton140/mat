@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The settlement slip (旅費精算書): who pays whom right now, the stamp spot on
 // each open transfer, stamped payments (newest first, folded beyond two),
 // show the working, the routing sentence, the e-Transfer address, Remind and

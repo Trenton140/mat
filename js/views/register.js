@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The register: the sheet where an expense is rung up or changed. Its own
 // number pad, quick chips, payer and split seals, a day stepper, and the
 // uneven split panel (js/views/uneven.js).

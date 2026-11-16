@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // Trip days judged in the trip's own time zone, and client-made ids.
 
 // "YYYY-MM-DD" for this instant in the given IANA time zone.

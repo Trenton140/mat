@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The day logic for the Days screen. Pure: no DOM, no storage, no clock of
 // its own (callers pass the instant). Every field of a stop, stay or day may
 // be missing or blank, because a person can type into the Sheet by hand.

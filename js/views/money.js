@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The Money screen: where you stand, the settlement slip (js/views/slip.js)
 // and the till receipt.
 // mountMoney(root, store, { onRing(day), onLine(id), onHistory() }) draws into

@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // "Show the working" under a slip row, and the sentence that explains a
 // routed payment. workingLines and routeSentence are pure (safe in Node);
 // drawWorking builds DOM, with every name and title set as textContent.

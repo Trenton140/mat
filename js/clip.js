@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // Puts text on the clipboard: copyText(text) -> Promise<true | false>.
 // `text` may be a promise of the text: it then goes in as a ClipboardItem so
 // Safari still counts the tap that started it, even when the text takes a

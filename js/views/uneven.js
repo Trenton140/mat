@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The uneven split panel (#un), opened from the register. It works on the
 // register's draft: draft.mode ("parts" | "exact" | null), draft.parts
 // ({ name: 1..99 }), draft.exact ({ name: typed string }), plus the draft's
