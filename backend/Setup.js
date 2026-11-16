@@ -60,6 +60,11 @@ function showInvite() {
 // It logs how many payment rows there are, or what is wrong: never a value
 // from the sheet and never its id.
 function checkPlanner() {
+  // Google lets an owner grant only some of a script's permissions, and does
+  // not ask again by itself when a new one is added. This asks for whatever
+  // is still missing (the read-only Sheets permission the pull needs) and
+  // stops this run; the next run then goes through.
+  if (typeof ScriptApp !== "undefined" && ScriptApp.requireAllScopes) ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
   if (!plannerId_()) {
     Logger.log("Planner: not linked yet. Link it with linkPlanner first.");
     return;
