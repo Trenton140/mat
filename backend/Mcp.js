@@ -73,8 +73,9 @@ function mcpCall_(id, p, query) {
   var out;
   try {
     var args = mcpArgs_(tool, raw);
-    var actor = typeof query.as === "string" && names.indexOf(query.as) !== -1 ? query.as : names[0];
-    out = tool.run(args, { actor: actor, names: names });
+    var actor = mcpActor_(query.as, names);
+    if (actor === null && tool.write) mcpBad_("the name in this link (as) isn’t one of the people on this trip.");
+    out = tool.run(args, { actor: actor === null ? names[0] : actor, names: names });
   } catch (e) {
     if (e && typeof e.mcpBadArgs === "string") return mcpError_(id, -32602, e.mcpBadArgs);
     throw e;
@@ -82,6 +83,16 @@ function mcpCall_(id, p, query) {
   var hide = mcpSecrets_(people);
   if (!out.ok) return mcpResult_(id, { content: [{ type: "text", text: mcpScrub_(out.message, hide) }], isError: true });
   return mcpResult_(id, { content: [{ type: "text", text: JSON.stringify(mcpScrub_(out.value, hide)) }] });
+}
+
+// Who the writes are made as (R35): the person `as` names, whatever its case
+// and surrounding spaces; the first person when there is no `as`; null when
+// it names no one (a write is then refused, a read goes ahead).
+function mcpActor_(as, names) {
+  var want = typeof as === "string" ? as.trim().toLowerCase() : "";
+  if (want === "") return names[0];
+  for (var i = 0; i < names.length; i++) if (names[i].trim().toLowerCase() === want) return names[i];
+  return null;
 }
 
 // ---- arguments ----
@@ -107,6 +118,10 @@ function mcpArgs_(tool, raw) {
       spec.type === "boolean" ? typeof v === "boolean" :
       Array.isArray(v) && v.every(function (x) { return typeof x === "string"; });
     if (!fine) mcpBad_(k + " has to be " + { string: "text", number: "a number", integer: "a whole number", boolean: "true or false", array: "a list of names" }[spec.type] + ".");
+    // What a reply hid can't come back as a value: sending it would store
+    // "(hidden)" over the real text. Leaving the field out keeps it.
+    var texts = typeof v === "string" ? [v] : Array.isArray(v) ? v : [];
+    if (texts.some(function (x) { return x.indexOf(MCP_HIDDEN_) !== -1; })) mcpBad_(k + " holds " + MCP_HIDDEN_ + "; leave that field out to keep it.");
     args[k] = v;
   });
   return args;
@@ -155,19 +170,29 @@ function mcpWrite_(kind, action, args, who) {
 
 // ---- what a reply may never hold ----
 
-// The trip key, the token and every e-Transfer address (anything of five
-// letters or more: a shorter one would hide ordinary words).
+// What a reply must not hold. anywhere: the trip key, the token, and each
+// e-Transfer address that looks like an email or a phone number (hidden
+// wherever it appears). whole: every stored e-Transfer address, hidden when a
+// whole text is that address (an address like "Tokyo" must not hide the word
+// in "Tokyo Tower").
 function mcpSecrets_(people) {
-  var out = [tripKey_(), claudeToken_()];
-  people.forEach(function (p) { out.push(String(p.etransfer || "").trim()); });
-  return out.filter(function (s) { return typeof s === "string" && s.length >= 5; });
+  var anywhere = [tripKey_(), claudeToken_()];
+  var whole = [];
+  people.forEach(function (p) {
+    var a = String(p.etransfer || "").trim();
+    if (!a) return;
+    whole.push(a);
+    if (a.indexOf("@") !== -1 || (/^[+()\d\s.\/-]+$/.test(a) && a.replace(/\D/g, "").length >= 7)) anywhere.push(a);
+  });
+  return { anywhere: anywhere.filter(function (s) { return typeof s === "string" && s.length >= 5; }), whole: whole };
 }
 
 // value with every secret and every email in its text hidden.
 function mcpScrub_(value, secrets) {
   if (typeof value === "string") {
+    if (secrets.whole.indexOf(value.trim()) !== -1) return MCP_HIDDEN_;
     var s = value;
-    secrets.forEach(function (x) { s = s.split(x).join(MCP_HIDDEN_); });
+    secrets.anywhere.forEach(function (x) { s = s.split(x).join(MCP_HIDDEN_); });
     return s.replace(MCP_EMAIL_RE_, MCP_HIDDEN_);
   }
   if (Array.isArray(value)) return value.map(function (v) { return mcpScrub_(v, secrets); });
@@ -334,8 +359,22 @@ function mcpChangeStop_(args, who) {
   return mcpWrite_("stop", "updateStop", { id: args.id, patch: mcpStopFields_(args) }, who);
 }
 
+// With an id, the stay already there with the fields given laid over it (a
+// field left out keeps its value; "" clears it). Without one, a new stay.
 function mcpSaveStay_(args, who) {
-  var stay = { id: args.id === undefined ? newId_() : args.id };
+  var plan = planKind_("stay");
+  var stay;
+  if (args.id !== undefined) {
+    var row = findPlanRow_(plan, args.id);
+    if (!row) return { ok: false, message: MSG_.noStay };
+    var cur = plan.fromRow(row);
+    if (cur.deleted) return { ok: false, message: MSG_.editDeleted };
+    stay = planFields_(plan, cur);
+    stay.id = cur.id;
+  } else {
+    ["name", "first_night", "last_night"].forEach(function (k) { if (args[k] === undefined) mcpBad_(k + " is missing."); });
+    stay = { id: newId_() };
+  }
   ["name", "first_night", "last_night", "name_jp", "address_jp", "note", "place", "link"].forEach(function (k) {
     if (args[k] !== undefined) stay[mcpCamel_(k)] = args[k];
   });
@@ -368,6 +407,8 @@ function mcpSchema_(tool) {
     var p = { type: a.type, description: a.description };
     if (a.type === "array") p.items = { type: "string" };
     if (a.enum) p["enum"] = a.enum;
+    if (a.minimum !== undefined) p.minimum = a.minimum;
+    if (a.maximum !== undefined) p.maximum = a.maximum;
     props[k] = p;
     if (a.required) required.push(k);
   });
@@ -387,7 +428,7 @@ function mcpTools_() {
       time: arg("string", "When, 24-hour HH:MM like 14:30; empty for no time."),
       detail: arg("string", "A short line under the name, under 120 letters."),
       getting_there: arg("string", "How to get there, under 300 letters."),
-      travel_min: arg("integer", "Minutes it takes to get there, 0 to 600."),
+      travel_min: { type: "integer", description: "Minutes it takes to get there, 0 to 600.", required: false, minimum: 0, maximum: 600 },
       fixed: arg("boolean", "True when the time can’t move (a booking)."),
       place: arg("string", "A place name or a Google Maps link."),
       sign_jp: arg("string", "The place name in Japanese, as on the signs."),
@@ -414,6 +455,7 @@ function mcpTools_() {
     },
     {
       name: "add_expense",
+      write: true,
       description: "Use this to ring up something someone paid for, shared equally by everyone unless split names fewer people. " + MCP_UNDOABLE_,
       args: {
         title: arg("string", "What it was for, under 80 letters.", true),
@@ -427,17 +469,18 @@ function mcpTools_() {
       },
       run: mcpAddExpense_,
     },
-    { name: "add_stop", description: "Use this to add a stop to one day of the plan. " + MCP_UNDOABLE_, args: stopArgs(true), run: mcpAddStop_ },
-    { name: "change_stop", description: "Use this to change some fields of a stop already in the plan; the others stay as they are. " + MCP_UNDOABLE_, args: changeArgs, run: mcpChangeStop_ },
-    { name: "remove_stop", description: "Use this to take a stop out of the plan. " + MCP_UNDOABLE_, args: { id: arg("string", "The stop’s id, from get_trip.", true) }, run: function (a, w) { return mcpWrite_("stop", "deleteStop", { id: a.id }, w); } },
+    { name: "add_stop", write: true, description: "Use this to add a stop to one day of the plan. " + MCP_UNDOABLE_, args: stopArgs(true), run: mcpAddStop_ },
+    { name: "change_stop", write: true, description: "Use this to change some fields of a stop already in the plan; the others stay as they are. " + MCP_UNDOABLE_, args: changeArgs, run: mcpChangeStop_ },
+    { name: "remove_stop", write: true, description: "Use this to take a stop out of the plan. " + MCP_UNDOABLE_, args: { id: arg("string", "The stop’s id, from get_trip.", true) }, run: function (a, w) { return mcpWrite_("stop", "deleteStop", { id: a.id }, w); } },
     {
       name: "save_stay",
-      description: "Use this to add a place to stay, or with an id to change one already there. " + MCP_UNDOABLE_,
+      description: "Use this to add a place to stay, which needs name, first_night and last_night, or with an id to change only the fields given on one already there. " + MCP_UNDOABLE_,
+      write: true,
       args: {
-        name: arg("string", "The name of the hotel or place, under 80 letters.", true),
-        first_night: arg("string", "The first night, YYYY-MM-DD.", true),
-        last_night: arg("string", "The last night, YYYY-MM-DD.", true),
-        id: arg("string", "The stay’s id, from get_trip, to change that stay."),
+        name: arg("string", "The name of the hotel or place, under 80 letters. Needed without an id."),
+        first_night: arg("string", "The first night, YYYY-MM-DD. Needed without an id."),
+        last_night: arg("string", "The last night, YYYY-MM-DD. Needed without an id."),
+        id: arg("string", "The stay’s id, from get_trip, to change that stay; fields left out keep their values."),
         name_jp: arg("string", "The name in Japanese."),
         address_jp: arg("string", "The address in Japanese, to show a taxi driver."),
         note: arg("string", "A note, under 300 letters."),
@@ -446,9 +489,10 @@ function mcpTools_() {
       },
       run: mcpSaveStay_,
     },
-    { name: "remove_stay", description: "Use this to take a stay out of the plan. " + MCP_UNDOABLE_, args: { id: arg("string", "The stay’s id, from get_trip.", true) }, run: function (a, w) { return mcpWrite_("stay", "deleteStay", { id: a.id }, w); } },
+    { name: "remove_stay", write: true, description: "Use this to take a stay out of the plan. " + MCP_UNDOABLE_, args: { id: arg("string", "The stay’s id, from get_trip.", true) }, run: function (a, w) { return mcpWrite_("stay", "deleteStay", { id: a.id }, w); } },
     {
       name: "set_day",
+      write: true,
       description: "Use this to change a day’s ticket: its city, title, train line and the stations it runs from and to. " + MCP_UNDOABLE_,
       args: {
         date: arg("string", "The day, YYYY-MM-DD, one of the trip’s days.", true),
@@ -472,6 +516,7 @@ function mcpTools_() {
     },
     {
       name: "undo",
+      write: true,
       description: "Use this to undo one change from get_history, as the app’s Undo does; only the newest change to an item can be undone. The undo shows in the app’s History too.",
       args: { log_id: arg("integer", "The change’s id, from get_history or a write’s log_id.", true) },
       run: mcpUndo_,

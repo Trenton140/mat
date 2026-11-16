@@ -175,7 +175,10 @@ test("tools/list names the eleven tools in order, each schema listing its own ar
   const req = Object.fromEntries(tools.map((t) => [t.name, (t.inputSchema.required || []).slice().sort()]));
   assert.deepEqual(req.add_expense, ["amount", "currency", "paid_by", "title"]);
   assert.deepEqual(req.add_stop, ["date", "title"]);
-  assert.deepEqual(req.save_stay, ["first_night", "last_night", "name"]);
+  assert.deepEqual(req.save_stay, [], "save_stay's needs depend on id, so its description says them");
+  assert.match(tools.find((t) => t.name === "save_stay").description, /needs name, first_night and last_night, or with an id to change only the fields given/);
+  const travel = tools.find((t) => t.name === "add_stop").inputSchema.properties.travel_min;
+  assert.deepEqual([travel.type, travel.minimum, travel.maximum], ["integer", 0, 600]);
   assert.deepEqual(req.get_trip, []);
   for (const t of tools) {
     if (/^(add|change|remove|save|set)_|^undo$/.test(t.name)) assert.match(t.description, /History/, t.name + " says it shows in History");
@@ -238,9 +241,9 @@ test("a time is trimmed before it is handed on; an empty one is no time", () => 
 
 // ---------- writes go through the app's own actions ----------
 
-test("writes are made as the person `as` names, else the first person, always via claude", () => {
+test("writes are made as the person `as` names (any case, spaces trimmed), else the first person, always via claude (R35)", () => {
   const fake = createFakeBackend({});
-  for (const [as, who] of [["Trenton", "Trenton"], ["Nobody", "Mo"], [undefined, "Mo"], ["mo", "Mo"]]) {
+  for (const [as, who] of [["Trenton", "Trenton"], ["ajen", "Ajen"], [" Ajen ", "Ajen"], [undefined, "Mo"]]) {
     ok(fake, "add_stop", { date: "2026-12-11", title: "With " + as }, as === undefined ? T : { ...T, as });
     const log = fake.tables.Log.at(-1);
     assert.deepEqual([log.who, log.via], [who, "claude"], String(as));
@@ -525,4 +528,96 @@ test("Apps Script side: setup() and migrate make the token from Utilities.getUui
   assert.match(ctx.newId_(), /^[A-Za-z][A-Za-z0-9]{19}$/);
   const setup = fs.readFileSync(path.join(__dirname, "..", "backend", "Setup.js"), "utf8");
   assert.match(setup.slice(setup.indexOf("function setup()"), setup.indexOf("function seedIfEmpty_")), /ensureClaudeToken_\(\);/);
+});
+
+// ---------- fix round 1 ----------
+
+test("R35: an `as` that names no one refuses every write with -32602 and stores nothing; reads still work", () => {
+  const fake = createFakeBackend(plan);
+  const before = JSON.stringify(fake.tables);
+  const q = { ...T, as: "nobody" };
+  for (const [name, args] of [
+    ["add_expense", { title: "Tea", amount: 500, currency: "JPY", paid_by: "Mo" }],
+    ["add_stop", { date: "2026-12-12", title: "Tea" }],
+    ["remove_stop", { id: "planstop1101" }],
+    ["undo", { log_id: 1 }],
+  ]) {
+    const r = call(fake, name, args, q);
+    assert.equal(r.error && r.error.code, -32602, name);
+    assert.equal(r.error.message, "Invalid params: the name in this link (as) isn’t one of the people on this trip.");
+    for (const n of NAMES) assert.equal(r.error.message.includes(n), false);
+  }
+  assert.equal(JSON.stringify(fake.tables), before, "nothing stored");
+  assert.ok(ok(fake, "get_trip", {}, q).trip);
+  assert.ok(ok(fake, "get_history", {}, q).entries);
+  assert.ok(ok(fake, "explain_debt", { from: "Mo", to: "Ajen" }, q).from);
+  // An empty as is no as: the first person.
+  ok(fake, "add_stop", { date: "2026-12-12", title: "Tea" }, { ...T, as: " " });
+  assert.equal(fake.tables.Log.at(-1).who, "Mo");
+});
+
+test("save_stay with an id changes only the fields given; an empty string clears one", () => {
+  const fake = createFakeBackend(plan);
+  const s = ok(fake, "save_stay", { name: "Ryokan", first_night: "2026-12-14", last_night: "2026-12-15", name_jp: "旅館", address_jp: "京都市東山区", note: "late check-in", place: "Gion", link: "https://example.test/r" }).stay;
+  const moved = ok(fake, "save_stay", { id: s.id, last_night: "2026-12-16" }).stay;
+  assert.deepEqual(moved, { ...s, lastNight: "2026-12-16" });
+  const row = fake.tables.Stays.find((r) => r.id === s.id);
+  assert.deepEqual([row.address_jp, row.note, row.link], ["京都市東山区", "late check-in", "https://example.test/r"]);
+  const cleared = ok(fake, "save_stay", { id: s.id, note: "" }).stay;
+  assert.deepEqual([cleared.note, cleared.addressJp, cleared.lastNight], ["", "京都市東山区", "2026-12-16"]);
+  assert.equal(fake.tables.Log.at(-1).via, "claude");
+});
+
+test("save_stay: an id that names no stay is refused, a deleted stay is not revived, and without an id the three are needed", () => {
+  const fake = createFakeBackend(plan);
+  const stays = fake.tables.Stays.length;
+  assert.equal(refusal(fake, "save_stay", { id: "nosuchstay01", name: "x", first_night: "2026-12-14", last_night: "2026-12-14" }), "That stay isn’t there any more.");
+  assert.equal(fake.tables.Stays.length, stays, "no stay made with that id");
+  const s = ok(fake, "save_stay", { name: "Inn", first_night: "2026-12-14", last_night: "2026-12-14" }).stay;
+  ok(fake, "remove_stay", { id: s.id });
+  assert.equal(refusal(fake, "save_stay", { id: s.id, note: "x" }), "Bring it back first.");
+  assert.equal(fake.tables.Stays.find((r) => r.id === s.id).deleted_at !== "", true);
+  for (const missing of ["name", "first_night", "last_night"]) {
+    const args = { name: "Inn", first_night: "2026-12-14", last_night: "2026-12-14" };
+    delete args[missing];
+    assert.equal(badArgs(fake, "save_stay", args), "Invalid params: " + missing + " is missing.");
+  }
+});
+
+test("a string argument holding (hidden) is refused, so leaving a field out keeps it, for stops and stays", () => {
+  const fake = createFakeBackend(plan);
+  const stop = ok(fake, "add_stop", { date: "2026-12-12", title: "Dinner", note: "confirm with bob@example.com" }).stop;
+  assert.equal(stop.note, "confirm with (hidden)");
+  const logs = fake.tables.Log.length;
+  assert.equal(badArgs(fake, "change_stop", { id: stop.id, note: stop.note + " at 7" }), "Invalid params: note holds (hidden); leave that field out to keep it.");
+  assert.equal(badArgs(fake, "add_expense", { title: "x", amount: 1, currency: "JPY", paid_by: "Mo", split: ["Mo", "(hidden)"] }), "Invalid params: split holds (hidden); leave that field out to keep it.");
+  assert.equal(badArgs(fake, "add_stop", { date: "2026-12-12", title: "(hidden)" }), "Invalid params: title holds (hidden); leave that field out to keep it.");
+  assert.equal(fake.tables.Log.length, logs);
+  ok(fake, "change_stop", { id: stop.id, time: "19:00" });
+  assert.equal(fake.tables.Stops.find((r) => r.id === stop.id).note, "confirm with bob@example.com", "left out, kept");
+
+  const stay = ok(fake, "save_stay", { name: "Inn", first_night: "2026-12-14", last_night: "2026-12-14", note: "keys from ann@example.com" }).stay;
+  assert.equal(badArgs(fake, "save_stay", { id: stay.id, note: stay.note }), "Invalid params: note holds (hidden); leave that field out to keep it.");
+  ok(fake, "save_stay", { id: stay.id, last_night: "2026-12-15" });
+  assert.equal(fake.tables.Stays.find((r) => r.id === stay.id).note, "keys from ann@example.com", "left out, kept");
+});
+
+test("an e-Transfer address that is an ordinary word hides only a field that is exactly it; a phone or email address is never returned", async () => {
+  const fake = createFakeBackend({ ...seed, ...plan });
+  await app(fake, "setPerson", { name: "Mo", patch: { etransfer: "Tokyo" } });
+  await app(fake, "setPerson", { name: "Ajen", patch: { etransfer: "+1 (416) 555-0123" } }, "Ajen");
+  await app(fake, "setPerson", { name: "Trenton", patch: { etransfer: "trent@example.net" } }, "Trenton");
+  const s = ok(fake, "add_stop", { date: "2026-12-12", title: "Tokyo Tower", detail: "Tokyo", note: "Ajen: +1 (416) 555-0123, Trenton: trent@example.net" }).stop;
+  assert.equal(s.title, "Tokyo Tower");
+  assert.equal(s.detail, "(hidden)", "a field that is exactly the address");
+  assert.equal(s.note, "Ajen: (hidden), Trenton: (hidden)");
+  const all = [
+    JSON.stringify(call(fake, "get_trip", {})),
+    JSON.stringify(call(fake, "get_history", { limit: 200 })),
+    JSON.stringify(call(fake, "explain_debt", { from: "Ajen", to: "Mo" })),
+    JSON.stringify(call(fake, "change_stop", { id: s.id, link: "javascript:+1 (416) 555-0123" })),
+    JSON.stringify(call(fake, "add_expense", { title: "x", amount: 1, currency: "JPY", paid_by: "trent@example.net" })),
+  ].join("");
+  assert.equal(all.includes("555-0123") || all.includes("trent@example.net"), false);
+  assert.ok(all.includes("Tokyo Tower"));
 });
