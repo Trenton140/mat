@@ -58,6 +58,19 @@ const stored = (backend, id) => backend.fake.tables.Todos.find((r) => r.id === i
 // The day of an instant in Japan (the test phone's own zone), as "Nov 17".
 const phoneDay = (ms) => new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Tokyo", month: "short", day: "numeric" }).format(new Date(ms));
 
+// The thud's audio, counted: window.__thuds goes up each time it sounds.
+function stubSound(page) {
+  return page.evaluate(() => {
+    window.__thuds = 0;
+    window.AudioContext = function () {
+      return { state: "running", currentTime: 0, destination: {}, createOscillator: () => ({ type: "", frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, start() { window.__thuds++; }, stop() {} }), createGain: () => ({ gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }) };
+    };
+  });
+}
+
+// Book Now's row for item n in seedWith's tab (a title row, then the header).
+const bookRow = (backend, n) => backend.fake.planner.tabs["Book Now"].find((r) => r[0] === n);
+
 async function openRow(page, id) {
   await page.click(row(id) + " .bw-b");
   await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row(id)), "row " + id + " opens");
@@ -117,6 +130,15 @@ module.exports = [
       assert.ok(names.every((n) => n.includes("Rail pass seat reservations")), names.join(" | "));
       await expectText(page, row(1) + " .bw-claim", "I’ll do it");
       await expectText(page, row(1) + " .bw-tick", "Tick it off済");
+      // Weight: the link is outlined like I’ll do it; the stamp spot alone is a solid vermilion ring.
+      const look = await page.evaluate((s) => {
+        const cs = (q) => getComputedStyle(document.querySelector(s + " " + q));
+        const a = cs("a.bw-link");
+        const c = cs(".bw-claim");
+        const g = cs(".bw-tick .ghost");
+        return { linkFill: a.backgroundColor, sameBorder: a.borderTopStyle === c.borderTopStyle && a.borderTopWidth === c.borderTopWidth && a.fontWeight === c.fontWeight, ring: g.borderTopStyle + " " + g.borderTopWidth, ringInk: g.borderTopColor };
+      }, row(1));
+      assert.deepEqual(look, { linkFill: "rgba(0, 0, 0, 0)", sameBorder: true, ring: "solid 2px", ringInk: "rgb(214, 60, 30)" });
       // No link: no link control.
       await openRow(page, "3");
       assert.equal(await page.evaluate((s) => document.querySelector(s).classList.contains("is-open"), row(1)), false, "opening one closes the other");
@@ -177,19 +199,13 @@ module.exports = [
     name: "Tick it off: the stamp lands with its thud, the planner is written, the row moves to done; History has it and its Undo brings it back",
     async run({ page }) {
       const backend = await ready(page);
-      await page.evaluate(() => {
-        window.__thuds = 0;
-        const AC = function () {
-          return { state: "running", currentTime: 0, destination: {}, createOscillator: () => ({ type: "", frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {}, start() { window.__thuds++; }, stop() {} }), createGain: () => ({ gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect() {} }) };
-        };
-        window.AudioContext = AC;
-      });
+      await stubSound(page);
       await openRow(page, "3");
       await page.click(row(3) + " .bw-tick");
       // Stamped in place, with the settle stamp's hit.
       await until(() => page.$(row(3) + ".is-landed .bw-spot .stamp.hit"), "the stamp lands on the row");
       assert.deepEqual(await rowIds(page), ["1", "2", "3", "4"], "still where it was");
-      assert.equal(await page.evaluate(() => window.__thuds), 1, "the thud");
+      await until(() => page.evaluate(() => window.__thuds === 1), "the thud, once the tick is taken");
       await expectText(page, row(3) + " .bw-due", "済 Mo · " + phoneDay(BEFORE));
       await expectText(page, "#ubarT", "Ticked off Snow park day trip.");
       await until(() => stored(backend, "3").ticked_by === "Mo" && stored(backend, "3").planner_written === "yes", "ticked and written to the planner");
@@ -219,6 +235,12 @@ module.exports = [
       await page.click("#histDone");
       await until(async () => (await rowIds(page)).includes("3"), "back among the open items");
       await expectText(page, "#bwDoneB", "済 Done (1)");
+      assert.ok(await visible(page, "#bwDone"), "still open while Days stays the screen");
+      // It does not stay open: the next time Days is shown it is folded again.
+      await page.click('#nav button[data-tab="money"]');
+      await page.click('#nav button[data-tab="days"]');
+      await until(async () => !(await visible(page, "#bwDone")), "folded again");
+      assert.equal(await page.getAttribute("#bwDoneB", "aria-expanded"), "false");
     },
   },
   {
@@ -245,11 +267,14 @@ module.exports = [
     name: "a tick refused (another phone ticked it first) rolls back with the usual notice; offline it is not saved",
     async run({ page }) {
       const backend = await ready(page);
+      await stubSound(page);
       assert.equal((await backend.call("tickTodo", { id: "4" }, "Ajen")).ok, true);
       await openRow(page, "4");
       await page.click(row(4) + " .bw-tick");
       await expectText(page, "#ubarT", "That one is already done.");
       await until(() => page.evaluate((s) => { const r = document.querySelector(s); return !r || !r.classList.contains("is-landed"); }, row(4)), "no longer stamped");
+      await advance(page, backend, 1700);
+      assert.equal(await page.evaluate(() => window.__thuds), 0, "no thud for a tick refused");
 
       await page.context().setOffline(true);
       await openRow(page, "1");
@@ -257,6 +282,7 @@ module.exports = [
       await expectText(page, "#ubarT", "No signal. That wasn’t saved.");
       await until(async () => (await rowIds(page)).includes("1") && !(await page.$(row(1) + ".is-landed")), "back to open");
       assert.equal(stored(backend, "1").ticked_by, "");
+      assert.equal(await page.evaluate(() => window.__thuds), 0, "no thud offline either");
       await page.context().setOffline(false);
     },
   },
@@ -278,6 +304,13 @@ module.exports = [
       await until(() => stored(backend, "2").ticked_by === "Mo", "ticked");
       await advance(page, backend, 1700);
       await until(async () => !(await visible(page, "#todos")), "nothing shows once all is done");
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "dayCount", "focus goes to the day counter, not lost");
+      // A later sync that brings an item back does not take focus.
+      await page.evaluate(() => document.getElementById("dayCount").focus());
+      assert.equal((await backend.call("undo", { logId: Number(backend.fake.tables.Log[backend.fake.tables.Log.length - 1].id) }, "Ajen")).ok, true);
+      await page.evaluate(() => window.__matTest.store.checkRev());
+      await until(() => visible(page, "#todos"), "back, open again");
+      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "dayCount", "focus left where it was");
     },
   },
   {
@@ -386,9 +419,11 @@ module.exports = [
         const view = document.getElementById("vDays").getBoundingClientRect();
         const card = document.getElementById("bwCard").getBoundingClientRect();
         const tick = document.querySelector('#bwOpen .bw-r[data-id="1"] .bw-tick').getBoundingClientRect();
-        return { inside: card.left >= view.left && card.right <= view.right, tickIn: tick.right <= card.right, scroll: document.getElementById("vDays").scrollWidth <= document.getElementById("vDays").clientWidth };
+        const ctl = [...document.querySelectorAll('#bwOpen .bw-r[data-id="1"] .bw-ctl > *')].map((n) => n.getBoundingClientRect());
+        const all = ctl.length === 3 && ctl.every((b) => b.left >= card.left && b.right <= card.right && b.width > 0);
+        return { inside: card.left >= view.left && card.right <= view.right, tickIn: tick.right <= card.right, all, scroll: document.getElementById("vDays").scrollWidth <= document.getElementById("vDays").clientWidth };
       });
-      assert.deepEqual(fit, { inside: true, tickIn: true, scroll: true });
+      assert.deepEqual(fit, { inside: true, tickIn: true, all: true, scroll: true });
     },
   },
   {
@@ -403,6 +438,104 @@ module.exports = [
       });
       assert.equal(box.right, true);
       assert.ok(box.h >= 44, "tap target " + box.h);
+    },
+  },
+  {
+    name: "what the planner says is only ever text: markup is printed as written, a javascript: link is no link, a long word never pushes the page sideways",
+    async run({ page }) {
+      const items = [
+        { "#": 1, Item: "<img src=x onerror=alert(1)>", "Book by": "2026-11-20", Status: "Not booked", Notes: "<b>bold?</b>", "Booking link": "javascript:alert(1)" },
+        { "#": 2, Item: "A".repeat(300), "Book by": "2026-11-21", Status: "Not booked", "Booking link": "http://plain.example.test/x" },
+      ];
+      let dialogs = 0;
+      page.on("dialog", (d) => {
+        dialogs += 1;
+        d.dismiss().catch(() => {});
+      });
+      await ready(page, { items });
+      await expectText(page, row(1) + " .bw-n", "<img src=x onerror=alert(1)>");
+      assert.equal(await page.$("#todos img"), null, "no image made from the item");
+      await openRow(page, "1");
+      await expectText(page, row(1) + " .bw-note", "<b>bold?</b>");
+      assert.equal(await page.$(row(1) + " a"), null, "a javascript: link is no link");
+      await openRow(page, "2");
+      assert.equal(await page.$(row(2) + " a"), null, "an http: link is no link on the phone");
+      const wide = await page.evaluate(() => {
+        const v = document.getElementById("vDays");
+        const t = document.getElementById("todos");
+        return { view: v.scrollWidth <= v.clientWidth, list: t.scrollWidth <= t.clientWidth };
+      });
+      assert.deepEqual(wide, { view: true, list: true });
+      assert.equal(dialogs, 0, "no dialog fired");
+    },
+  },
+  {
+    name: "Fetch tapped while a quiet fetch is under way: that one finishes, then the tap gets its own forced fetch",
+    async run({ page }) {
+      const backend = await listBackend({ ago: 61 * MIN });
+      let release;
+      const gate = new Promise((r) => (release = r));
+      const handle = backend.handle;
+      let held = 0;
+      backend.handle = async (body) => {
+        if (body.action === "syncTodos" && held++ === 0) await gate;
+        return handle(body);
+      };
+      await ready(page, { backend });
+      await until(() => held === 1, "the quiet fetch is out");
+      await page.click("#bwFetch");
+      await expectText(page, "#bwFetch", "Fetching…");
+      release();
+      await expectText(page, "#bwFetch", "Up to date ✓");
+      assert.deepEqual(sent(backend, "syncTodos").map((r) => r.args), [{ force: false }, { force: true }]);
+      // Within 30 seconds of the last pull the backend answers the stored list: the line shows when that was.
+      const pulled = await page.evaluate(() => window.__matTest.store.state.todosPulledAt);
+      assert.ok(pulled);
+      const clock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(Date.parse(pulled)));
+      await expectText(page, "#bwAt", "From the planner · fetched " + clock);
+    },
+  },
+  {
+    name: "the planner's own say: an undo that leaves the planner alone is no error; a pull that takes a tick off shows the item open again",
+    async run({ page }) {
+      const backend = await ready(page);
+      const undos = [];
+      const handle = backend.handle;
+      backend.handle = async (body) => {
+        const env = await handle(body);
+        if (body.action === "undo") undos.push(env);
+        return env;
+      };
+      // Ticked and written, then someone changes the planner's Status by hand.
+      await openRow(page, "3");
+      await page.click(row(3) + " .bw-tick");
+      await until(() => stored(backend, "3").planner_written === "yes", "written");
+      bookRow(backend, 3)[4] = "Booked (paid at the desk)";
+      await page.click("#ubarU");
+      await expectText(page, "#ubarT", "Undone.");
+      await until(() => stored(backend, "3").ticked_by === "", "undone");
+      assert.equal(backend.requests.filter((r) => r.action === "undo").length, 1);
+      assert.deepEqual(undos.map((e) => [e.ok, e.data && e.data.planner]), [[true, "kept"]], "the backend answered kept");
+      assert.deepEqual(backend.fake.planner.writes.map((w) => w.kind), ["cell", "append"], "the planner was left alone (kept)");
+      assert.equal(bookRow(backend, 3)[4], "Booked (paid at the desk)");
+      await page.evaluate(() => window.__matTest.store.idle());
+      assert.equal(await page.evaluate(() => window.__matTest.store.state.notice), null, "no error said");
+
+      // A tick the planner has not taken; then the planner gives that number to another item.
+      backend.fake.planner.cellFails = true;
+      await openRow(page, "1");
+      await page.click(row(1) + " .bw-tick");
+      await until(() => stored(backend, "1").ticked_by === "Mo", "ticked");
+      await advance(page, backend, 1700);
+      await until(() => page.$('#bwDone .bw-d[data-id="1"]'), "done in the app");
+      bookRow(backend, 1)[1] = "Rail pass return leg";
+      backend.fake.planner.cellFails = false;
+      await advance(page, backend, 31 * 1000);
+      await page.click("#bwFetch");
+      await until(async () => (await rowIds(page)).includes("1"), "open again");
+      await expectText(page, row(1) + " .bw-n", "Rail pass return leg");
+      assert.equal(await page.evaluate((s) => document.querySelector(s).classList.contains("is-empty"), row(1) + " .bw-seal"), true);
+      assert.equal(await page.$('#bwDone .bw-d[data-id="1"]'), null);
     },
   },
 ];

@@ -1079,6 +1079,14 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   async function syncTodos({ force = false, quiet = false } = {}) {
     let r = null;
     let more = false;
+    // What the backend answered: into base (an unfinished pull keeps the last fetched time).
+    const keep = (got) => {
+      const d = (got && got.data) || {};
+      if (!base || !Array.isArray(d.todos)) return;
+      const pulledAt = typeof d.pulledAt === "string" && d.pulledAt ? d.pulledAt : base.todosPulledAt || "";
+      base = { ...base, todos: copy(d.todos), todosPulledAt: pulledAt };
+      saveCache();
+    };
     try {
       for (let n = 0; n < TODO_PULLS; n++) {
         r = await call("syncTodos", { force: n === 0 ? force : true });
@@ -1086,18 +1094,13 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         if (!more) break;
       }
     } catch (err) {
-      if (!quiet) {
-        state.notice = neverSent(err) ? NO_SIGNAL : failNotice(err);
-        changed();
-      }
+      // A later call failed: what the earlier ones brought in still counts.
+      if (r) keep(r);
+      if (!quiet) state.notice = neverSent(err) ? NO_SIGNAL : failNotice(err);
+      changed();
       return { ok: false, code: codeOf(err), message: (err && err.message) || "" };
     }
-    const d = r.data || {};
-    if (base && Array.isArray(d.todos)) {
-      const pulledAt = typeof d.pulledAt === "string" && d.pulledAt ? d.pulledAt : base.todosPulledAt || "";
-      base = { ...base, todos: copy(d.todos), todosPulledAt: pulledAt };
-      saveCache();
-    }
+    keep(r);
     changed();
     return { ok: true, more, pulledAt: state.todosPulledAt || "" };
   }

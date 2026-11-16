@@ -2568,3 +2568,20 @@ test("claimTodo: I’ll do it, take it over, hand it back, each with its own wor
   assert.equal(byId(p.store.state.todos, "2").claimedBy, "Mo");
   assert.deepEqual(p.net.sent.filter((b) => b.action === "claimTodo").map((b) => b.args), [{ id: "1", on: true }, { id: "1", on: false }, { id: "2", on: true }]);
 });
+
+test("syncTodos: when a later call of a long pull fails, what the earlier one brought in is kept, and the failure is said", async () => {
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  let calls = 0;
+  p.net.override = (b) => {
+    if (b.action !== "syncTodos") return null;
+    calls += 1;
+    p.net.failing.add("syncTodos"); // the next one has no signal
+    return { ok: true, rev: 0, data: { todos: [{ id: "9", item: "Made-up first part", bookBy: "", status: "", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: false }], pulledAt: "", more: true, problems: [] } };
+  };
+  const r = await p.store.syncTodos({ force: true });
+  assert.equal(calls, 1);
+  assert.equal(r.ok, false);
+  assert.deepEqual(p.store.state.todos.map((t) => t.id), ["9"], "the first answer is kept");
+  assert.equal(p.store.state.notice, "Couldn’t confirm that. Checking…");
+});

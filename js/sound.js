@@ -22,6 +22,23 @@ export function setSound(on) {
   }
 }
 
+// Called within a tap whose thud comes later (after an answer): makes and
+// wakes the audio while the tap still allows it, so the later thud can play.
+export function primeSound() {
+  if (!soundOn()) return;
+  try {
+    const AC = globalThis.AudioContext || globalThis.webkitAudioContext;
+    if (!AC) return;
+    if (!ac) ac = new AC();
+    if (ac.state === "suspended") {
+      const p = ac.resume();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    }
+  } catch {
+    // no sound: nothing to wake
+  }
+}
+
 export function thud() {
   if (!soundOn()) return;
   try {

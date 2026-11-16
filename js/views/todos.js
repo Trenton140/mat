@@ -17,7 +17,8 @@
 //
 // A row opens in place (as a ticket's stop does): the whole item, the note
 // and the controls. Ticking is the settle stamp's moment: the same red 済
-// lands where the tap was, with the same thud (and the same sound setting);
+// lands where the tap was, with the same thud (and the same sound setting)
+// once the store has taken the tick (never for one refused at once);
 // the row stays where it was, stamped, until the backend has answered and a
 // moment has passed, then moves to the done group, which opens to show it.
 //
@@ -29,7 +30,7 @@
 import { safeHref, nowIn } from "../plan.js";
 import { fillSeal } from "../picture.js";
 import { paidStampSVG } from "../stamp.js";
-import { thud } from "../sound.js";
+import { thud, primeSound } from "../sound.js";
 import { clock as hhmm, localDay, dayHead } from "../format.js";
 import { homeToday, dueLine, byBookBy, doneTodos, isDone, plannerPending, tickedLine, isStale, openCountText } from "../todos.js";
 
@@ -166,9 +167,11 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     const inner = el("div");
     if (t.note) inner.append(el("p", "bw-note", t.note));
     const ctl = el("div", "bw-ctl");
-    const href = safeHref(t.link);
+    // On the phone only a plain https address becomes a link.
+    const safe = safeHref(t.link);
+    const href = /^https:\/\//i.test(safe || "") ? safe : "";
     if (href) {
-      const a = el("a", "r-map bw-link", "Open the booking ↗");
+      const a = el("a", "r-map alt bw-link", "Open the booking ↗");
       a.href = href;
       a.target = "_blank";
       a.rel = "noopener";
@@ -319,7 +322,13 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     const shownOpen = byBookBy(todos.filter((t) => !isDone(t) || landed.has(t.id)));
     const stillOpen = shownOpen.filter((t) => !landed.has(t.id)).length;
     if (!ready || (!before && shownOpen.length === 0)) {
+      // Focus in the list goes to the day counter before the list goes.
+      if (!section.hidden && section.contains(document.activeElement)) {
+        const head = document.getElementById("dayCount");
+        if (head) head.focus({ preventScroll: true });
+      }
       section.hidden = true;
+      focusLanded = null;
       return;
     }
     const spot = focusSpot();
@@ -368,6 +377,11 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     let moved = false;
     for (const [id, l] of landed) {
       const t = list(s.todos).find((x) => x && x.id === id);
+      // The store has taken the tick: now the thud.
+      if (l.sound && t && isDone(t) && !t.pending) {
+        l.sound = false;
+        thud();
+      }
       if (t && !t.pending && now() - l.at >= HOLD_MS) {
         landed.delete(id);
         moved = true;
@@ -391,7 +405,8 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
   function tick(id) {
     const t = list(store.state.todos).find((x) => x && x.id === id);
     if (!t || isDone(t)) return;
-    landed.set(id, { at: now() });
+    landed.set(id, { at: now(), sound: true });
+    primeSound();
     hitId = id;
     focusLanded = id;
     openId = null;
@@ -403,7 +418,6 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
       render();
       return;
     }
-    thud();
     setTimeout(draw, HOLD_MS);
   }
 
@@ -457,7 +471,9 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     say(FETCHING);
     let r;
     try {
-      r = await (pull || store.syncTodos({ force: true }));
+      // A quiet fetch under way finishes first; the tap still gets its own.
+      if (pull) await pull;
+      r = await store.syncTodos({ force: true });
     } catch {
       r = { ok: false };
     }
@@ -493,7 +509,14 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     let shown = screen.classList.contains("is-active");
     new MutationObserver(() => {
       const on = screen.classList.contains("is-active");
-      if (on && !shown) wake();
+      if (on && !shown) {
+        // The done group a tick opened is folded again on coming back.
+        if (doneOpen) {
+          doneOpen = false;
+          render();
+        }
+        wake();
+      }
       shown = on;
     }).observe(screen, { attributes: true, attributeFilter: ["class"] });
   }
