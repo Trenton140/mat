@@ -72,8 +72,8 @@ function checkPlanner() {
     return;
   }
   var read = paymentsFromRows(rows);
-  if (read.problems.length && read.problems[0].message.indexOf("missing the column") !== -1) {
-    Logger.log("Planner: " + read.problems[0].message);
+  if (read.missing) {
+    Logger.log("Planner: " + read.missing);
     return;
   }
   var n = rows.slice(1).filter(function (r) { return !plannerBlank_(r); }).length;

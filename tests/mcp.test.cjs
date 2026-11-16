@@ -719,12 +719,31 @@ test("sync_payments brings the planner's payments in, as the person in the link,
   assert.equal(tool.description, "Use this to bring in what’s been paid from the planner sheet’s Payments tab: new payments are added and changed ones updated. The change shows in the app’s History and can be undone.");
   assert.deepEqual(tool.inputSchema, { type: "object", properties: {}, additionalProperties: false });
   const r = ok(fake, "sync_payments", {}, { ...T, as: " ajen " });
-  assert.deepEqual(r, { added: 1, changed: 0, same: 0, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }] });
+  assert.deepEqual(r, { added: 1, changed: 0, same: 0, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
   assert.deepEqual(fake.tables.Log.map((l) => [l.who, l.via]), [["Ajen", "planner"]]);
-  assert.deepEqual(ok(fake, "sync_payments", {}), { added: 0, changed: 0, same: 1, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }] });
+  assert.deepEqual(ok(fake, "sync_payments", {}), { added: 0, changed: 0, same: 1, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
   const h = ok(fake, "get_history", {});
   assert.equal(h.entries[0].sentence, "Ajen rang up Rail pass $221.52 (from the planner)");
   assert.equal(badArgs(fake, "sync_payments", { id: "x" }), "Invalid params: unknown argument id.");
+  // R40: the tie to the planner is the backend's own business.
+  const seen = JSON.stringify([call(fake, "get_trip", {}), call(fake, "get_history", { limit: 200 }), call(fake, "add_expense", { title: "Tea", amount: 300, currency: "JPY", paid_by: "Mo" })]);
+  assert.equal(/planner_?[iI]d/.test(seen), false);
+  assert.equal(fake.tables.Expenses[0].planner_id, "X7");
+});
+
+test("sync_payments says when more remain (10 a pull) and when the planner was cut at 300", () => {
+  const many = [PHEAD];
+  for (let i = 1; i <= 12; i++) many.push(prow({ ...PX7, payment_id: "R" + i, amount_cad: i }));
+  const fake = createFakeBackend({ planner: many, plannerId: PLANNER_ID });
+  assert.deepEqual([ok(fake, "sync_payments", {}).added, ok(fake, "sync_payments", {}).added], [10, 2]);
+  fake.planner.rows.push(prow({ ...PX7, payment_id: "R13" }));
+  for (let i = 14; i <= 25; i++) fake.planner.rows.push(prow({ ...PX7, payment_id: "R" + i }));
+  assert.equal(ok(fake, "sync_payments", {}).more, true);
+  const big = [PHEAD];
+  for (let i = 1; i <= 301; i++) big.push(prow({ ...PX7, payment_id: "C" + i, include_in_split: "no" }));
+  assert.equal(ok(createFakeBackend({ planner: big, plannerId: PLANNER_ID }), "sync_payments", {}).capped, true);
+  const cols = createFakeBackend({ planner: [PHEAD.slice(1)], plannerId: PLANNER_ID });
+  assert.equal(refusal(cols, "sync_payments", {}), "The planner’s Payments tab is missing the column payment_id.");
 });
 
 test("sync_payments needs the token and a known `as`; a refusal is the backend's sentence; the planner id is never in a reply", () => {

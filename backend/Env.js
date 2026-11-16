@@ -91,8 +91,17 @@ function setPlannerId_(id) {
 }
 
 // The planner's Payments tab, row 1 its column names, through the Sheets
-// advanced service (scope spreadsheets.readonly). Throws when it cannot read.
+// advanced service (scope spreadsheets.readonly). null when the sheet opens
+// but has no Payments tab; throws when it cannot read.
 function plannerRows_() {
-  var got = Sheets.Spreadsheets.Values.get(plannerId_(), "Payments!A1:R", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
-  return (got && got.values) || [];
+  var id = plannerId_();
+  try {
+    var got = Sheets.Spreadsheets.Values.get(id, "Payments!A1:R", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
+    return (got && got.values) || [];
+  } catch (e) {
+    var info = Sheets.Spreadsheets.get(id, { fields: "sheets.properties.title" });
+    var titles = ((info && info.sheets) || []).map(function (sh) { return sh && sh.properties ? sh.properties.title : ""; });
+    if (titles.indexOf("Payments") === -1) return null;
+    throw e;
+  }
 }

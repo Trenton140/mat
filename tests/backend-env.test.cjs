@@ -95,12 +95,15 @@ test("setup() checks the rate after building the tabs", () => {
 const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
 const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
 
-function plannerWorld({ props = {}, get }) {
+function plannerWorld({ props = {}, get, tabs = ["Payments"], noAccess = false }) {
   const logged = [];
   const asked = [];
   const ctx = vm.createContext({
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
-    Sheets: { Spreadsheets: { Values: { get: (...a) => { asked.push(a); return get(...a); } } } },
+    Sheets: { Spreadsheets: {
+      Values: { get: (...a) => { asked.push(a); return get(...a); } },
+      get: (...a) => { asked.push(a); if (noAccess) throw new Error("no access"); return { sheets: tabs.map((title) => ({ properties: { title } })) }; },
+    } },
     Logger: { log: (x) => logged.push(String(x)) },
   });
   for (const f of ["Pure.js", "Env.js", "Setup.js"]) vm.runInContext(src(f), ctx, { filename: f });
@@ -116,6 +119,15 @@ test("plannerRows_ asks the Sheets service for Payments!A1:R, unformatted, dates
   assert.deepEqual(JSON.parse(JSON.stringify(w.asked)), [[PLANNER_ID, "Payments!A1:R", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" }]]);
   const empty = plannerWorld({ props: { PLANNER_ID }, get: () => ({}) });
   assert.deepEqual(JSON.parse(JSON.stringify(empty.ctx.plannerRows_())), []);
+  // R40 fix 6: no Payments tab (the range can't be read, but the sheet can): null.
+  const noTab = plannerWorld({ props: { PLANNER_ID }, tabs: ["Budget"], get: () => { throw new Error("Unable to parse range: Payments!A1:R"); } });
+  assert.equal(noTab.ctx.plannerRows_(), null);
+  assert.deepEqual(JSON.parse(JSON.stringify(noTab.asked[1])), [PLANNER_ID, { fields: "sheets.properties.title" }]);
+  // Any other failure still throws.
+  const tabThere = plannerWorld({ props: { PLANNER_ID }, get: () => { throw new Error("quota"); } });
+  assert.throws(() => tabThere.ctx.plannerRows_(), /quota/);
+  const shut = plannerWorld({ props: { PLANNER_ID }, noAccess: true, get: () => { throw new Error("denied"); } });
+  assert.throws(() => shut.ctx.plannerRows_());
 });
 
 test("checkPlanner logs the row count or the problem, never a value or the id", () => {
@@ -132,11 +144,15 @@ test("checkPlanner logs the row count or the problem, never a value or the id", 
   fails.ctx.checkPlanner();
   assert.deepEqual(fails.logged, ["Planner: couldn’t read its Payments tab. Check the id and that this account can open the sheet."]);
 
+  const noTab = plannerWorld({ props: { PLANNER_ID }, tabs: [], get: () => { throw new Error("Unable to parse range"); } });
+  noTab.ctx.checkPlanner();
+  assert.deepEqual(noTab.logged, ["Planner: The planner has no Payments tab to read."]);
+
   const none = plannerWorld({ props: {}, get: () => { throw new Error("not called"); } });
   none.ctx.checkPlanner();
   assert.deepEqual(none.logged, ["Planner: not linked yet. Link it with linkPlanner first."]);
 
-  const all = [good, missing, fails, none].flatMap((w) => w.logged).join("\n");
+  const all = [good, missing, fails, noTab, none].flatMap((w) => w.logged).join("\n");
   assert.equal(all.includes(PLANNER_ID), false);
   assert.equal(/Secret Inn|24750|X7/.test(all), false);
 });

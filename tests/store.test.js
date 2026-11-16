@@ -2379,7 +2379,7 @@ test("syncPayments pulls, reloads so the lines are there, says what came in, and
   assert.equal(p.store.state.plannerLinked, true);
   const before = p.store.state.expenses.length;
   const r = await p.store.syncPayments();
-  assert.deepEqual(r, { added: 2, changed: 0, same: 0, removed: 0, notCounted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }] });
+  assert.deepEqual(r, { added: 2, changed: 0, same: 0, removed: 0, notCounted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
   assert.equal(p.store.state.notice, "Added 2 payments from the planner. 1 row couldn’t be read.");
   assert.equal(p.store.state.expenses.length, before + 2);
   assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass" && e.amount === 221.52 && !e.pending));
@@ -2401,11 +2401,14 @@ test("syncPayments: each sentence it says", async () => {
     [{ added: 2, changed: 1 }, "Added 2 and changed 1 to match the planner."],
     [{ added: 1, changed: 0, problems: [{ id: "", message: "x" }] }, "Added 1 payment from the planner. 1 row couldn’t be read."],
     [{ added: 0, changed: 0, problems: [{ id: "a", message: "x" }, { id: "b", message: "y" }] }, "Nothing new in the planner. 2 rows couldn’t be read."],
+    [{ added: 10, changed: 0, more: true }, "Added 10 payments from the planner. More to bring in: tap Fetch again."],
+    [{ added: 0, changed: 0, capped: true }, "Nothing new in the planner. Only the first 300 payments were read."],
+    [{ added: 7, changed: 3, problems: [{ id: "a", message: "x" }], capped: true, more: true }, "Added 7 and changed 3 to match the planner. 1 row couldn’t be read. Only the first 300 payments were read. More to bring in: tap Fetch again."],
   ];
   for (const [counts, said] of cases) {
     const p = phone({ seed: SEED });
     await p.store.boot();
-    const data = { added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: [], ...counts };
+    const data = { added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: [], more: false, capped: false, ...counts };
     p.net.override = (b) => (b.action === "syncPayments" ? { ok: true, rev: 0, data } : null);
     const loads = p.net.sent.filter((b) => b.action === "load").length;
     assert.deepEqual(await p.store.syncPayments(), data);
@@ -2431,6 +2434,11 @@ test("syncPayments with the phone known offline sends nothing and says No signal
   p.net.override = (b) => (b.action === "syncPayments" ? { ok: false, error: "planner_unreadable", message: "Couldn’t read the planner sheet. Ask Mo to check its permission." } : null);
   assert.equal(await p.store.syncPayments(), null);
   assert.equal(p.store.state.notice, "Couldn’t read the planner sheet. Ask Mo to check its permission.");
+
+  // R40 fix 6: a tab the backend can't use is a refusal with its own sentence, not "nothing new".
+  p.net.override = (b) => (b.action === "syncPayments" ? { ok: false, error: "planner_columns", message: "The planner’s Payments tab is missing the column amount_cad." } : null);
+  assert.equal(await p.store.syncPayments(), null);
+  assert.equal(p.store.state.notice, "The planner’s Payments tab is missing the column amount_cad.");
 });
 
 test("syncPayments with no reply says it couldn't confirm and the next contact reloads", async () => {

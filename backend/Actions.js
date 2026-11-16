@@ -2,7 +2,7 @@
 // This file reaches the outside world only through these primitives, defined
 // elsewhere (Sheets.js, Env.js, Rate.js on Apps Script; in memory in
 // tests/fake-backend.cjs):
-//   readTable_, appendObj_, updateById_, updateWhere_, ensureColumns_,
+//   readTable_, appendObj_, updateById_, updateWhere_, ensureColumns_, hasColumn_,
 //   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_,
 //   claudeToken_, ensureClaudeToken_, newId_, plannerId_, setPlannerId_, plannerRows_
 // It also uses the pure helpers from Pure.js.
@@ -34,10 +34,16 @@ var MSG_ = {
   noPlanner: "No planner sheet is linked yet. Ask Mo to link it.",
   plannerUnreadable: "Couldn’t read the planner sheet. Ask Mo to check its permission.",
   badPlannerId: "That isn’t a spreadsheet id.",
+  plannerLinked: "A planner is already linked.",
+  needsMigrate: "The trip sheet needs updating first. Ask Mo to run migrate.",
+  notInPlanner: "That payment isn’t in the planner any more.",
+  twoLines: "Two lines carry this payment’s id.",
 };
 
 // A Google spreadsheet id, as linkPlanner takes it.
 var PLANNER_SHEET_ID_RE_ = /^[A-Za-z0-9_-]{20,80}$/;
+// The most expenses one pull adds or changes (R40), so it never holds the lock long.
+var PLANNER_MAX_WRITES_ = 10;
 
 // The trip plan: stops, stays and day headers differ only in these. `key` is
 // the column a row is found by (and the Log's ref); `fields` are the API
@@ -96,8 +102,10 @@ function dispatch_(body) {
     return token ? ok_({ token: token }, rev_()) : err_("not_found", MSG_.noClaude);
   }
   // The planner sheet's id (R39), run once from a terminal. Not logged, never
-  // given back.
+  // given back. Only while none is linked (R40): changing it means deleting
+  // PLANNER_ID in the script editor.
   if (action === "linkPlanner") {
+    if (plannerId_()) return err_("bad_input", MSG_.plannerLinked);
     if (typeof args.id !== "string" || !PLANNER_SHEET_ID_RE_.test(args.id)) return err_("bad_input", MSG_.badPlannerId);
     setPlannerId_(args.id);
     return ok_({ linked: true }, rev_());
@@ -297,6 +305,9 @@ function addExpense_(args, ctx) {
   e.addedBy = ctx.actor;
   var row = expenseToRow(e);
   row.added_at = nowIso_();
+  // A line a planner pull adds is tied to its payment (R40). Only the pull's
+  // own ctx carries it; nothing a phone sends can.
+  if (ctx.plannerId) row.planner_id = ctx.plannerId;
   appendObj_("Expenses", row);
   var saved = expenseFromRow(findRow_("Expenses", id));
   var log = appendLog_(ctx, "add", "expense", id, summarize("add", "expense", null, saved), null, saved);
@@ -353,16 +364,22 @@ function setExpenseDeleted_(args, ctx, deleted) {
   return ok_({ expense: saved, logId: log.id }, bumpRev_());
 }
 
-// ---- payments from the planner sheet (R39) ----
+// ---- payments from the planner sheet (R39, R40) ----
 // A pull reads the planner (never writes it), then, under the lock and
-// against the Sheet as it is then, adds each included payment it has no
-// expense for and brings the planner's fields of one it has up to date,
-// through addExpense_ and editExpense_: validated, logged (via "planner")
-// and undoable like any other change. An expense deleted in the app stays
-// deleted; nothing is deleted by a pull. The planner's id is never in a reply.
+// against the Sheet as it is then, brings the planner's fields of each line
+// tied to an included payment up to date and adds the payments with no line,
+// through editExpense_ and addExpense_: validated, logged (via "planner") and
+// undoable like any other change. At most PLANNER_MAX_WRITES_ of those per
+// pull, changes first. A line is tied to its payment by its planner_id cell,
+// which only a pull writes; a line rung up by hand whose note starts with a
+// payment id in the planner is tied the first time (no Log row, no rev). A
+// line deleted in the app stays deleted; nothing is deleted by a pull. The
+// planner's id is never in a reply, and neither is a planner cell that is not
+// part of a payment the app can use.
 
 function syncPayments_(ctx) {
   if (!plannerId_()) return err_("no_planner", MSG_.noPlanner);
+  if (!hasColumn_("Expenses", "planner_id")) return err_("needs_migrate", MSG_.needsMigrate);
   var rows;
   try {
     rows = plannerRows_();
@@ -370,6 +387,7 @@ function syncPayments_(ctx) {
     return err_("planner_unreadable", MSG_.plannerUnreadable);
   }
   var read = paymentsFromRows(rows);
+  if (read.missing) return err_("planner_columns", read.missing);
   var pull = { actor: ctx.actor, via: "planner", names: ctx.names };
   // As for addExpense: fetching the day's rate can take a few seconds.
   if (read.payments.some(function (p) { return p.include; })) pull.rate = getRate_();
@@ -378,12 +396,35 @@ function syncPayments_(ctx) {
 
 function pullPayments_(read, ctx) {
   var dayDates = tripDates_();
-  var expenses = readTable_("Expenses").filter(function (r) { return cellText_(r.id) !== ""; }).map(expenseFromRow);
-  var out = { added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: read.problems.slice() };
+  var inPlanner = {};
+  read.payments.forEach(function (p) { inPlanner[p.id] = true; });
+  // The Expenses tab, read once: each line with the payment it is tied to.
+  var lines = readTable_("Expenses")
+    .filter(function (r) { return cellText_(r.id) !== ""; })
+    .map(function (r) { return { e: expenseFromRow(r), pid: cellText_(r.planner_id) }; });
+  lines.forEach(function (l) {
+    if (l.pid !== "") return;
+    var pid = paymentIdOf(l.e.note);
+    if (pid === null || !inPlanner[pid]) return;
+    updateById_("Expenses", l.e.id, { planner_id: pid });
+    l.pid = pid;
+  });
+
+  var out = { added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: read.problems.slice(), more: false, capped: read.capped };
+  // A tie to a payment the planner no longer lists (renamed or removed there).
+  // Not said when the planner was cut at 300: the rest were not read.
+  if (!read.capped) {
+    lines.forEach(function (l) {
+      if (l.pid !== "" && !l.e.deleted && !inPlanner[l.pid]) out.problems.push({ id: l.pid, message: MSG_.notInPlanner });
+    });
+  }
+  var edits = [];
+  var adds = [];
   read.payments.forEach(function (p) {
-    var found = expenseOfPayment_(expenses, p.id);
+    var tied = lines.filter(function (l) { return l.pid === p.id; });
+    var live = tied.filter(function (l) { return !l.e.deleted; });
     if (!p.include) {
-      if (found && !found.deleted) out.notCounted.push(p.id);
+      if (live.length) out.notCounted.push(p.id);
       return;
     }
     var x = expenseFromPayment(p, ctx.names, dayDates);
@@ -391,52 +432,63 @@ function pullPayments_(read, ctx) {
       out.problems.push({ id: p.id, message: x.message });
       return;
     }
-    if (found && found.deleted) {
+    if (live.length > 1) {
+      out.problems.push({ id: p.id, message: MSG_.twoLines });
+      return;
+    }
+    if (live.length === 1) {
+      var patch = plannerPatch_(live[0].e, x.value);
+      if (Object.keys(patch).length === 0) out.same++;
+      else edits.push({ id: p.id, line: live[0].e.id, patch: patch });
+      return;
+    }
+    if (tied.length) {
       out.removed++;
       return;
     }
-    var r;
-    if (!found) {
-      var e = x.value;
-      e.id = newId_();
-      r = addExpense_({ expense: e }, ctx);
-      if (r.ok) {
-        out.added++;
-        expenses.push(r.data.expense);
-      }
-    } else {
-      var patch = plannerPatch_(found, x.value);
-      if (Object.keys(patch).length === 0) {
-        out.same++;
-        return;
-      }
-      r = editExpense_(found.id, patch, ctx, true);
-      if (r.ok && r.data.logId === null) out.same++;
-      else if (r.ok) out.changed++;
+    var e = x.value;
+    e.id = newId_();
+    adds.push({ id: p.id, expense: e });
+  });
+
+  var writes = 0;
+  var tried = function (job, r, counted) {
+    if (!r.ok) out.problems.push({ id: job.id, message: r.message });
+    else if (r.data.logId === null) out.same++;
+    else {
+      out[counted]++;
+      writes++;
     }
-    if (!r.ok) out.problems.push({ id: p.id, message: r.message });
+  };
+  edits.forEach(function (job) {
+    if (writes === PLANNER_MAX_WRITES_) {
+      out.more = true;
+      return;
+    }
+    tried(job, editExpense_(job.line, job.patch, ctx, true), "changed");
+  });
+  adds.forEach(function (job) {
+    if (writes === PLANNER_MAX_WRITES_) {
+      out.more = true;
+      return;
+    }
+    var withTie = { actor: ctx.actor, via: ctx.via, names: ctx.names, rate: ctx.rate, plannerId: job.id };
+    tried(job, addExpense_({ expense: job.expense }, withTie), "added");
   });
   return ok_(out, rev_());
 }
 
-// The expense tied to payment pid by its note (paymentIdOf): a live one if
-// there is one, else a deleted one, else null.
-function expenseOfPayment_(expenses, pid) {
-  var gone = null;
-  for (var i = 0; i < expenses.length; i++) {
-    if (paymentIdOf(expenses[i].note) !== pid) continue;
-    if (!expenses[i].deleted) return expenses[i];
-    if (!gone) gone = expenses[i];
-  }
-  return gone;
-}
-
 // The fields the planner owns that differ: title, amount, currency, payer,
-// split (the same people in any order is the same split) and note.
+// note, and the split (the same people in any order is the same split). The
+// planner's payments are equal splits: a line set to shares or exact amounts
+// in the app is put back to equal.
 function plannerPatch_(cur, v) {
   var patch = {};
   ["title", "amount", "currency", "paidBy", "note"].forEach(function (k) { if (cur[k] !== v[k]) patch[k] = v[k]; });
-  if (!same_(cur.split.slice().sort(), v.split.slice().sort())) patch.split = v.split;
+  if (!same_(cur.split.slice().sort(), v.split.slice().sort()) || cur.splitMode !== "equal") {
+    patch.split = v.split;
+    patch.splitMode = "equal";
+  }
   return patch;
 }
 

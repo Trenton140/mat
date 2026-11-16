@@ -402,12 +402,13 @@ function mcpSetDay_(args, who) {
   return mcpWrite_("day", "setDay", { date: args.date, patch: patch }, who);
 }
 
-// A pull from the planner sheet: its counts, with the problems it met.
+// A pull from the planner sheet: its counts, the problems it met, whether
+// more remain to bring in (more) and whether it read only the first 300 (capped).
 function mcpSyncPayments_(args, who) {
   var r = mcpAsk_("syncPayments", {}, who.actor);
   if (!r.ok) return r;
   var d = r.data;
-  return { ok: true, value: { added: d.added, changed: d.changed, same: d.same, removed: d.removed, not_counted: d.notCounted, problems: d.problems } };
+  return { ok: true, value: { added: d.added, changed: d.changed, same: d.same, removed: d.removed, not_counted: d.notCounted, problems: d.problems, more: d.more, capped: d.capped } };
 }
 
 function mcpUndo_(args, who) {

@@ -7,7 +7,7 @@ var TABS = {
   Days: ["date", "city", "title", "line_jp", "line_en", "line_colour", "from_jp", "from_en", "to_jp", "to_en"],
   Stops: ["id", "date", "time", "title", "detail", "getting_there", "travel_min", "fixed", "place", "sign_jp", "booked", "link", "photo", "note", "deleted_at"],
   Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "deleted_at"],
-  Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at"],
+  Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at", "planner_id"],
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
 };
@@ -736,16 +736,20 @@ function entryFromRow(o, allRows) {
 // is read as untrusted text. These turn its rows into expenses for the app's
 // own validation (validateExpense) to check.
 
-var PAYMENT_ID_RE_ = /^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$/;
+// A payment id: up to 20 letters, digits, _ and -, with at least one letter
+// and one digit (X7, P005), so a plain word or number is never one (R40).
+var PAYMENT_ID_RE_ = /^(?=[^A-Za-z]*[A-Za-z])(?=[^0-9]*[0-9])[A-Za-z0-9][A-Za-z0-9_-]{0,19}$/;
 var PLANNER_NEEDS_ = ["payment_id", "payer", "description", "amount", "currency", "amount_cad", "split_between", "split_type", "include_in_split"];
 var PLANNER_MAX_ROWS_ = 300;
 var PLANNER_KINDS_ = { lodging: "stay", transport: "transport", flight: "transport", food: "food", shopping: "shopping" };
 
 function plannerText_(v) { return v === undefined || v === null ? "" : String(v).trim(); }
 
-// A number, or text such as "CA$1,234.50" or "¥24,750"; NaN when unreadable.
+// A number, or text such as "CA$1,234.50" or "¥24,750"; null when blank,
+// NaN when there but unreadable.
 function plannerNum_(v) {
   if (typeof v === "number") return isFinite(v) ? v : NaN;
+  if (plannerText_(v) === "") return null;
   if (typeof v !== "string") return NaN;
   var s = v.replace(/CA\$/gi, "").replace(/[$¥\s,]/g, "");
   if (s === "") return NaN;
@@ -753,19 +757,27 @@ function plannerNum_(v) {
   return isFinite(n) ? n : NaN;
 }
 
+// include_in_split: yes, or a ticked checkbox (true / TRUE).
+function plannerYes_(v) {
+  var t = plannerText_(v).toLowerCase();
+  return v === true || t === "yes" || t === "true";
+}
+
 function plannerBlank_(row) {
   return !Array.isArray(row) || row.every(function (c) { return plannerText_(c) === ""; });
 }
 
-// rows: the Payments tab as Sheets hands it back, row 1 the column names.
-// -> { payments, problems: [{ id, message }] }
+// rows: the Payments tab as Sheets hands it back, row 1 the column names
+// (null or [] when there is no tab or it is empty).
+// -> { payments, problems: [{ id, message }], missing, capped }: missing is
+// why the tab can't be read at all (else null); capped: more than 300 rows.
 function paymentsFromRows(rows) {
   var list = Array.isArray(rows) ? rows : [];
+  var none = function (message) { return { payments: [], problems: [], missing: message, capped: false }; };
+  if (!list.length) return none("The planner has no Payments tab to read.");
   var head = (Array.isArray(list[0]) ? list[0] : []).map(function (h) { return plannerText_(h).toLowerCase(); });
   for (var i = 0; i < PLANNER_NEEDS_.length; i++) {
-    if (head.indexOf(PLANNER_NEEDS_[i]) === -1) {
-      return { payments: [], problems: [{ id: "", message: "The planner’s Payments tab is missing the column " + PLANNER_NEEDS_[i] + "." }] };
-    }
+    if (head.indexOf(PLANNER_NEEDS_[i]) === -1) return none("The planner’s Payments tab is missing the column " + PLANNER_NEEDS_[i] + ".");
   }
   var cell = function (row, name) {
     var c = head.indexOf(name);
@@ -775,11 +787,12 @@ function paymentsFromRows(rows) {
   var problems = [];
   var seen = {};
   var read = 0;
+  var capped = false;
   for (var r = 1; r < list.length; r++) {
     var row = list[r];
     if (plannerBlank_(row)) continue;
     if (read === PLANNER_MAX_ROWS_) {
-      problems.push({ id: "", message: "Only the first 300 payments were read." });
+      capped = true;
       break;
     }
     read++;
@@ -807,10 +820,10 @@ function paymentsFromRows(rows) {
       cadExact: plannerText_(cell(row, "cad_is_exact")),
       splitBetween: plannerText_(cell(row, "split_between")).split(",").map(plannerText_).filter(function (s) { return s !== ""; }),
       splitType: plannerText_(cell(row, "split_type")),
-      include: plannerText_(cell(row, "include_in_split")).toLowerCase() === "yes",
+      include: plannerYes_(cell(row, "include_in_split")),
     });
   }
-  return { payments: payments, problems: problems };
+  return { payments: payments, problems: problems, missing: null, capped: capped };
 }
 
 // s cut to max letters: at max - 1, less a trailing part-word, then "…".
@@ -832,16 +845,17 @@ function plannerPerson_(name, people) {
 // and kind a new expense starts with. -> { ok, value } | { ok: false, message }
 function expenseFromPayment(p, people, dayDates) {
   if (p.splitType.toLowerCase() !== "equal") return fail_("Only payments split equally can be brought in.");
-  if (p.payer === "") return fail_("That payment doesn’t say who paid.");
+  // A name not on the trip is never repeated back: it is the planner's text.
   var paidBy = plannerPerson_(p.payer, people);
-  if (paidBy === null) return fail_(p.payer + " isn’t one of the people on this trip.");
+  if (p.payer === "" || paidBy === null) return fail_("The payer isn’t one of the people on this trip.");
   if (!p.splitBetween.length) return fail_("That payment has nobody to split it between.");
   var split = [];
   for (var i = 0; i < p.splitBetween.length; i++) {
     var who = plannerPerson_(p.splitBetween[i], people);
-    if (who === null) return fail_(p.splitBetween[i] + " isn’t one of the people on this trip.");
+    if (who === null) return fail_("Someone in the split isn’t one of the people on this trip.");
     split.push(who);
   }
+  if (p.amountCad !== null && isNaN(p.amountCad)) return fail_("That payment’s CAD amount can’t be read.");
   var charged = p.currency.toUpperCase();
   var useCad = p.amountCad > 0;
   var amount, currency;
@@ -862,7 +876,7 @@ function expenseFromPayment(p, people, dayDates) {
   else if (validDay_(p.datePaid) && dayDates.length && p.datePaid > dayDates[0]) day = dayDates[dayDates.length - 1];
 
   var parts = [p.id, p.vendor, p.bookingRef ? "ref " + p.bookingRef : ""];
-  if (useCad && isFinite(p.amount)) {
+  if (useCad && typeof p.amount === "number" && isFinite(p.amount)) {
     if (charged === "JPY") parts.push(money_(p.amount, "JPY") + " charged");
     else if (charged !== "CAD" && charged !== "") parts.push(p.amount + " " + p.currency);
   }

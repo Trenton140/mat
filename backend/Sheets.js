@@ -62,6 +62,12 @@ function updateWhere_(tab, column, value, patch) {
   return null;
 }
 
+// Whether a tab's row 1 has this column (an older Sheet may lack one until migrate).
+function hasColumn_(tab, column) {
+  var sh = sheet_(tab);
+  return sh.getLastColumn() > 0 && headersOf_(sh).indexOf(column) !== -1;
+}
+
 function updateById_(tab, id, patch) {
   return updateWhere_(tab, "id", id, patch);
 }

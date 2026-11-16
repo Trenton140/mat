@@ -594,4 +594,20 @@ module.exports = [
       assert.equal(seen.includes(PLANNER_ID), false, "the planner's id is never on the phone");
     },
   },
+  {
+    name: "Planner payments: ten a tap; the notice says when there is more, and the next tap brings the rest",
+    async run({ page }) {
+      const rows = [PHEAD];
+      for (let i = 1; i <= 12; i++) rows.push(prow({ payment_id: "R" + i, date_paid: "2026-12-11", payer: "Mo", description: "Ticket " + i, category: "activity", amount: 1000 + i, currency: "JPY", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: true }));
+      const backend = await ready(page, { seed: { ...SEED, planner: rows, plannerId: PLANNER_ID } });
+      await openYou(page);
+      await page.click("#setPlanner");
+      await expectText(page, "#ubarT", "Added 10 payments from the planner. More to bring in: tap Fetch again.");
+      await expectText(page, "#setPlanner b", "Fetch");
+      await page.evaluate(() => globalThis.__matTest.store.clearNotice());
+      await page.click("#setPlanner");
+      await expectText(page, "#ubarT", "Added 2 payments from the planner.");
+      assert.equal(backend.fake.primitives.readTable_("Expenses").filter((e) => /^R\d+$/.test(e.planner_id)).length, 12);
+    },
+  },
 ];

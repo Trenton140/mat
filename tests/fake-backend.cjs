@@ -7,7 +7,9 @@
 //
 // seed = { expenses?, payments?, people?, days?, stops?, stays?, planner?,
 // plannerId? } (see constraints R6). planner: the planner sheet's Payments tab
-// as rows (row 1 its column names); plannerId: PLANNER_ID in Script Properties.
+// as rows (row 1 its column names; null: the planner has no Payments tab);
+// plannerId: PLANNER_ID in Script Properties; missingColumns: ["Tab.column", ...]
+// an older Sheet lacks until migrate (ensureColumns_) adds them.
 // stops and stays are arrays in API shape (deleted: true marks
 // one deleted), each logged as added by Mo; days is a per-date patch in the
 // Sheet's own column names.
@@ -24,7 +26,8 @@
 // fake.setRate(rate, source) (today's rate and where it came from: "live",
 // "last" or "fallback"; default 111, "live"), fake.planner ({ rows, fails,
 // reads }: the planner's Payments tab; fails makes reading it throw, with the
-// planner's id in the error's text; reads counts the reads).
+// planner's id in the error's text; reads counts the reads), fake.tableReads
+// (readTable_ calls per tab).
 
 const fs = require("fs");
 const path = require("path");
@@ -85,7 +88,9 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   // unset REV would otherwise fall back to the Log's highest id).
   const props = { TRIP_KEY, CLAUDE_TOKEN, REV: "0" };
   if (seed && seed.plannerId) props.PLANNER_ID = seed.plannerId;
-  const planner = { rows: copy(seed && seed.planner) || [], fails: false, reads: 0 };
+  const planner = { rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0 };
+  const missing = new Set((seed && seed.missingColumns) || []);
+  const tableReads = {};
   const propReads = [];
   const rate = { rate: RATE, source: "live" };
   const cache = {}; // the script cache, for the trip key
@@ -94,7 +99,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const headers = (tab) => {
     const h = P.TABS[tab];
     if (!h) throw new Error("Missing tab: " + tab + ". Run setup().");
-    return h;
+    return h.filter((col) => !missing.has(tab + "." + col));
   };
   const cellOut = (tab, h, v) => readCell(P.isTextColumn(tab, h), v, keepsApostrophe);
   // Same path as the real readTable_: cells as Sheets hands them back, then rowToObj.
@@ -106,6 +111,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const primitives = {
     readTable_(tab) {
       headers(tab);
+      tableReads[tab] = (tableReads[tab] || 0) + 1;
       return tables[tab].map((r) => readRow(tab, r));
     },
     appendObj_(tab, obj) {
@@ -132,8 +138,14 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     updateById_(tab, id, patch) {
       return primitives.updateWhere_(tab, "id", id, patch);
     },
-    // The in-memory tabs always have every column TABS names.
-    ensureColumns_: () => [],
+    // Adds the columns an older Sheet lacked (seed.missingColumns), in TABS order.
+    ensureColumns_() {
+      const added = [];
+      for (const tab of Object.keys(P.TABS)) for (const col of P.TABS[tab]) if (missing.has(tab + "." + col)) added.push(tab + "." + col);
+      missing.clear();
+      return added;
+    },
+    hasColumn_: (tab, col) => headers(tab).indexOf(col) !== -1,
     getProp_(key) {
       propReads.push(key);
       return Object.prototype.hasOwnProperty.call(props, key) ? props[key] : null;
@@ -181,7 +193,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     plannerRows_() {
       planner.reads++;
       if (planner.fails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
-      return copy(planner.rows) || [];
+      return planner.rows === null ? null : copy(planner.rows);
     },
   };
   Object.assign(world, primitives);
@@ -250,6 +262,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   };
   fake.props = props;
   fake.planner = planner;
+  fake.tableReads = tableReads;
   fake.propReads = propReads;
   fake.setRate = (r, source) => {
     rate.rate = r;

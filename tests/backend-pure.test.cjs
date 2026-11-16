@@ -430,21 +430,24 @@ test("paymentsFromRows finds columns in any order", () => {
 test("paymentsFromRows: a missing column gives one problem and no payments", () => {
   for (const name of ["payment_id", "payer", "description", "amount", "currency", "amount_cad", "split_between", "split_type", "include_in_split"]) {
     const head = PLAN_HEAD.filter((h) => h !== name);
-    assert.deepEqual(P.paymentsFromRows([head, planRow(X7, head)]), { payments: [], problems: [{ id: "", message: "The planner’s Payments tab is missing the column " + name + "." }] }, name);
+    assert.deepEqual(P.paymentsFromRows([head, planRow(X7, head)]), { payments: [], problems: [], missing: "The planner’s Payments tab is missing the column " + name + ".", capped: false }, name);
   }
   // The others are optional.
   const head = PLAN_HEAD.filter((h) => !["date_paid", "category", "vendor", "booking_ref", "cad_is_exact", "status", "source", "added_by", "notes"].includes(h));
   const r = P.paymentsFromRows([head, planRow(X7, head)]);
   assert.deepEqual(r.problems, []);
   assert.deepEqual([r.payments[0].vendor, r.payments[0].datePaid, r.payments[0].cadExact], ["", "", ""]);
-  assert.deepEqual(P.paymentsFromRows([]), { payments: [], problems: [{ id: "", message: "The planner’s Payments tab is missing the column payment_id." }] });
+  assert.equal(r.missing, null);
+  // R40 fix 6: an empty tab (or none, which the backend reads as no rows) has nothing to read.
+  assert.deepEqual(P.paymentsFromRows([]), { payments: [], problems: [], missing: "The planner has no Payments tab to read.", capped: false });
+  assert.equal(P.paymentsFromRows(null).missing, "The planner has no Payments tab to read.");
 });
 
 test("paymentsFromRows reads numbers given as text, and NaN when it can't", () => {
   const p = payOf({ ...X7, amount: "¥24,750", amount_cad: "CA$1,234.50" });
   assert.deepEqual([p.amount, p.amountCad], [24750, 1234.5]);
   assert.equal(payOf({ ...X7, amount_cad: " $ 12.30 " }).amountCad, 12.3);
-  assert.equal(payOf({ ...X7, amount_cad: "" }).amountCad, NaN);
+  assert.equal(payOf({ ...X7, amount_cad: "" }).amountCad, null, "blank is not unreadable");
   assert.equal(payOf({ ...X7, amount_cad: "TBD" }).amountCad, NaN);
   assert.equal(payOf({ ...X7, amount: "about 5" }).amount, NaN);
 });
@@ -454,6 +457,11 @@ test("paymentsFromRows: include_in_split is yes, trimmed, in any case", () => {
   assert.equal(payOf({ ...X7, include_in_split: " yes " }).include, true);
   assert.equal(payOf({ ...X7, include_in_split: "no (until charged)" }).include, false);
   assert.equal(payOf({ ...X7, include_in_split: "" }).include, false);
+  // Fix 11: a checkbox column.
+  assert.equal(payOf({ ...X7, include_in_split: true }).include, true);
+  assert.equal(payOf({ ...X7, include_in_split: "TRUE" }).include, true);
+  assert.equal(payOf({ ...X7, include_in_split: false }).include, false);
+  assert.equal(payOf({ ...X7, include_in_split: "FALSE" }).include, false);
 });
 
 test("paymentsFromRows skips blank rows, leaves out unusable and repeated ids, and reads 300 at most", () => {
@@ -472,17 +480,22 @@ test("paymentsFromRows skips blank rows, leaves out unusable and repeated ids, a
     { id: "X7", message: "That payment id is in the planner twice." },
   ]);
   assert.equal(payOf({ ...X7, payment_id: "A_b-9" }).id, "A_b-9");
-  assert.equal(payOf({ ...X7, payment_id: 42 }).id, "42");
+  assert.equal(payOf({ ...X7, payment_id: "P005" }).id, "P005");
+  // Fix 7: an id holds a letter and a digit.
+  for (const id of ["Taxi", "42", 42, "abc_def", "3"]) {
+    assert.deepEqual(P.paymentsFromRows([PLAN_HEAD, planRow({ ...X7, payment_id: id })]).problems, [{ id: "", message: "That payment’s id isn’t usable." }], String(id));
+  }
 
   const many = [PLAN_HEAD];
   for (let i = 0; i < 301; i++) many.push(planRow({ ...X7, payment_id: "P" + i }), []);
   const capped = P.paymentsFromRows(many);
   assert.equal(capped.payments.length, 300);
   assert.equal(capped.payments[299].id, "P299");
-  assert.deepEqual(capped.problems, [{ id: "", message: "Only the first 300 payments were read." }]);
+  assert.deepEqual(capped.problems, [], "the cap is not a row that couldn’t be read");
+  assert.equal(capped.capped, true);
   many.pop();
   many.pop();
-  assert.deepEqual(P.paymentsFromRows(many).problems, []);
+  assert.equal(P.paymentsFromRows(many).capped, false);
 });
 
 test("expenseFromPayment: the two note examples, word for word", () => {
@@ -497,10 +510,11 @@ test("expenseFromPayment: only equal splits, only the trip's people, in their ow
   assert.deepEqual(convert({ split_type: "personal" }), { ok: false, message: "Only payments split equally can be brought in." });
   assert.deepEqual(convert({ split_type: "" }), { ok: false, message: "Only payments split equally can be brought in." });
   assert.equal(convert({ split_type: " Equal " }).ok, true);
-  assert.deepEqual(convert({ payer: "Nadia" }), { ok: false, message: "Nadia isn’t one of the people on this trip." });
-  assert.deepEqual(convert({ split_between: "Mo, Nadia" }), { ok: false, message: "Nadia isn’t one of the people on this trip." });
+  // Fix 4: no cell text in a message.
+  assert.deepEqual(convert({ payer: "Nadia" }), { ok: false, message: "The payer isn’t one of the people on this trip." });
+  assert.deepEqual(convert({ split_between: "Mo, Nadia" }), { ok: false, message: "Someone in the split isn’t one of the people on this trip." });
   assert.deepEqual(convert({ split_between: " , " }), { ok: false, message: "That payment has nobody to split it between." });
-  assert.deepEqual(convert({ payer: "" }), { ok: false, message: "That payment doesn’t say who paid." });
+  assert.deepEqual(convert({ payer: "" }), { ok: false, message: "The payer isn’t one of the people on this trip." });
   const v = convert({ payer: " ajen ", split_between: "MO,trenton " }).value;
   assert.deepEqual([v.paidBy, v.split], ["Ajen", ["Mo", "Trenton"]]);
 });
@@ -511,6 +525,10 @@ test("expenseFromPayment: the amount is amount_cad when there is one, else yen o
   assert.deepEqual([yen.amount, yen.currency, yen.note], [4201, "JPY", "X7 · North Rail · ref AB12"]);
   const cad = convert({ amount_cad: 0, amount: 12.345, currency: " cad " }).value;
   assert.deepEqual([cad.amount, cad.currency], [12.35, "CAD"]);
+  // Fix 8: a CAD amount that is there but can't be read is not passed over for the yen.
+  assert.deepEqual(convert({ amount_cad: "TBD" }), { ok: false, message: "That payment’s CAD amount can’t be read." });
+  assert.equal(convert({ amount_cad: "", amount: 500 }).value.currency, "JPY");
+  assert.equal(convert({ amount_cad: "", amount: "" }).ok, false);
   for (const o of [{ amount_cad: "", currency: "USD", amount: 30 }, { amount_cad: -5, amount: 0 }, { amount_cad: "", amount: "" }]) {
     assert.deepEqual(convert(o), { ok: false, message: "That payment has no usable amount." }, JSON.stringify(o));
   }
@@ -549,7 +567,11 @@ test("paymentIdOf: the note's first part when it is an id", () => {
   assert.equal(P.paymentIdOf("ref NK-4471"), null);
   assert.equal(P.paymentIdOf(""), null);
   assert.equal(P.paymentIdOf("Dinner at 8 · tip"), null);
-  assert.equal(P.paymentIdOf("dinner · tip"), "dinner", "a one-word first part is an id by the rule");
+  // Fix 7: plain words and plain numbers are not ids.
+  assert.equal(P.paymentIdOf("dinner · tip"), null);
+  assert.equal(P.paymentIdOf("Taxi"), null);
+  assert.equal(P.paymentIdOf("3 · shared"), null);
+  assert.equal(P.paymentIdOf("P005 · North Rail"), "P005");
   assert.equal(P.paymentIdOf(undefined), null);
   assert.equal(P.paymentIdOf("x".repeat(21) + " · a"), null);
 });

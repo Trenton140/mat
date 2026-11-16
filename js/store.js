@@ -113,6 +113,8 @@ function plannerNotice(d) {
   else said = "Nothing new in the planner.";
   const bad = Array.isArray(d.problems) ? d.problems.length : 0;
   if (bad) said += " " + bad + plural(bad, " row couldn’t be read.", " rows couldn’t be read.");
+  if (d.capped) said += " Only the first 300 payments were read.";
+  if (d.more) said += " More to bring in: tap Fetch again.";
   return said;
 }
 
@@ -1058,7 +1060,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     await refresh();
     state.notice = plannerNotice(d);
     changed();
-    return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems };
+    return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems, more: !!d.more, capped: !!d.capped };
   }
 
   // ---- history ----
