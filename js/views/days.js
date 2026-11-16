@@ -4,7 +4,7 @@
 // one per day, filled for used days, that jump to a day.
 //
 // mountDays(root, store, { clock, onStop, onAddStop, onStay, onAllDays })
-//   -> { goDay(index, smooth), day() }
+//   -> { goDay(index, smooth), day() }  (goDay is a deliberate jump)
 // - clock: the trip's clock (js/clock.js). Every "now" here comes from
 //   clock.now(), never Date.now(), and is judged in the trip's time zone.
 // - onAllDays(): the counter was tapped. onStay(stayId): a ticket's stay row
@@ -26,6 +26,16 @@
 // The open stop: today's next stop is open by default. Once a person opens
 // or closes a stop by hand, that choice holds (the next stop no longer opens
 // itself) until the day in view changes.
+//
+// The next stop in view: when Days opens, when the rail makes a deliberate
+// jump (to today on coming back a later day, the demo starting or stopping, a
+// day picked from the list, a square, the arrow keys) and when a swipe comes
+// to rest on today's ticket, today's open next stop is scrolled into view if
+// it is not all on screen (clear of the strip and demo banner at the top and
+// the tab bar at the bottom). On any change of the day in view, if the screen
+// is scrolled down past the end of the new ticket (its top off screen, blank
+// ground under it), it goes back to the top. Never
+// on a minute tick, a sync or a redraw.
 
 import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayFor } from "../plan.js";
 import { issuer, dayShort, dayHead } from "../format.js";
@@ -148,6 +158,73 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   };
   const clamp = (i) => Math.max(0, Math.min(dates.length - 1, i));
 
+  // Where an element is in the Days view's own scrolled content (transforms,
+  // such as a ticket's tilt, are left out).
+  function offsetIn(n) {
+    let y = 0;
+    while (n && n !== root) {
+      y += n.offsetTop;
+      n = n.offsetParent;
+    }
+    return y;
+  }
+
+  // The part of the Days view a row can be read in, in the same terms: below
+  // the status bar and no-signal strip (the view's top padding) and the demo
+  // banner, above the tab bar.
+  function readable() {
+    const pad = parseFloat(getComputedStyle(root).paddingTop) || 0;
+    const banner = demo.hidden ? 0 : demo.offsetHeight;
+    const nav = document.getElementById("nav");
+    const box = root.getBoundingClientRect();
+    const under = nav && nav.offsetHeight ? Math.max(0, box.bottom - nav.getBoundingClientRect().top) : 0;
+    const top = root.scrollTop + pad + banner + 8;
+    return { top, bottom: Math.max(top, root.scrollTop + root.clientHeight - under - 8) };
+  }
+
+  // Today's open next stop, all of it on screen if it is not (its full open
+  // height, even while it is still sliding open).
+  function revealNext() {
+    if (cur < 0 || states[cur] !== "today" || !autoId || (chosen && openId !== autoId)) return;
+    const pg = rail.children[cur];
+    const r = pg ? pg.querySelector('.r[data-id="' + CSS.escape(autoId) + '"]') : null;
+    if (!r) return;
+    const inner = r.querySelector(".r-more > div");
+    const y = offsetIn(r);
+    const h = r.offsetHeight + (inner ? Math.max(0, inner.scrollHeight - inner.clientHeight) : 0);
+    const w = readable();
+    let by = 0;
+    if (y + h > w.bottom) by = y + h - w.bottom;
+    if (y - by < w.top) by = y - w.top;
+    if (by) root.scrollTop += by;
+  }
+
+  // Scrolled down past the end of the ticket in view (blank ground below
+  // it, its top off screen above): back to the top, so the ticket shows.
+  function unblank() {
+    const pg = rail.children[cur];
+    const tk = pg ? pg.firstElementChild : null;
+    if (!tk) return;
+    const w = readable();
+    const top = offsetIn(tk);
+    if (w.top > top && w.bottom > top + tk.offsetHeight) root.scrollTop = 0;
+  }
+
+  // The day in view is settled (a jump, or a swipe at rest).
+  let settledOn = -1;
+  function settle() {
+    settledOn = cur;
+    unblank();
+    revealNext();
+  }
+
+  // A deliberate jump to a day.
+  function jump(index, smooth = false) {
+    if (!dates.length) return;
+    goDay(index, smooth);
+    settle();
+  }
+
   function applyOpen() {
     const id = chosen ? openId : autoId;
     for (const r of rail.querySelectorAll(".r[data-id]")) {
@@ -201,10 +278,20 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       setCur(i);
       showDay();
     }
+    if (!("onscrollend" in rail)) {
+      clearTimeout(restTimer);
+      restTimer = setTimeout(atRest, 150);
+    }
   }, { passive: true });
+  // A swipe has come to rest on another day.
+  let restTimer = null;
+  const atRest = () => {
+    if (dates.length && cur !== settledOn) settle();
+  };
+  rail.addEventListener("scrollend", atRest);
   pager.addEventListener("click", (ev) => {
     const b = ev.target.closest(".sq");
-    if (b) goDay(Number(b.dataset.i), true);
+    if (b) jump(Number(b.dataset.i), true);
   });
   count.addEventListener("click", () => onAllDays());
   root.addEventListener("keydown", (ev) => {
@@ -214,8 +301,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       toggle(ev.target.closest(".r"));
       return;
     }
-    if (ev.key === "ArrowRight") goDay(cur + 1, true);
-    if (ev.key === "ArrowLeft") goDay(cur - 1, true);
+    if (ev.key === "ArrowRight") jump(cur + 1, true);
+    if (ev.key === "ArrowLeft") jump(cur - 1, true);
   });
 
   // Opening a stop closes the one that was open; tapping the open one closes it.
@@ -375,7 +462,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       // Money, or in the background): Days counts as last seen today, so
       // coming to it on a later day moves the rail on (R32).
       if (!timer) leftOn = now.date;
-      goDay(openDayIndex({ ...s.trip, tz }, days, nowMs));
+      jump(openDayIndex({ ...s.trip, tz }, days, nowMs));
       return;
     }
     // Keep the day in view where it was, without animation.
@@ -427,7 +514,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       // A sheet over Days still in use counts as being looked at.
       if (back && tripReady(s) && dates.length && !held()) {
         const nowMs = clock.now();
-        if (nowIn(tzOf(s), nowMs).date > back) goDay(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), nowMs));
+        if (nowIn(tzOf(s), nowMs).date > back) jump(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), nowMs));
       }
     } else if (!live && timer) {
       clearInterval(timer);
@@ -451,13 +538,13 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       if (now === demoWas) return;
       demoWas = now;
       const s = store.state;
-      if (tripReady(s) && dates.length) goDay(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), clock.now()));
+      if (tripReady(s) && dates.length) jump(openDayIndex({ ...s.trip, tz: tzOf(s) }, dates.map((date) => ({ date })), clock.now()));
     });
   }
   wake();
 
   return {
-    goDay,
+    goDay: jump,
     day: () => (cur >= 0 ? dates[cur] : null),
   };
 }
