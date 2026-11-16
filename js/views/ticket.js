@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // One day as a railway ticket: the line's band with the day number, the route
 // in large type, the date, a perforation, the day's stops as printed rows and
 // a fine-print footer. Ported from the mockup's ticket(), built node by node:

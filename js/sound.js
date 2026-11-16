@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The stamp's thud: a short low thump made with the Web Audio API (no file,
 // no network). On unless mat.sound is "off". Sound is never needed, so every
 // failure is swallowed. Safe to import in Node: nothing runs until called.

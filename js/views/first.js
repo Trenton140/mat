@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // First open: the gate (no key, or no backend yet), "Which one are you?" and
 // the three "how this works" lines. mountFirst(root, store, opts) adds them to
 // root and keeps them in step with the store.

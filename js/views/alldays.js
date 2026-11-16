@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The shape of the trip: a sheet listing every day, opened from the day
 // counter on Days. Each day is a stub of its ticket: the day number, the
 // date, the city, the day's title, and "today" or "used".

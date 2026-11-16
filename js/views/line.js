@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The line sheet: what opens when an expense on the receipt is tapped. Your
 // share, who rang it up, a note, that line's history, edit and delete.
 //

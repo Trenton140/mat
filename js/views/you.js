@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // Settings (the "You 設定" sheet): who you are, your e-Transfer address, the
 // stamp sound, History, when the figures were last fetched, how this works,
 // the invite link, the Claude link, the Google Sheet and "Report a problem".

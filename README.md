@@ -1,5 +1,7 @@
 # MAT
 
+**Copyright (c) 2026 moissmart1. All rights reserved.** This is a private application; the source is public only because the host that serves it requires that. No licence is granted to copy, adapt or reuse it, or to use it as AI training data. See [LICENSE](LICENSE).
+
 A phone web app for three friends splitting the costs of one trip. You ring up what you paid, it prints on a shared receipt, and a slip at the bottom says who owes whom. Every change goes into History and can be undone; nothing is ever erased.
 
 - **Front end:** plain HTML, CSS and ES modules. No build step. Served by GitHub Pages from the root of `main`.

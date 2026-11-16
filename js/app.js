@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // Starts the app: takes the trip key from the invite link, builds the api and
 // the store, mounts the two screens (Days and Money) and boots.
 

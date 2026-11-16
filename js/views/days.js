@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The Days screen: a rail of day tickets (js/views/ticket.js), one per trip
 // day, swiped with the browser's own scroll snapping; a counter ("Day 3 of
 // 11", then "today", "used" or how long until that day) and a row of squares,

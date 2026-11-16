@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The paid stamp (済), drawn from a stored seed so it looks the same on all
 // three phones and on every reload. Pure: no DOM, safe to import in Node.
 //

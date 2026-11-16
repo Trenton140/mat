@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The one clock the Days screen reads. Normally the real time; a demo can
 // pretend to be a trip day (07:00, running 120x, holding at 23:30). The demo
 // lives in memory only, so a reload ends it.

@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The undo bar: the one place the store's lastChange and notice are shown.
 // mountUndoBar(root, store) adds #ubar to root. Each new change shows its
 // line (changeText) for 6 seconds, with Undo only while the change can be

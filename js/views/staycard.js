@@ -1,3 +1,4 @@
+/* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // The hotel card: where you sleep, to hold up to a taxi driver. A sheet on
 // the ticket's own stock, opened from a ticket's stay row.
 //
