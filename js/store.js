@@ -113,7 +113,7 @@ function plannerNotice(d) {
   else if (d.changed) said = "Changed " + d.changed + plural(d.changed, " payment", " payments") + " to match the planner.";
   else said = "Nothing new in the planner.";
   const bad = Array.isArray(d.problems) ? d.problems.length : 0;
-  if (bad) said += " " + bad + plural(bad, " row couldn’t be read.", " rows couldn’t be read.");
+  if (bad) said += " " + bad + plural(bad, " payment needs a look in the planner.", " payments need a look in the planner.");
   if (d.capped) said += " Only the first 300 payments were read.";
   if (d.more) said += " More to bring in: tap Fetch again.";
   return said;

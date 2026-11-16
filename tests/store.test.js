@@ -2380,7 +2380,7 @@ test("syncPayments pulls, reloads so the lines are there, says what came in, and
   const before = p.store.state.expenses.length;
   const r = await p.store.syncPayments();
   assert.deepEqual(r, { added: 2, changed: 0, same: 0, removed: 0, notCounted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
-  assert.equal(p.store.state.notice, "Added 2 payments from the planner. 1 row couldn’t be read.");
+  assert.equal(p.store.state.notice, "Added 2 payments from the planner. 1 payment needs a look in the planner.");
   assert.equal(p.store.state.expenses.length, before + 2);
   assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass" && e.amount === 221.52 && !e.pending));
   assert.equal(p.net.sent.filter((b) => b.action === "syncPayments").length, 1);
@@ -2388,7 +2388,7 @@ test("syncPayments pulls, reloads so the lines are there, says what came in, and
   assert.equal(JSON.stringify(p.storage.map.get("mat.cache")).includes(PLANNER_ID), false);
 
   await p.store.syncPayments();
-  assert.equal(p.store.state.notice, "Nothing new in the planner. 1 row couldn’t be read.");
+  assert.equal(p.store.state.notice, "Nothing new in the planner. 1 payment needs a look in the planner.");
 });
 
 test("syncPayments: each sentence it says", async () => {
@@ -2399,11 +2399,11 @@ test("syncPayments: each sentence it says", async () => {
     [{ added: 0, changed: 1 }, "Changed 1 payment to match the planner."],
     [{ added: 0, changed: 4 }, "Changed 4 payments to match the planner."],
     [{ added: 2, changed: 1 }, "Added 2 and changed 1 to match the planner."],
-    [{ added: 1, changed: 0, problems: [{ id: "", message: "x" }] }, "Added 1 payment from the planner. 1 row couldn’t be read."],
-    [{ added: 0, changed: 0, problems: [{ id: "a", message: "x" }, { id: "b", message: "y" }] }, "Nothing new in the planner. 2 rows couldn’t be read."],
+    [{ added: 1, changed: 0, problems: [{ id: "", message: "x" }] }, "Added 1 payment from the planner. 1 payment needs a look in the planner."],
+    [{ added: 0, changed: 0, problems: [{ id: "a", message: "x" }, { id: "b", message: "y" }] }, "Nothing new in the planner. 2 payments need a look in the planner."],
     [{ added: 10, changed: 0, more: true }, "Added 10 payments from the planner. More to bring in: tap Fetch again."],
     [{ added: 0, changed: 0, capped: true }, "Nothing new in the planner. Only the first 300 payments were read."],
-    [{ added: 7, changed: 3, problems: [{ id: "a", message: "x" }], capped: true, more: true }, "Added 7 and changed 3 to match the planner. 1 row couldn’t be read. Only the first 300 payments were read. More to bring in: tap Fetch again."],
+    [{ added: 7, changed: 3, problems: [{ id: "a", message: "x" }], capped: true, more: true }, "Added 7 and changed 3 to match the planner. 1 payment needs a look in the planner. Only the first 300 payments were read. More to bring in: tap Fetch again."],
   ];
   for (const [counts, said] of cases) {
     const p = phone({ seed: SEED });

@@ -13,6 +13,8 @@ const PLANNER = [
   PHEAD,
   prow({ payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", booking_ref: "AB12", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" }),
   prow({ payment_id: "Q3", date_paid: "2026-12-12", payer: "Ajen", description: "Noodle bar", category: "food", vendor: "Ramen Ya", amount: 3600, currency: "JPY", split_between: "Mo, Ajen", split_type: "equal", include_in_split: "yes" }),
+  // Read fine but can't be brought in (a personal payment): it needs a look in the planner.
+  prow({ payment_id: "P5", payer: "Mo", description: "Own souvenir", amount: 900, currency: "JPY", split_between: "Mo", split_type: "personal", include_in_split: "yes" }),
 ];
 
 const isOpen = (page) => page.evaluate(() => document.getElementById("you").classList.contains("is-open"));
@@ -567,7 +569,7 @@ module.exports = [
       await expectText(page, "#setPlanner b", "Fetching…");
       await page.evaluate(() => document.getElementById("setPlanner").click());
       release();
-      await expectText(page, "#ubarT", "Added 2 payments from the planner.");
+      await expectText(page, "#ubarT", "Added 2 payments from the planner. 1 payment needs a look in the planner.");
       await expectText(page, "#setPlanner b", "Fetch");
       assert.equal(backend.requests.filter((r) => r.action === "syncPayments").length, 1, "one pull for two taps");
       backend.handle = handle;
@@ -580,7 +582,7 @@ module.exports = [
       await page.evaluate(() => globalThis.__matTest.store.clearNotice());
       await openYou(page);
       await page.click("#setPlanner");
-      await expectText(page, "#ubarT", "Nothing new in the planner.");
+      await expectText(page, "#ubarT", "Nothing new in the planner. 1 payment needs a look in the planner.");
       assert.equal(backend.fake.primitives.readTable_("Expenses").filter((e) => e.note.startsWith("X7 · ")).length, 1, "nothing added twice");
 
       await page.click("#youDone");
