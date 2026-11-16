@@ -9,7 +9,10 @@
 // plannerId? } (see constraints R6). planner: the planner sheet's Payments tab
 // as rows (row 1 its column names; null: the planner has no Payments tab);
 // plannerId: PLANNER_ID in Script Properties; missingColumns: ["Tab.column", ...]
-// an older Sheet lacks until migrate (ensureColumns_) adds them.
+// an older Sheet lacks until migrate (ensureColumns_) adds them; missingTabs:
+// ["Tab", ...] an older Sheet lacks altogether until migrate adds them;
+// plannerTabs: { "Book Now": rows, "Change Log": rows } the planner's other
+// tabs, as Sheets hands them back from A1 (a tab left out is not there).
 // stops and stays are arrays in API shape (deleted: true marks
 // one deleted), each logged as added by Mo; days is a per-date patch in the
 // Sheet's own column names.
@@ -26,7 +29,11 @@
 // fake.setRate(rate, source) (today's rate and where it came from: "live",
 // "last" or "fallback"; default 111, "live"), fake.planner ({ rows, fails,
 // reads }: the planner's Payments tab; fails makes reading it throw, with the
-// planner's id in the error's text; reads counts the reads), fake.tableReads
+// planner's id in the error's text; reads counts the reads; also tabs (the
+// other tabs by name, which its writes change as Sheets would), writes (every
+// write the planner received, in order: { kind: "cell", tab, cell, value } or
+// { kind: "append", tab, headerRow, values }), cellFails and appendFails (make
+// that kind of write throw, received as nothing)), fake.tableReads
 // (readTable_ calls per tab).
 
 const fs = require("fs");
@@ -88,8 +95,12 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   // unset REV would otherwise fall back to the Log's highest id).
   const props = { TRIP_KEY, CLAUDE_TOKEN, REV: "0" };
   if (seed && seed.plannerId) props.PLANNER_ID = seed.plannerId;
-  const planner = { rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0 };
+  const planner = {
+    rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0,
+    tabs: copy((seed && seed.plannerTabs) || {}), writes: [], cellFails: false, appendFails: false,
+  };
   const missing = new Set((seed && seed.missingColumns) || []);
+  const missingTabs = new Set((seed && seed.missingTabs) || []);
   const tableReads = {};
   const propReads = [];
   const rate = { rate: RATE, source: "live" };
@@ -98,7 +109,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
 
   const headers = (tab) => {
     const h = P.TABS[tab];
-    if (!h) throw new Error("Missing tab: " + tab + ". Run setup().");
+    if (!h || missingTabs.has(tab)) throw new Error("Missing tab: " + tab + ". Run setup().");
     return h.filter((col) => !missing.has(tab + "." + col));
   };
   const cellOut = (tab, h, v) => readCell(P.isTextColumn(tab, h), v, keepsApostrophe);
@@ -138,14 +149,17 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     updateById_(tab, id, patch) {
       return primitives.updateWhere_(tab, "id", id, patch);
     },
-    // Adds the columns an older Sheet lacked (seed.missingColumns), in TABS order.
+    // Adds the tabs and columns an older Sheet lacked (seed.missingTabs and
+    // seed.missingColumns), in TABS order, a new tab's columns one by one.
     ensureColumns_() {
       const added = [];
-      for (const tab of Object.keys(P.TABS)) for (const col of P.TABS[tab]) if (missing.has(tab + "." + col)) added.push(tab + "." + col);
+      for (const tab of Object.keys(P.TABS)) for (const col of P.TABS[tab]) if (missingTabs.has(tab) || missing.has(tab + "." + col)) added.push(tab + "." + col);
       missing.clear();
+      missingTabs.clear();
       return added;
     },
     hasColumn_: (tab, col) => headers(tab).indexOf(col) !== -1,
+    hasTab_: (tab) => Boolean(P.TABS[tab]) && !missingTabs.has(tab),
     getProp_(key) {
       propReads.push(key);
       return Object.prototype.hasOwnProperty.call(props, key) ? props[key] : null;
@@ -194,6 +208,37 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       planner.reads++;
       if (planner.fails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
       return planner.rows === null ? null : copy(planner.rows);
+    },
+    // Same as Env.js: another planner tab from A1, null when it is not there.
+    plannerTab_(tab) {
+      planner.reads++;
+      if (planner.fails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
+      return Object.prototype.hasOwnProperty.call(planner.tabs, tab) ? copy(planner.tabs[tab]) : null;
+    },
+    // Same as Env.js: one cell ("E4") of a planner tab, written as given (RAW).
+    plannerSetCell_(tab, cell, value) {
+      if (planner.cellFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
+      const m = /^([A-Z]+)(\d+)$/.exec(cell);
+      if (!m) throw new Error("bad cell " + cell);
+      const col = m[1].split("").reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+      const rows = planner.tabs[tab];
+      const r = Number(m[2]) - 1;
+      while (rows.length <= r) rows.push([]);
+      while (rows[r].length <= col) rows[r].push("");
+      rows[r][col] = value;
+      planner.writes.push({ kind: "cell", tab, cell, value: copy(value) });
+    },
+    // Same as Env.js: one row appended under the table whose header is headerRow.
+    plannerAppendRow_(tab, headerRow, values) {
+      if (planner.appendFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
+      planner.tabs[tab].push(copy(values));
+      planner.writes.push({ kind: "append", tab, headerRow, values: copy(values) });
+    },
+    // Same as Env.js: now in Toronto, "YYYY-MM-DD HH:MM ET", by this backend's clock.
+    torontoNow_() {
+      const parts = {};
+      for (const p of new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(new Date(now()))) parts[p.type] = p.value;
+      return parts.year + "-" + parts.month + "-" + parts.day + " " + parts.hour + ":" + parts.minute + " ET";
     },
   };
   Object.assign(world, primitives);

@@ -68,17 +68,28 @@ function hasColumn_(tab, column) {
   return sh.getLastColumn() > 0 && headersOf_(sh).indexOf(column) !== -1;
 }
 
+// Whether the Sheet has this tab (an older Sheet may lack one until migrate).
+function hasTab_(tab) {
+  return SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tab) !== null;
+}
+
 function updateById_(tab, id, patch) {
   return updateWhere_(tab, "id", id, patch);
 }
 
-// Adds every column TABS names that a tab's row 1 lacks, at the end, bold and
+// Adds every tab TABS names that the Sheet lacks (row 1 frozen, as setup()
+// leaves it), and every column a tab's row 1 lacks, at the end, bold and
 // formatted the way setup() formats it (text columns "@"). Returns what it
 // added as "Tab.column". Safe to run twice: the second run adds nothing.
 function ensureColumns_() {
   var added = [];
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
   Object.keys(TABS).forEach(function (tab) {
-    var sh = sheet_(tab);
+    var sh = ss.getSheetByName(tab);
+    if (!sh) {
+      sh = ss.insertSheet(tab);
+      sh.setFrozenRows(1);
+    }
     var have = sh.getLastColumn() === 0 ? [] : headersOf_(sh);
     TABS[tab].forEach(function (h) {
       if (have.indexOf(h) !== -1) return;

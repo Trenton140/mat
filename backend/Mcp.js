@@ -290,8 +290,17 @@ function mcpGetTrip_(args, who) {
       payments: t.payments,
       owed: mcpOwed_(owedList(t.names, t.expenses, t.payments, true)),
       owed_direct: mcpOwed_(owedList(t.names, t.expenses, t.payments, false)),
+      todos: mcpTodos_(t.d.todos || []),
     },
   };
+}
+
+// "Before we go" (Task 19): each item still open, and how many are done.
+function mcpTodos_(todos) {
+  var open = todos.filter(function (x) { return !x.done; }).map(function (x) {
+    return { id: x.id, item: x.item, book_by: x.bookBy, claimed_by: x.claimedBy };
+  });
+  return { open: open, done: todos.length - open.length };
 }
 
 function mcpExplainDebt_(args, who) {
@@ -478,7 +487,7 @@ function mcpTools_() {
   return [
     {
       name: "get_trip",
-      description: "Use this first to see the whole trip: its days, stops, stays, expenses and payments, and who owes whom now. Amounts owed are in Canadian dollars.",
+      description: "Use this first to see the whole trip: its days, stops, stays, expenses and payments, who owes whom now, and the bookings still to make before the trip. Amounts owed are in Canadian dollars.",
       args: {},
       run: mcpGetTrip_,
     },

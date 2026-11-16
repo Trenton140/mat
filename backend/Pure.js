@@ -10,6 +10,7 @@ var TABS = {
   Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at", "planner_id"],
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
+  Todos: ["id", "item", "book_by", "status", "note", "link", "claimed_by", "ticked_by", "ticked_at", "planner_written", "gone"],
 };
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
@@ -686,6 +687,16 @@ function summarize(action, kind, before, after) {
     return "changed the stay " + stayName;
   }
   if (kind === "day") return "changed the ticket for " + dayLabel((after || before).date);
+  // A "Before we go" item: its own text (cut) and names, never a planner value.
+  if (kind === "todo") {
+    var what = plannerCut_(cellText_((after || before).item), 60);
+    if (action === "tick") return "ticked off: " + what;
+    var was = before ? cellText_(before.claimedBy) : "";
+    if (action === "unclaim") return "handed back: " + what;
+    if (action === "claim" && was !== "") return "took over: " + what + ", from " + was;
+    if (action === "claim") return "is on: " + what;
+    return "changed " + what;
+  }
   var item = after || before;
   var tag = item.title + " " + money_(item.amount, item.currency);
   if (action === "add") return "rang up " + tag;
@@ -923,6 +934,176 @@ function paymentIdOf(note) {
   return PAYMENT_ID_RE_.test(head) ? head : null;
 }
 
+// ---- "Before we go": the planner's Book Now tab (Task 19, R45) ----
+// The planner's Book Now tab lists bookings and prep. Its rows are untrusted
+// text; these turn them into to-do items and build the one Change Log row a
+// tick (or its undo) appends there. Nothing here talks to the planner.
+
+var TODO_NEEDS_ = ["#", "item", "book by", "status"];
+var CHANGE_LOG_NEEDS_ = ["#", "tab", "old value", "new value"];
+var MONTHS_ = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+// A whole number from 0 up, as a number or as text such as "17" or "17.0";
+// null for anything else.
+function wholeNum_(v) {
+  if (typeof v === "number") return isFinite(v) && v >= 0 && v % 1 === 0 ? v : null;
+  if (typeof v !== "string") return null;
+  var t = v.trim();
+  return /^\d+(\.0+)?$/.test(t) ? Number(t) : null;
+}
+
+function pad2_(n) { return (n < 10 ? "0" : "") + n; }
+
+// A month's number (1 to 12) from its name or a short form of three letters
+// or more ("Dec", "Sept", "December"); 0 when it is none.
+function monthNum_(name) {
+  var m = name.toLowerCase();
+  if (m.length < 3) return 0;
+  for (var i = 0; i < MONTHS_.length; i++) if (MONTHS_[i].indexOf(m) === 0) return i + 1;
+  return 0;
+}
+
+// A Book by cell as "YYYY-MM-DD", or "" when it holds no date this reads.
+// Read with dates as the sheet shows them, it arrives as ISO text
+// ("2026-12-05"), as month-name text ("Dec 5", "Dec 5, 2026", "5 Dec",
+// "5 Dec 2026"; year, when there is none, the trip's) or, when the cell is
+// formatted as a number, as Sheets' serial day (days from 1899-12-30).
+function bookByDay(v, year) {
+  if (typeof v === "number") {
+    if (!isFinite(v) || v < 1 || v > 2958465) return "";
+    return new Date(Date.UTC(1899, 11, 30) + Math.floor(v) * 86400000).toISOString().slice(0, 10);
+  }
+  if (typeof v !== "string") return "";
+  var t = v.trim();
+  if (DAY_RE_.test(t)) return realDay_(t) ? t : "";
+  var md = /^([A-Za-z]+)\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?$/.exec(t);
+  var dm = /^(\d{1,2})\s+([A-Za-z]+)\.?(?:,?\s+(\d{4}))?$/.exec(t);
+  var mon, day, y;
+  if (md) { mon = monthNum_(md[1]); day = Number(md[2]); y = md[3]; }
+  else if (dm) { mon = monthNum_(dm[2]); day = Number(dm[1]); y = dm[3]; }
+  else return "";
+  y = y ? Number(y) : year;
+  if (!mon || typeof y !== "number" || !isFinite(y) || y < 1000 || y > 9999) return "";
+  var s = y + "-" + pad2_(mon) + "-" + pad2_(day);
+  return realDay_(s) ? s : "";
+}
+
+// The first row (index) whose trimmed, lower-cased cells include all of needs, or -1.
+function headerAt_(list, needs) {
+  for (var r = 0; r < list.length; r++) {
+    var head = (Array.isArray(list[r]) ? list[r] : []).map(function (h) { return plannerText_(h).toLowerCase(); });
+    if (needs.every(function (n) { return head.indexOf(n) !== -1; })) return r;
+  }
+  return -1;
+}
+
+function headOf_(row) {
+  return (Array.isArray(row) ? row : []).map(function (h) { return plannerText_(h).toLowerCase(); });
+}
+
+// rows: the Book Now tab as Sheets hands it back from A1 (null or [] when
+// there is no tab or it is empty); year: the trip's.
+// -> { items: [{ id, item, bookBy, status, note, link, row, statusCol }],
+// problems: [{ id, message }], missing }: missing is why the tab can't be
+// read at all (else null); row is the item's 1-based row in the tab and
+// statusCol the 0-based column of Status, for writing back.
+function todosFromRows(rows, year) {
+  var list = Array.isArray(rows) ? rows : [];
+  var none = function (message) { return { items: [], problems: [], missing: message }; };
+  if (!list.length) return none("The planner has no Book Now tab to read.");
+  var h = headerAt_(list, TODO_NEEDS_);
+  if (h === -1) return none("The planner’s Book Now tab has no row with the columns #, Item, Book by and Status.");
+  var head = headOf_(list[h]);
+  var cell = function (row, name) {
+    var c = head.indexOf(name);
+    return c === -1 || !Array.isArray(row) ? "" : row[c];
+  };
+  var items = [];
+  var problems = [];
+  var seen = {};
+  for (var r = h + 1; r < list.length; r++) {
+    var row = list[r];
+    var item = plannerText_(cell(row, "item"));
+    if (item === "") continue;
+    var num = wholeNum_(cell(row, "#"));
+    if (num === null) continue;
+    var id = String(num);
+    if (seen[id] === true) {
+      problems.push({ id: id, message: "That number is in the Book Now tab twice." });
+      continue;
+    }
+    seen[id] = true;
+    var link = safeUrl(plannerText_(cell(row, "booking link")));
+    items.push({
+      id: id,
+      item: item,
+      bookBy: bookByDay(cell(row, "book by"), year),
+      status: plannerText_(cell(row, "status")),
+      note: plannerText_(cell(row, "notes")),
+      link: /^https:\/\//i.test(link) ? link : "",
+      row: r + 1,
+      statusCol: head.indexOf("status"),
+    });
+  }
+  return { items: items, problems: problems, missing: null };
+}
+
+// Whether a planner status says booked: it starts with the word (any case).
+function isBooked(status) {
+  return /^booked\b/i.test(cellText_(status).trim());
+}
+
+// A Todos row as the app sees it. Done: the planner says booked, or someone ticked it.
+function todoFromRow(o) {
+  var tickedBy = cellText_(o.ticked_by);
+  var status = cellText_(o.status);
+  return {
+    id: cellText_(o.id),
+    item: cellText_(o.item),
+    bookBy: cellDate_(o.book_by),
+    status: status,
+    note: cellText_(o.note),
+    link: safeUrl(cellText_(o.link)),
+    claimedBy: cellText_(o.claimed_by),
+    tickedBy: tickedBy,
+    tickedAt: cellStamp_(o.ticked_at),
+    done: isBooked(status) || tickedBy !== "",
+  };
+}
+
+// A column's A1 letters from its 0-based index: 0 is A, 26 is AA.
+function colLetter(i) {
+  var s = "";
+  for (var n = i + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+// The row to append to the planner's Change Log, from its rows as Sheets
+// hands them back from A1 and the values by column name (any case): # is one
+// above the largest whole number in that column; a column the log lacks is
+// skipped, one this does not fill is left blank. -> { headerRow (1-based),
+// values } | null when there is no tab or no row with #, Tab, Old value and
+// New value.
+function changeLogRow(rows, fields) {
+  var list = Array.isArray(rows) ? rows : [];
+  var h = headerAt_(list, CHANGE_LOG_NEEDS_);
+  if (h === -1) return null;
+  var head = headOf_(list[h]);
+  var numCol = head.indexOf("#");
+  var max = 0;
+  for (var r = h + 1; r < list.length; r++) {
+    var n = Array.isArray(list[r]) ? wholeNum_(list[r][numCol]) : null;
+    if (n !== null && n > max) max = n;
+  }
+  var named = {};
+  Object.keys(fields).forEach(function (k) { named[k.trim().toLowerCase()] = fields[k]; });
+  var values = head.map(function (name, c) {
+    if (c === numCol) return max + 1;
+    return Object.prototype.hasOwnProperty.call(named, name) ? named[name] : "";
+  });
+  return { headerRow: h + 1, values: values };
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow };
 }

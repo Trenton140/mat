@@ -75,7 +75,7 @@ The backend is also an MCP server, so someone's Claude can read the trip and mak
 
 ## Payments from a planner sheet
 
-The app can bring in payments kept in a separate Google Sheet (the "planner"), on request: Settings → Planner payments → Fetch, or Claude's `sync_payments`. Nothing runs on a timer. The backend only reads the planner; it never writes to it.
+The app can bring in payments kept in a separate Google Sheet (the "planner"), on request: Settings → Planner payments → Fetch, or Claude's `sync_payments`. Nothing runs on a timer. The backend reads the planner; the only thing it ever writes there is a "Before we go" tick (below).
 
 **The tab.** The planner needs a tab named `Payments`, with column names in row 1 (any order): `payment_id, date_paid, payer, description, category, vendor, booking_ref, amount, currency, amount_cad, cad_is_exact, split_between, split_type, status, include_in_split, source, added_by, notes`. `split_between` is a comma list of names; `split_type` is `equal` or `personal`.
 
@@ -84,7 +84,7 @@ The app can bring in payments kept in a separate Google Sheet (the "planner"), o
 **Setting it up,** in this order:
 
 1. Push this backend (`clasp push -f`).
-2. In the script editor, run `checkPlanner` once. Google asks for the new read-only permission (`spreadsheets.readonly`) for the account the web app runs as, which must be able to open the planner; the log then says no planner is linked yet.
+2. In the script editor, run `checkPlanner` once. Google asks for the Sheets permission (`spreadsheets`, below) for the account the web app runs as, which must be able to open the planner; the log then says no planner is linked yet.
 3. Update the deployment (`clasp create-deployment -i <deployment id> ...`, above).
 4. Run `migrate` (above): it adds the `planner_id` column to the Expenses tab. Until then a pull is refused with "The trip sheet needs updating first."
 5. Send `linkPlanner` from a terminal, with the trip key and the planner's spreadsheet id (the long part of its address between `/d/` and `/edit`) in environment variables, never typed into a file:
@@ -99,9 +99,35 @@ The app can bring in payments kept in a separate Google Sheet (the "planner"), o
    ```
 
    It answers `{"ok":true,...,"data":{"linked":true}}`. The id is kept only in the Script Property `PLANNER_ID`: never in a reply, the Log or History. `linkPlanner` works only while no planner is linked; it answers "A planner is already linked." otherwise.
-6. Run `checkPlanner` again: the log says how many payment rows it found, or which column is missing.
+6. Run `checkPlanner` again: the log says how many payment rows and Book Now items it found, or which column is missing, and whether the Change Log is there.
 
 **Changing or unlinking it.** In the script editor, Project Settings → Script Properties, delete `PLANNER_ID` (then `linkPlanner` again to link another sheet). With none linked, the Settings row goes away on the next load; expenses already brought in stay.
+
+## Before we go (bookings and prep from the planner)
+
+The app's "Before we go" list is the planner's `Book Now` tab: bookings and prep to finish before the trip. Items are added and edited only in the planner. In the app someone can say "I'll do it" and tick an item off; a tick also marks it `Booked` in the planner.
+
+**The planner's tabs.** `Book Now`: the header is the first row with cells named `#`, `Item`, `Book by` and `Status` (any case); `Notes` and `Booking link` are used when there. Rows above the header, rows with no `Item`, and rows whose `#` is not a whole number (a footnote line) are skipped; a `#` that appears twice keeps its first row. `Book by` is read as `2026-12-05`, `Dec 5`, `Dec 5, 2026`, `5 Dec` or a date cell (no year means the trip's year); anything else is no date. A link is kept only when it is a plain `https://` address. `Change Log`: the header is the first row with `#`, `Tab`, `Old value` and `New value`; a tick appends one row there and fills `#`, `Date / time` (Toronto time), `Agent / session`, `Tab`, `Cell(s)`, `Item`, `Old value`, `New value`, `Why`, `Proof / source` and `Verified?` where those columns exist.
+
+**The Todos tab** in this Sheet holds the list: `id` (the planner's `#`), `item`, `book_by`, `status` (the planner's word as last read), `note`, `link`, `claimed_by`, `ticked_by`, `ticked_at`, `planner_written` (`yes` once the planner took a tick), `gone` (`yes` when the planner no longer lists it). All text. An item is done when its status starts with "booked" or someone ticked it. Rows are never deleted. Do not edit it by hand: a pull rewrites the planner's columns.
+
+**The three actions.**
+
+- `syncTodos` (`{ force }`): pulls the Book Now tab, at most once in 10 minutes unless `force` is true; updates changed items, adds new ones and marks missing ones gone, at most 15 rows per pull (it answers `more: true` when rows remain, and the next pull carries on). It writes no History. It then retries any tick the planner has not taken yet. It answers the list, when it last pulled, and any problems (a `#` used twice); a planner it can't read is refused as for payments, with the stored list still in the reply.
+- `tickTodo` (`{ id }`): saves the tick in this Sheet first (one History entry, "Mo ticked off: …", undoable). Then, best effort, it re-reads the planner and, only if that row still has the same `#` and `Item` and is not already booked, writes `Booked` into its Status cell and appends one Change Log row (if the Change Log can't be found, nothing is written; if the log row fails, the old Status is put back). It answers `planner: "written"` or `"pending"`; a pending tick stands in the app and the next pull tries again. Once written it is never written again. Undoing a written tick puts the old status back in the planner (and logs it there) when the row still says Booked; if the planner can't be written then, the app's undo still happens and the item shows as done again at the next pull, because the planner still says Booked.
+- `claimTodo` (`{ id, on }`): `on: true` puts the person on it (taking it from whoever had it); `on: false` hands it back, only if it is theirs. Each is a History entry ("Mo is on: …", "Mo took over: …, from Ajen", "Mo handed back: …") and can be undone. A done item can't be claimed.
+
+`load` returns the list (`todos`, without gone items) and `todosPulledAt`; it never reads the planner. Claude's `get_trip` lists the open items and counts the done ones.
+
+**The permission, and why.** A tick writes to the planner, which is a different spreadsheet from this one. Google has no permission for writing one other spreadsheet: the script needs the full Sheets permission (`https://www.googleapis.com/auth/spreadsheets`, in place of `spreadsheets.readonly`). Only the owner can grant it, by running `checkPlanner` in the script editor. Even so, the code writes nothing to the planner but one Status cell and one Change Log row per tick or undone tick.
+
+**Deploying it,** in this order (a deployment that needs a permission nobody has granted stops working for everyone):
+
+1. Push this backend (`clasp push -f`).
+2. The owner runs `checkPlanner` in the script editor and approves the Sheets permission; running it again logs the Book Now count and whether the Change Log was found.
+3. Update the deployment on the same deployment id (`clasp create-deployment -i <deployment id> ...`).
+4. Run `migrate` (above): it adds the `Todos` tab. Until then `syncTodos`, `tickTodo` and `claimTodo` are refused with "The trip sheet needs updating first."
+5. Pull once: `syncTodos` with `{"force":true}` (the app's Fetch, or curl as for `migrate`, with an `actor`).
 
 ## You 設定
 
@@ -109,6 +135,7 @@ The app can bring in payments kept in a separate Google Sheet (the "planner"), o
 
 ## The Sheet
 
+- **Todos:** the "Before we go" list (above). A pull keeps it in step with the planner; do not type into it.
 - **People:** `name`, `initials`, `order`, `etransfer`, `simplify`, `email`, `photo`. `photo` is the person's picture as a JPEG data address, or empty for none (then the seal shows `initials`). Set it from the app, not by hand; `migrate` adds the column to an older Sheet.
 
 - Once the trip is live, do not delete rows by hand. Deleted expenses, stops and stays and removed payments stay as rows with a date in `deleted_at` / `removed_at`; clear that cell, or use History in the app, to bring one back. To take a row out by hand, put any date in its `deleted_at` instead of deleting it.

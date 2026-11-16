@@ -95,13 +95,18 @@ test("setup() checks the rate after building the tabs", () => {
 const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
 const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
 
-function plannerWorld({ props = {}, get, tabs = ["Payments"], noAccess = false }) {
+function plannerWorld({ props = {}, get, tabs = ["Payments"], noAccess = false, update, append }) {
   const logged = [];
   const asked = [];
   const ctx = vm.createContext({
     PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
+    Utilities: { formatDate: (d, tz, fmt) => { asked.push(["formatDate", tz, fmt]); return "2026-11-20 10:00"; } },
     Sheets: { Spreadsheets: {
-      Values: { get: (...a) => { asked.push(a); return get(...a); } },
+      Values: {
+        get: (...a) => { asked.push(a); return get(...a); },
+        update: (...a) => { asked.push(["update", ...a]); return update ? update(...a) : {}; },
+        append: (...a) => { asked.push(["append", ...a]); return append ? append(...a) : {}; },
+      },
       get: (...a) => { asked.push(a); if (noAccess) throw new Error("no access"); return { sheets: tabs.map((title) => ({ properties: { title } })) }; },
     } },
     Logger: { log: (x) => logged.push(String(x)) },
@@ -130,23 +135,34 @@ test("plannerRows_ asks the Sheets service for Payments!A1:R, unformatted, dates
   assert.throws(() => shut.ctx.plannerRows_());
 });
 
+// Book Now and Change Log as the planner holds them (made up), for checkPlanner.
+const BOOK = [["Before we go"], ["#", "Item", "Book by", "Status"], [1, "Secret Tour", "Dec 5", ""], [2, "Hidden Inn", "", "Booked"], ["* footnote"]];
+const CLOG = [["#", "Tab", "Old value", "New value"], [1, "Book Now", "Private old", "Private new"]];
+const byRange = (payments, book = BOOK, log = CLOG) => (id, range) => {
+  if (range.startsWith("Payments!")) return { values: payments };
+  if (range.startsWith("'Book Now'!")) { if (book instanceof Error) throw book; return { values: book }; }
+  if (range.startsWith("'Change Log'!")) { if (log instanceof Error) throw log; return { values: log }; }
+  throw new Error("Unable to parse range: " + range);
+};
+
 test("checkPlanner logs the row count or the problem, never a value or the id", () => {
   const row = PHEAD.map((h) => ({ payment_id: "X7", payer: "Mo", description: "Secret Inn", amount: 24750, currency: "JPY", split_between: "Mo", split_type: "equal", include_in_split: "yes" })[h] || "");
-  const good = plannerWorld({ props: { PLANNER_ID }, get: () => ({ values: [PHEAD, row, [], row.map((c, i) => (i === 0 ? "X8" : c))] }) });
+  const tabs = ["Payments", "Book Now", "Change Log"];
+  const good = plannerWorld({ props: { PLANNER_ID }, tabs, get: byRange([PHEAD, row, [], row.map((c, i) => (i === 0 ? "X8" : c))]) });
   good.ctx.checkPlanner();
-  assert.deepEqual(good.logged, ["Planner: 2 payment rows, columns ok"]);
+  assert.deepEqual(good.logged, ["Planner: 2 payment rows, columns ok", "Book Now: 2 items, columns ok", "Change Log: found"]);
 
-  const missing = plannerWorld({ props: { PLANNER_ID }, get: () => ({ values: [PHEAD.filter((h) => h !== "amount_cad"), row] }) });
+  const missing = plannerWorld({ props: { PLANNER_ID }, tabs, get: byRange([PHEAD.filter((h) => h !== "amount_cad"), row], [["#", "Item", "Book by"]], [["#", "Tab"]]) });
   missing.ctx.checkPlanner();
-  assert.deepEqual(missing.logged, ["Planner: The planner’s Payments tab is missing the column amount_cad."]);
+  assert.deepEqual(missing.logged, ["Planner: The planner’s Payments tab is missing the column amount_cad.", "Book Now: The planner’s Book Now tab has no row with the columns #, Item, Book by and Status.", "Change Log: not found"]);
 
-  const fails = plannerWorld({ props: { PLANNER_ID }, get: () => { throw new Error("Requested entity was not found: " + PLANNER_ID); } });
+  const fails = plannerWorld({ props: { PLANNER_ID }, tabs, get: () => { throw new Error("Requested entity was not found: " + PLANNER_ID); } });
   fails.ctx.checkPlanner();
-  assert.deepEqual(fails.logged, ["Planner: couldn’t read its Payments tab. Check the id and that this account can open the sheet."]);
+  assert.deepEqual(fails.logged, ["Planner: couldn’t read its Payments tab. Check the id and that this account can open the sheet.", "Book Now: couldn’t read it.", "Change Log: couldn’t read it."]);
 
   const noTab = plannerWorld({ props: { PLANNER_ID }, tabs: [], get: () => { throw new Error("Unable to parse range"); } });
   noTab.ctx.checkPlanner();
-  assert.deepEqual(noTab.logged, ["Planner: The planner has no Payments tab to read."]);
+  assert.deepEqual(noTab.logged, ["Planner: The planner has no Payments tab to read.", "Book Now: The planner has no Book Now tab to read.", "Change Log: not found"]);
 
   const none = plannerWorld({ props: {}, get: () => { throw new Error("not called"); } });
   none.ctx.checkPlanner();
@@ -154,5 +170,44 @@ test("checkPlanner logs the row count or the problem, never a value or the id", 
 
   const all = [good, missing, fails, noTab, none].flatMap((w) => w.logged).join("\n");
   assert.equal(all.includes(PLANNER_ID), false);
-  assert.equal(/Secret Inn|24750|X7/.test(all), false);
+  assert.equal(/Secret Inn|24750|X7|Secret Tour|Hidden Inn|Private/.test(all), false);
+});
+
+test("checkPlanner asks for every permission first, the full Sheets one included (R46)", () => {
+  const s = src("Setup.js");
+  const body = s.slice(s.indexOf("function checkPlanner()"));
+  assert.ok(body.indexOf("ScriptApp.requireAllScopes") < body.indexOf("plannerId_()"));
+  const manifest = JSON.parse(src("appsscript.json"));
+  assert.deepEqual(manifest.oauthScopes, [
+    "https://www.googleapis.com/auth/spreadsheets.currentonly",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/spreadsheets",
+  ]);
+});
+
+test("plannerTab_ reads a tab from A1 by its quoted name; null when the sheet has no such tab", () => {
+  const w = plannerWorld({ props: { PLANNER_ID }, tabs: ["Book Now"], get: () => ({ values: BOOK }) });
+  assert.deepEqual(JSON.parse(JSON.stringify(w.ctx.plannerTab_("Book Now"))), BOOK);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.asked)), [[PLANNER_ID, "'Book Now'!A1:Z", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" }]]);
+  const odd = plannerWorld({ props: { PLANNER_ID }, get: () => ({}) });
+  assert.deepEqual(JSON.parse(JSON.stringify(odd.ctx.plannerTab_("Mo's tab"))), []);
+  assert.equal(odd.asked[0][1], "'Mo''s tab'!A1:Z");
+  const none = plannerWorld({ props: { PLANNER_ID }, tabs: ["Payments"], get: () => { throw new Error("Unable to parse range"); } });
+  assert.equal(none.ctx.plannerTab_("Change Log"), null);
+  const shut = plannerWorld({ props: { PLANNER_ID }, tabs: ["Change Log"], get: () => { throw new Error("denied"); } });
+  assert.throws(() => shut.ctx.plannerTab_("Change Log"), /denied/);
+});
+
+test("the two planner writers: one cell, RAW; one row appended under the table, RAW, rows inserted; Toronto time", () => {
+  const w = plannerWorld({ props: { PLANNER_ID }, get: () => ({}) });
+  w.ctx.plannerSetCell_("Book Now", "E4", "Booked");
+  w.ctx.plannerAppendRow_("Change Log", 2, [8, "x", "", "y"]);
+  assert.equal(w.ctx.torontoNow_(), "2026-11-20 10:00 ET");
+  assert.deepEqual(JSON.parse(JSON.stringify(w.asked)), [
+    ["update", { values: [["Booked"]] }, PLANNER_ID, "'Book Now'!E4", { valueInputOption: "RAW" }],
+    ["append", { values: [[8, "x", "", "y"]] }, PLANNER_ID, "'Change Log'!A2:D2", { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" }],
+    ["formatDate", "America/Toronto", "yyyy-MM-dd HH:mm"],
+  ]);
+  const refused = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), update: () => { throw new Error("no permission"); } });
+  assert.throws(() => refused.ctx.plannerSetCell_("Book Now", "E4", "Booked"), /no permission/);
 });

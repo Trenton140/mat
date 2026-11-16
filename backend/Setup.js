@@ -55,20 +55,27 @@ function showInvite() {
   Logger.log(key ? "Trip key: " + key : "No trip key yet. Run setup() first.");
 }
 
-// The planner sheet (R39): run once from the script editor after linkPlanner.
-// Running it is how the owner grants the read-only permission the pull needs.
-// It logs how many payment rows there are, or what is wrong: never a value
-// from the sheet and never its id.
+// The planner sheet (R39, R46): run once from the script editor after
+// linkPlanner, and again whenever the script asks for a new permission.
+// Running it is how the owner grants the Sheets permission the pull and the
+// "Before we go" write-back need. It logs how many payment rows and Book Now
+// items there are, or what is wrong, and whether the Change Log is there:
+// never a value from the sheet and never its id.
 function checkPlanner() {
   // Google lets an owner grant only some of a script's permissions, and does
   // not ask again by itself when a new one is added. This asks for whatever
-  // is still missing (the read-only Sheets permission the pull needs) and
-  // stops this run; the next run then goes through.
+  // is still missing (the Sheets permission for the planner) and stops this
+  // run; the next run then goes through.
   if (typeof ScriptApp !== "undefined" && ScriptApp.requireAllScopes) ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
   if (!plannerId_()) {
     Logger.log("Planner: not linked yet. Link it with linkPlanner first.");
     return;
   }
+  checkPlannerPayments_();
+  checkPlannerTodos_();
+}
+
+function checkPlannerPayments_() {
   var rows;
   try {
     rows = plannerRows_();
@@ -83,4 +90,19 @@ function checkPlanner() {
   }
   var n = rows.slice(1).filter(function (r) { return !plannerBlank_(r); }).length;
   Logger.log("Planner: " + n + " payment rows, columns ok");
+}
+
+function checkPlannerTodos_() {
+  try {
+    // The year only fills in dates, which this does not show.
+    var read = todosFromRows(plannerTab_("Book Now"), 2026);
+    Logger.log("Book Now: " + (read.missing || read.items.length + " items, columns ok"));
+  } catch (e) {
+    Logger.log("Book Now: couldn’t read it.");
+  }
+  try {
+    Logger.log("Change Log: " + (changeLogRow(plannerTab_("Change Log"), {}) ? "found" : "not found"));
+  } catch (e) {
+    Logger.log("Change Log: couldn’t read it.");
+  }
 }

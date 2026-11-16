@@ -80,8 +80,10 @@ function ensureClaudeToken_() {
   setProp_("CLAUDE_TOKEN", Utilities.getUuid().replace(/-/g, ""));
 }
 
-// The planner sheet (R39): Mo's own spreadsheet, read only, never written.
-// Its id is kept only in PLANNER_ID: never logged, never in a reply.
+// The planner sheet (R39, R45): Mo's own spreadsheet. The app reads it, and
+// writes only what a "Before we go" tick needs (one Status cell, one Change
+// Log row: Actions.js). Its id is kept only in PLANNER_ID: never logged,
+// never in a reply.
 function plannerId_() {
   return getProp_("PLANNER_ID") || null;
 }
@@ -90,18 +92,52 @@ function setPlannerId_(id) {
   setProp_("PLANNER_ID", id);
 }
 
-// The planner's Payments tab, row 1 its column names, through the Sheets
-// advanced service (scope spreadsheets.readonly). null when the sheet opens
-// but has no Payments tab; throws when it cannot read.
-function plannerRows_() {
+// A tab's name as an A1 range prefix: 'Book Now'!
+function plannerA1_(tab) {
+  return "'" + String(tab).replace(/'/g, "''") + "'!";
+}
+
+// One range of the planner (tab: the tab it is on), through the Sheets
+// advanced service: values unformatted, dates as the sheet shows them.
+// null when the sheet opens but has no such tab; throws when it cannot read.
+function plannerRange_(tab, range) {
   var id = plannerId_();
   try {
-    var got = Sheets.Spreadsheets.Values.get(id, "Payments!A1:R", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
+    var got = Sheets.Spreadsheets.Values.get(id, range, { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
     return (got && got.values) || [];
   } catch (e) {
     var info = Sheets.Spreadsheets.get(id, { fields: "sheets.properties.title" });
     var titles = ((info && info.sheets) || []).map(function (sh) { return sh && sh.properties ? sh.properties.title : ""; });
-    if (titles.indexOf("Payments") === -1) return null;
+    if (titles.indexOf(tab) === -1) return null;
     throw e;
   }
+}
+
+// The planner's Payments tab, row 1 its column names.
+function plannerRows_() {
+  return plannerRange_("Payments", "Payments!A1:R");
+}
+
+// Another planner tab (Book Now, Change Log) from A1, so row i of what comes
+// back is the sheet's row i + 1.
+function plannerTab_(tab) {
+  return plannerRange_(tab, plannerA1_(tab) + "A1:Z");
+}
+
+// Writes one cell ("E4") of a planner tab, as given (RAW: never a formula).
+// Throws when it cannot (no permission yet, tab gone).
+function plannerSetCell_(tab, cell, value) {
+  Sheets.Spreadsheets.Values.update({ values: [[value]] }, plannerId_(), plannerA1_(tab) + cell, { valueInputOption: "RAW" });
+}
+
+// Appends one row (RAW) under the table whose header is on row headerRow,
+// inserting a row for it. Throws when it cannot.
+function plannerAppendRow_(tab, headerRow, values) {
+  var range = plannerA1_(tab) + "A" + headerRow + ":" + colLetter(values.length - 1) + headerRow;
+  Sheets.Spreadsheets.Values.append({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" });
+}
+
+// Now in Toronto, as the planner's Change Log writes it: "YYYY-MM-DD HH:MM ET".
+function torontoNow_() {
+  return Utilities.formatDate(new Date(), "America/Toronto", "yyyy-MM-dd HH:mm") + " ET";
 }

@@ -334,7 +334,8 @@ test("get_trip gives the trip, names only, the days, and only live stops, stays,
   await app(fake, "deleteStop", { id: "planstop1102" });
   await app(fake, "deleteExpense", { id: "seedexp004" });
   const t = ok(fake, "get_trip", {});
-  assert.deepEqual(Object.keys(t), ["trip", "people", "has_picture", "days", "stops", "stays", "expenses", "payments", "owed", "owed_direct"]);
+  assert.deepEqual(Object.keys(t), ["trip", "people", "has_picture", "days", "stops", "stays", "expenses", "payments", "owed", "owed_direct", "todos"]);
+  assert.deepEqual(t.todos, { open: [], done: 0 }, "no pull yet: nothing to do");
   assert.deepEqual(t.people, NAMES);
   assert.equal(t.trip.name, "Japan 2026");
   assert.equal(t.days.length, 11);
