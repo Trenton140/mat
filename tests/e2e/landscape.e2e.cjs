@@ -391,6 +391,61 @@ cases.push({
   },
 });
 
+for (const size of [{ width: 667, height: 280 }, { width: 844, height: 220 }]) {
+  cases.push({
+    name: "on a very short screen the uneven panel comes down over the register, Done in reach (" + size.width + "x" + size.height + ")",
+    viewport: { width: 844, height: 390 },
+    async run({ page }) {
+      await money(page);
+      await page.click("#ring");
+      await waitOpen(page, "reg");
+      await keys(page, "3 0 0 0");
+      await page.click("#xUneven");
+      await until(() => visible(page, "#un"), "the panel opens");
+      await page.setViewportSize(size);
+      await expectReach(page, "#unDone");
+      const top = await page.evaluate(() => document.getElementById("un").getBoundingClientRect().top);
+      assert.ok(top >= 0, "the panel's top is on screen: " + top);
+      // Back to a roomy screen: it stands above the register again.
+      await page.setViewportSize({ width: 844, height: 390 });
+      await until(() => page.evaluate(() => document.getElementById("un").style.bottom === ""), "the panel hangs from the register again");
+      await expectReach(page, "#unDone");
+    },
+  });
+}
+
+cases.push({
+  name: "the stop sheet under a notch: a notice raised while it is open leaves its Done clear",
+  async run({ page }) {
+    await open(page, { seed: WITH_PLAN, tab: "days", nowMs: NOON12 });
+    await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
+    // Chromium has no notch: a 47 px top inset is stood in for, for the sheets'
+    // cap (--inset-t) and for where the notice stands while a sheet is open.
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--inset-t", "47px");
+      const bar = document.getElementById("ubar").style;
+      bar.setProperty("top", "59px", "important"); // 12 px + the inset, as css/sheet.css puts it
+      bar.setProperty("bottom", "auto", "important");
+    });
+    const row = '#rail .pg[data-date="' + D12 + '"] .r[data-id="' + DINNER + '"]';
+    await page.click(row + " .r-b");
+    await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row), "the stop opens");
+    await until(() => page.evaluate((sel) => {
+      const e = document.querySelector(sel + " .r-edit");
+      return !!e && e.getBoundingClientRect().height > 0;
+    }, row), "Edit shows");
+    await page.click(row + " .r-edit");
+    await waitOpen(page, "stop");
+    await page.evaluate(() => globalThis.__matTest.store.notify("A notice."));
+    await until(() => page.evaluate(() => !document.getElementById("ubar").hidden), "the notice shows");
+    await expectReach(page, "#stDone");
+    await expectReach(page, "#ubar");
+    const caps = await page.evaluate(() => ["stop", "you", "line"].map((id) => getComputedStyle(document.getElementById(id)).maxHeight));
+    // The stop sheet's cap is the others' less the keyboard (0 here): "calc(0px + <the same>)".
+    assert.ok(caps[0].includes(caps[1]) && caps[1] === caps[2], "the stop sheet has the same cap as the others: " + caps);
+  },
+});
+
 cases.push({
   name: "the uneven panel is never squeezed below 120 px",
   viewport: { width: 844, height: 390 },

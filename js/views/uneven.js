@@ -205,8 +205,13 @@ export function mountUneven(host, { onChange }) {
     if (!phone) return;
     const room = phone.clientHeight - host.offsetHeight - 16; // 8 px gap below, 8 above
     // Never so small that its title and Done are squeezed away (a keyboard
-    // can shrink the layout viewport to almost nothing).
+    // can shrink the layout viewport to almost nothing). With less room than
+    // that it comes down over the top of the register by the shortfall, so
+    // its top stays 8 px inside the screen instead of leaving it.
     un.style.setProperty("--un-room", Math.max(UN_MIN_ROOM, room) + "px");
+    const short = UN_MIN_ROOM - room;
+    if (short > 0) un.style.bottom = "calc(100% + 8px - " + short + "px)";
+    else un.style.removeProperty("bottom");
   }
 
   function open() {

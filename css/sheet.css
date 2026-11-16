@@ -115,7 +115,7 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:scale(.97)
    filled in black print. It sits on top of the phone's keyboard (--kb, set
    by js/views/stopsheet.js while the keyboard is up). */
 .sheet.stop{background:var(--stock) var(--mat-pattern);color:var(--print);border-top:0;padding-top:14px;
-  bottom:var(--kb, 0px);max-height:calc(90% - var(--kb, 0px))}
+  bottom:var(--kb, 0px);max-height:calc(min(90%, 100% - 76px - var(--inset-t)) - var(--kb, 0px))}
 .stop .sheet-top button{color:var(--print);height:44px}
 .st{display:grid;gap:10px;padding-bottom:4px}
 .st-day{display:flex;align-items:baseline;gap:8px;padding-bottom:9px;border-bottom:2px dashed rgba(21,18,15,.38);font-size:15px}

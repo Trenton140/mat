@@ -13,8 +13,9 @@
   --seal:"Zen Antique","Hiragino Mincho ProN","Yu Mincho",serif;
   --sheet:cubic-bezier(.32,.72,0,1);
   --gl:max(16px, env(safe-area-inset-left, 0px)); --gr:max(16px, env(safe-area-inset-right, 0px));
-  /* The side insets, read once here (the sideways block uses them; a test can stand in for a notch). */
+  /* The insets, read once here (the sideways block and the sheets' cap use them; a test can stand in for a notch). */
   --inset-l:env(safe-area-inset-left, 0px); --inset-r:env(safe-area-inset-right, 0px);
+  --inset-t:env(safe-area-inset-top, 0px);
 }
 html,body{height:100%;margin:0}
 *{box-sizing:border-box}
@@ -53,7 +54,7 @@ i{font-style:normal}
 /* A notice raised while a sheet is open shows at the top of the phone, over
    the sheet (.ubar, z-index 30): a sheet stops short of it, so the notice
    never covers the sheet's Done, also under a notch. */
-.sheet{position:absolute;left:0;right:0;bottom:0;z-index:24;max-height:min(90%, calc(100% - 76px - env(safe-area-inset-top, 0px)));overflow-y:auto;overscroll-behavior:contain;
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:24;max-height:min(90%, calc(100% - 76px - var(--inset-t)));overflow-y:auto;overscroll-behavior:contain;
   padding:12px var(--gr) calc(18px + env(safe-area-inset-bottom, 0px)) var(--gl);background:var(--ground);border-top:1px solid #000;
   border-radius:18px 18px 0 0;box-shadow:0 -24px 40px -10px #000;transform:translateY(104%);transition:transform .5s var(--sheet);scrollbar-width:none}
 .sheet::-webkit-scrollbar{display:none}
