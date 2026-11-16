@@ -655,3 +655,49 @@ test("change_stop never undoes another phone's edit made while Claude's request 
   const before = JSON.parse(fake.tables.Log.at(-1).before), after = JSON.parse(fake.tables.Log.at(-1).after);
   assert.deepEqual(Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k])), ["time"]);
 });
+
+// ---------- final fix wave: M1 (busy) and M2 (add_expense's day) ----------
+
+const stopsSent = (fake) => fake.requests.filter((r) => r.action === "addStop").length;
+
+test("M1: a lock held, then free within the wait: the call is tried again and succeeds once", () => {
+  let held = 1;
+  const fake = createFakeBackend(plan, { lockFails: () => held-- > 0 });
+  const rows = fake.tables.Stops.length;
+  const got = ok(fake, "add_stop", { date: "2026-12-12", title: "Tokyu Hands" });
+  assert.equal(got.stop.title, "Tokyu Hands");
+  assert.equal(stopsSent(fake), 2, "busy once, then saved");
+  assert.equal(fake.tables.Stops.length, rows + 1, "one stop");
+});
+
+test("M1: a lock held throughout: about 20 seconds of tries, then the busy sentence", () => {
+  const fake = createFakeBackend(plan, { lockFails: () => true });
+  const rows = fake.tables.Stops.length;
+  const text = refusal(fake, "add_stop", { date: "2026-12-12", title: "Tokyu Hands" });
+  assert.equal(text, "Someone else is saving right now. Try again in a moment.");
+  // Each try waits up to 8 s for the lock (the helper's own timeout); a new
+  // try starts only while it can still end within 20 s of the first.
+  assert.equal(stopsSent(fake), 2);
+  assert.ok(fake.lockWaitedMs() <= 20000, String(fake.lockWaitedMs()));
+  assert.equal(fake.tables.Stops.length, rows);
+});
+
+test("M1: ping answers {} after the token check", () => {
+  const fake = createFakeBackend(plan);
+  assert.deepEqual(fake.mcp(rpc("ping"), T), { jsonrpc: "2.0", id: 1, result: {} });
+  assert.equal(fake.mcp(rpc("ping"), {}).error.code, -32001);
+  assert.equal(fake.mcp(rpc("ping"), { t: "wrong" }).error.code, -32001);
+});
+
+test("M2: add_expense refuses a day that is neither pre nor a trip day; pre and a trip day are stored", () => {
+  const fake = createFakeBackend(plan);
+  const rows = fake.tables.Expenses.length;
+  const base = { title: "Ramen", amount: 1200, currency: "JPY", paid_by: "Mo" };
+  for (const day of ["2030-01-01", "2026-12-09", "2026-12-21", "tomorrow", ""]) {
+    assert.match(badArgs(fake, "add_expense", { ...base, day }), /day/, day);
+  }
+  assert.equal(fake.tables.Expenses.length, rows, "nothing stored");
+  assert.equal(ok(fake, "add_expense", { ...base, day: "pre" }).expense.day, "pre");
+  assert.equal(ok(fake, "add_expense", { ...base, day: "2026-12-12" }).expense.day, "2026-12-12");
+  assert.equal(fake.tables.Expenses.length, rows + 2);
+});

@@ -43,6 +43,11 @@ function withLock_(fn) {
   }
 }
 
+// Milliseconds now, for timing retries (the connector's wait for the lock).
+function clockMs_() {
+  return Date.now();
+}
+
 function nowIso_() {
   return new Date().toISOString();
 }

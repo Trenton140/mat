@@ -19,6 +19,11 @@ var MCP_HIDDEN_ = "(hidden)";
 var MCP_EMAIL_RE_ = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g;
 // Every write tool's description ends with this.
 var MCP_UNDOABLE_ = "The change shows in the app’s History and can be undone.";
+// How long one tool call may spend waiting for the write lock, in all. Each
+// try waits up to MCP_LOCK_TRY_MS_ (withLock_'s own timeout) and a new try starts
+// only while it can still end within this.
+var MCP_BUSY_WAIT_MS_ = 20000;
+var MCP_LOCK_TRY_MS_ = 8000;
 
 function mcp_(msg, params) {
   var id = null;
@@ -38,6 +43,7 @@ function mcp_(msg, params) {
       });
     }
     if (msg.method === "tools/call") return mcpCall_(id, msg.params, query);
+    if (msg.method === "ping") return mcpResult_(id, {});
     return mcpError_(id, -32601, "Method not found");
   } catch (e) {
     return mcpError_(id, -32603, "Internal error");
@@ -151,9 +157,17 @@ function mcpCamel_(k) {
 
 // One request through handle_, exactly as the app sends it but via "claude".
 // Gives { ok: true, data } or { ok: false, message } (the backend's own
-// sentence; a "server" error without the thrown error's text).
+// sentence; a "server" error without the thrown error's text). Claude often
+// calls tools side by side: a write that finds the lock held is tried again
+// for up to about 20 seconds in all (each try is a request of its own, so
+// the lock is never held across tools) before it answers busy.
 function mcpAsk_(action, args, actor) {
-  var env = handle_({ key: tripKey_(), actor: actor, via: "claude", action: action, args: args });
+  var start = clockMs_();
+  var env;
+  for (;;) {
+    env = handle_({ key: tripKey_(), actor: actor, via: "claude", action: action, args: args });
+    if (env.ok || env.error !== "busy" || clockMs_() - start + MCP_LOCK_TRY_MS_ > MCP_BUSY_WAIT_MS_) break;
+  }
   if (env.ok) return { ok: true, data: env.data };
   return { ok: false, message: env.error === "server" ? MSG_.server : env.message };
 }
@@ -334,6 +348,10 @@ function mcpDefaultDay_() {
 }
 
 function mcpAddExpense_(args, who) {
+  // The app's own register only offers these; the backend takes any real date.
+  if (args.day !== undefined && args.day !== "pre" && tripDates_().indexOf(args.day) === -1) {
+    mcpBad_("day has to be pre or one of the trip’s days, as YYYY-MM-DD.");
+  }
   var expense = {
     id: newId_(),
     day: args.day === undefined ? mcpDefaultDay_() : args.day,

@@ -10,7 +10,8 @@
 // one deleted), each logged as added by Mo; days is a per-date patch in the
 // Sheet's own column names.
 // The returned function takes a request body and resolves to the envelope.
-// Options: clock (() => ISO string); test-only: lockFails (() => boolean),
+// Options: clock (() => ISO string); test-only: lockFails (() => boolean;
+// each true is a busy lock that made the caller wait 8 s: fake.lockWaitedMs()),
 // keepsApostrophe (Sheets hands back a text cell's leading ' verbatim).
 // Test handles: fake.tables (live rows per tab), fake.requests (every body
 // received, including those the connector hands to handle_), fake.mcp(msg,
@@ -82,6 +83,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const propReads = [];
   const rate = { rate: RATE, source: "live" };
   const cache = {}; // the script cache, for the trip key
+  let lockWaited = 0; // ms the in-memory lock has made callers wait
 
   const headers = (tab) => {
     const h = P.TABS[tab];
@@ -142,10 +144,16 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     },
     // Test-only: lockFails() returning true plays a lock that never frees up
     // (same envelope as Env.js withLock_).
+    // A lock that is not freed waits its 8 seconds first (lockWaited), as
+    // tryLock(8000) does, so the connector's retry timing can be tested.
     withLock_(fn) {
-      if (lockFails && lockFails()) return { ok: false, error: "busy", message: "Someone else is saving right now. Try again in a moment." };
+      if (lockFails && lockFails()) {
+        lockWaited += 8000;
+        return { ok: false, error: "busy", message: "Someone else is saving right now. Try again in a moment." };
+      }
       return fn();
     },
+    clockMs_: () => Date.now() + lockWaited,
     getRate_: () => rate.rate,
     getRateInfo_: () => ({ rate: rate.rate, source: rate.source }),
     nowIso_: () => now(),
@@ -193,6 +201,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   fake.tables = tables;
   fake.requests = requests;
   fake.primitives = primitives;
+  fake.lockWaitedMs = () => lockWaited;
   fake.props = props;
   fake.propReads = propReads;
   fake.setRate = (r, source) => {
