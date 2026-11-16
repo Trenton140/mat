@@ -5,19 +5,33 @@
 // root is the phone. The fields are filled once, when the sheet opens; a
 // sync or another phone's change never rewrites them while it is open, so
 // nothing half-typed is lost. Save sends the stop (store.addStop), or only
-// the fields that were changed (store.updateStop), and closes the sheet; the
-// undo bar shows the change, or the backend's words when it refuses. Stop
-// writes need a connection: with no signal (store.state.online false) Save
-// and Remove are off and the sheet says so. The sheet closes itself when the
-// stop it is changing is removed (by another phone, say). The fields are
+// the fields that were changed (store.updateStop), and the sheet waits for
+// the backend's answer (R36): while it waits it says Saving…, its buttons are
+// off, nothing closes it and the fields cannot be changed. Saved: it closes
+// and the undo bar shows the change. Refused: it stays, with everything typed
+// and the backend's reason. No answer: it says it is checking, and closes as
+// saved once a load shows the backend has it, or says it was not saved and
+// Save works again (an add keeps its first id, so a retry can never make a
+// second stop). Remove still goes at once, Undo on the bar. Stop writes need
+// a connection: with no signal (store.state.online false) Save and Remove
+// are off and the sheet says so. While changing a stop that another phone
+// removes, the sheet says so and keeps what was typed. The fields are
 // words, so the phone's own keyboard is used; the field being typed in is
 // kept in view above it. `clock` is taken for the Days sheets' common shape;
 // nothing here depends on the time.
 
 import { dayHead } from "../format.js";
+import { newId } from "../time.js";
 
 const NO_SIGNAL = "No signal. Stops need a connection.";
 const GONE = "Someone removed this stop, so it can’t be saved.";
+const SAVING = "Saving…";
+const CHECKING = "No answer from the trip sheet yet. Checking whether it was saved…";
+const NO_SIGNAL_UNSAVED = "No signal. That wasn’t saved.";
+const notSaved = (word) => "That wasn’t saved. Tap " + word + " to try again.";
+// Said on the undo bar when the sheet was closed while still checking, and
+// the check then showed the stop did not land.
+const LEFT_UNSAVED = "That stop wasn’t saved.";
 const TIME = /^([01]\d|2[0-3]):[0-5]\d/;
 
 const MARKUP = `
@@ -98,7 +112,13 @@ export function mountStopSheet(root, store) {
   let date = null; // the day the stop is on
   let stopId = null; // the stop being changed
   let was = null; // the fields as they were filled, to send only what changed
-  let refused = ""; // why the last Save was not sent, until a field changes
+  let refused = ""; // why the last Save was refused, until a field changes
+  let phase = null; // "saving" while Save waits for the backend; "checking" when no answer came
+  let unsaved = false; // the last Save did not reach the Sheet
+  let addId = null; // the new stop's id, kept across tries so a retry can never make a second stop
+  let tries = 0; // Saves sent for this add
+  let saveWord = "Add stop";
+  let session = 0; // one per opening, so a late answer knows whether its sheet is still the one open
 
   const isOpen = () => sheet.classList.contains("is-open");
   const current = () => (store.state.stops || []).find((s) => s && s.id === stopId && !s.deleted) || null;
@@ -119,6 +139,22 @@ export function mountStopSheet(root, store) {
     };
   }
 
+  // A stop's fields as read() would give them back once filled in.
+  function fieldsOf(stop) {
+    const min = Number(stop.travelMin);
+    return {
+      title: str(stop.title).trim(),
+      time: cleanTime(stop.time),
+      detail: str(stop.detail).trim(),
+      gettingThere: str(stop.gettingThere).trim(),
+      travelMin: Number.isInteger(min) && min > 0 ? min : 0,
+      fixed: stop.fixed === true,
+      place: str(stop.place).trim(),
+      link: str(stop.link).trim(),
+      signJp: str(stop.signJp).trim(),
+    };
+  }
+
   function fill(stop) {
     f.title.value = str(stop.title);
     f.time.value = cleanTime(stop.time);
@@ -133,6 +169,12 @@ export function mountStopSheet(root, store) {
     was = read();
   }
 
+  const diff = (from, to) => {
+    const out = {};
+    for (const k of Object.keys(to)) if (to[k] !== from[k]) out[k] = to[k];
+    return out;
+  };
+
   // Something differs from what the sheet opened with (a field typed and
   // put back counts as unchanged).
   function changed() {
@@ -140,25 +182,42 @@ export function mountStopSheet(root, store) {
     return Object.keys(now).some((k) => now[k] !== was[k]);
   }
 
-  // Save and Remove, and the line above them: no signal, the stop removed on
-  // another phone (what was typed stays, but cannot be saved; it comes back
-  // if the stop is put back), or why the last Save was not sent.
+  // Save and Remove, and the line above them: saving or checking, no
+  // signal, the stop removed on another phone (what was typed stays, but
+  // cannot be saved; it comes back if the stop is put back), why the last
+  // Save was refused, or that it was not saved.
   function update() {
     if (!isOpen()) return;
+    const busy = phase !== null;
+    for (const field of Object.values(f)) field.disabled = busy;
+    sheet.classList.toggle("is-saving", phase === "saving");
+    done.disabled = phase === "saving";
+    save.textContent = phase === "saving" ? SAVING : saveWord;
+    if (busy) {
+      save.disabled = true;
+      del.disabled = true;
+      msg.textContent = phase === "checking" ? CHECKING : "";
+      return;
+    }
     const off = !online();
     const gone = mode === "edit" && !current();
     save.disabled = off || gone || f.title.value.trim() === "";
     del.disabled = off || gone;
-    msg.textContent = off ? NO_SIGNAL : gone ? GONE : refused;
+    msg.textContent = off ? (unsaved ? NO_SIGNAL_UNSAVED : NO_SIGNAL) : gone ? GONE : refused || (unsaved ? notSaved(saveWord) : "");
   }
 
   const render = update;
 
-  function show(title, day, saveWord) {
+  function show(title, day, word) {
+    session += 1;
+    phase = null;
+    unsaved = false;
+    refused = "";
+    tries = 0;
     head.textContent = title;
     const dh = dayHead(day);
     dayLine.replaceChildren(el("b", "", dh.en), el("i", "", dh.jp));
-    save.textContent = saveWord;
+    saveWord = word;
     del.hidden = mode !== "edit";
     sheet.classList.add("is-open");
     sheet.inert = false;
@@ -171,16 +230,18 @@ export function mountStopSheet(root, store) {
   }
 
   function add(day) {
-    if (typeof day !== "string" || !day) return false;
+    if (typeof day !== "string" || !day || phase) return false;
     mode = "add";
     date = day;
     stopId = null;
+    addId = null;
     fill({});
     show("Add a stop", day, "Add stop");
     return true;
   }
 
   function edit(id) {
+    if (phase) return false;
     stopId = id;
     const stop = current();
     if (!stop) {
@@ -196,13 +257,21 @@ export function mountStopSheet(root, store) {
 
   // restoreFocus: back to what opened the sheet on the ticket in view (the
   // stop's Edit, else its day's ＋ Add a stop).
+  // Nothing closes the sheet while a Save waits for its answer.
   function close(restoreFocus = true) {
-    if (!isOpen()) return;
+    if (!isOpen() || phase === "saving") return;
     const id = stopId;
     const day = date;
     mode = null;
     stopId = null;
+    addId = null;
     refused = "";
+    unsaved = false;
+    phase = null;
+    session += 1;
+    for (const field of Object.values(f)) field.disabled = false;
+    done.disabled = false;
+    sheet.classList.remove("is-saving");
     sheet.classList.remove("is-open");
     sheet.inert = true;
     scrim.hidden = true;
@@ -216,7 +285,7 @@ export function mountStopSheet(root, store) {
   }
 
   function onSave() {
-    if (save.disabled) return;
+    if (save.disabled || phase) return;
     const now = read();
     if (!now.title) return;
     // Refused here in the backend's words, with everything typed kept.
@@ -227,14 +296,67 @@ export function mountStopSheet(root, store) {
       f[why.field].focus();
       return;
     }
+    send(now);
+  }
+
+  // Sends what is typed and waits for the backend's answer (R36).
+  function send(now) {
+    const mine = session;
+    const onUnsure = () => {
+      if (mine !== session || phase !== "saving") return;
+      phase = "checking";
+      update();
+    };
+    let token = null;
+    phase = "saving";
+    refused = "";
+    unsaved = false;
+    if (sheet.contains(document.activeElement)) document.activeElement.blur();
     if (mode === "add") {
-      store.addStop({ date, ...now });
+      if (!addId) addId = newId();
+      tries += 1;
+      token = store.addStop({ date, ...now }, { id: addId, quiet: true, onUnsure });
     } else if (mode === "edit") {
-      const patch = {};
-      for (const k of Object.keys(now)) if (now[k] !== was[k]) patch[k] = now[k];
-      if (Object.keys(patch).length) store.updateStop(stopId, patch);
+      const patch = diff(was, now);
+      if (Object.keys(patch).length) token = store.updateStop(stopId, patch, { quiet: true, onUnsure });
+      else if (current()) {
+        phase = null;
+        close();
+        return;
+      }
     }
-    close();
+    if (!token) {
+      // The stop is gone (removed on another phone): update() says so.
+      phase = null;
+      update();
+      return;
+    }
+    update();
+    const sentAdd = mode === "add" ? now : null;
+    store.outcome(token).then((out) => {
+      if (mine !== session) {
+        // Closed while it was checking: the undo bar has the last word.
+        if (out && !out.saved) store.notify(LEFT_UNSAVED);
+        return;
+      }
+      phase = null;
+      if (out && out.saved) {
+        // A retried add whose first try had landed after all: the backend
+        // kept the first one. What was typed since is sent as a change.
+        if (sentAdd && tries > 1 && out.item && Object.keys(diff(fieldsOf(out.item), sentAdd)).length) {
+          mode = "edit";
+          stopId = out.item.id;
+          was = fieldsOf(out.item);
+          send(sentAdd);
+          return;
+        }
+        close();
+        return;
+      }
+      if (out && out.reason === "refused") refused = out.message;
+      else unsaved = true;
+      update();
+    });
   }
 
   function onRemove() {

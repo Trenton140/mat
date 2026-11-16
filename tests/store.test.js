@@ -2183,3 +2183,158 @@ test("an expense edit with no reply still waits for the next contact (unchanged 
   assert.equal(byId(p.store.state.expenses, "seedexp004").amount, 4200);
   assert.equal(sent(p.fake, "rev") + sent(p.fake, "load"), 1, "only the boot load");
 });
+
+// ---------- stop writes the stop sheet waits on (R36) ----------
+
+// A write the caller waits on: it says nothing on the undo bar until it is
+// saved, and store.outcome(token) says how it ended.
+const QUIET = { quiet: true };
+const dropDay = (fake, date) => {
+  const i = fake.tables.Days.findIndex((r) => String(r.date).slice(0, 10) === date || (r.date instanceof Date && r.date.toISOString().slice(0, 10) === date));
+  assert.ok(i >= 0, "the day is in the fake's Days tab");
+  fake.tables.Days.splice(i, 1);
+};
+
+test("R36: a waited-on stop add says nothing until the reply, then is saved and on the bar", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  const release = p.net.hold("addStop");
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0001" });
+  let out = null;
+  p.store.outcome(t).then((o) => { out = o; });
+  await until(() => p.net.sent.some((b) => b.action === "addStop"));
+  assert.equal(out, null, "no outcome before the reply");
+  assert.equal(p.store.state.lastChange, null, "nothing on the bar while it waits");
+  release();
+  await until(() => out);
+  assert.equal(out.saved, true);
+  assert.equal(out.item.id, "stopWAIT0001");
+  assert.deepEqual([p.store.state.lastChange.action, p.store.state.lastChange.kind, p.store.state.lastChange.canUndo], ["add", "stop", true]);
+  assert.equal(p.store.state.lastChange.token, t);
+  assert.equal(stopRows(p.fake), 1);
+});
+
+test("R36: a waited-on stop add refused by the backend comes back with its reason; no notice, nothing stored", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  dropDay(p.fake, "2026-12-12");
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0002" });
+  const out = await p.store.outcome(t);
+  await p.store.idle();
+  assert.deepEqual(out, { saved: false, reason: "refused", message: "Pick a day of the trip." });
+  assert.equal(p.store.state.notice, null);
+  assert.equal(p.store.state.lastChange, null);
+  assert.equal(stopRows(p.fake), 0);
+  assert.equal(stopOf(p.store, "stopWAIT0002"), undefined);
+});
+
+test("R36: a waited-on stop add with no reply that did land: unsure first, then saved; one stop", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.lose.add("addStop");
+  let unsureAt = null;
+  const t = p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0003", onUnsure: () => { unsureAt = sent(p.fake, "load"); } });
+  const out = await p.store.outcome(t);
+  await p.store.idle();
+  assert.equal(unsureAt, 1, "told it is unsure before the check");
+  assert.equal(out.saved, true);
+  assert.equal(out.item.title, "Shibuya Sky");
+  assert.equal(p.store.state.notice, null);
+  assert.equal(p.store.state.lastChange.action, "add");
+  assert.equal(stopOf(p.store, "stopWAIT0003").title, "Shibuya Sky");
+  assert.equal(stopRows(p.fake), 1);
+  assert.equal(sent(p.fake, "addStop"), 1);
+});
+
+test("R36: a waited-on stop add that never landed is not saved; a retry with the same id makes exactly one stop", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.failing.add("addStop");
+  const first = await p.store.outcome(p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0004" }));
+  assert.deepEqual(first, { saved: false, reason: "notLanded" });
+  assert.equal(p.store.state.notice, null);
+  assert.equal(stopOf(p.store, "stopWAIT0004"), undefined);
+  p.net.failing.clear();
+  const again = await p.store.outcome(p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0004" }));
+  await p.store.idle();
+  assert.equal(again.saved, true);
+  assert.equal(stopRows(p.fake), 1);
+});
+
+test("R36: a retry after 'not saved' when the first add landed late still makes one stop, and says what the backend has", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.failing.add("addStop");
+  const first = await p.store.outcome(p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0005" }));
+  assert.equal(first.reason, "notLanded");
+  // The first request reaches the backend after the check.
+  await backend(p.fake, "addStop", { stop: { id: "stopWAIT0005", date: "2026-12-12", title: "Shibuya Sky" } }, "Mo");
+  p.net.failing.clear();
+  const again = await p.store.outcome(p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky deck" }, { ...QUIET, id: "stopWAIT0005" }));
+  await p.store.idle();
+  assert.equal(again.saved, true);
+  assert.equal(again.item.title, "Shibuya Sky", "the backend's own row, so the caller can see what differs");
+  assert.equal(stopRows(p.fake), 1);
+});
+
+test("R36: a waited-on stop add the phone knows never left is not sent; no notice", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.knownOffline = true;
+  const out = await p.store.outcome(p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0006" }));
+  assert.deepEqual(out, { saved: false, reason: "notSent" });
+  assert.equal(p.store.state.notice, null);
+  assert.equal(sent(p.fake, "addStop"), 0);
+});
+
+test("R36: when the check itself cannot reach the backend, the outcome waits for the next contact", async () => {
+  const p = phone({ seed: {} });
+  await p.store.boot();
+  p.net.lose.add("addStop");
+  p.net.failing.add("rev");
+  p.net.failing.add("load");
+  let out = null;
+  let unsure = false;
+  p.store.outcome(p.store.addStop({ date: "2026-12-12", title: "Shibuya Sky" }, { ...QUIET, id: "stopWAIT0007", onUnsure: () => { unsure = true; } })).then((o) => { out = o; });
+  await p.store.idle();
+  assert.equal(unsure, true);
+  assert.equal(out, null, "still unknown");
+  p.net.failing.clear();
+  p.net.lose.clear();
+  await p.store.checkRev();
+  await until(() => out);
+  assert.equal(out.saved, true);
+  assert.equal(stopRows(p.fake), 1);
+});
+
+test("R36: a waited-on stop edit with no reply: landed is saved, not landed is not saved, and a retry saves it", async () => {
+  const p = phone({ seed: { stops: [SKY] } });
+  await p.store.boot();
+  p.net.lose.add("updateStop");
+  const landed = await p.store.outcome(p.store.updateStop(SKY.id, { time: "15:30" }, QUIET));
+  assert.equal(landed.saved, true);
+  assert.equal(landed.item.time, "15:30");
+  assert.equal(p.store.state.notice, null);
+  assert.equal(p.store.state.lastChange.action, "edit");
+  p.net.lose.clear();
+  p.net.failing.add("updateStop");
+  const lost = await p.store.outcome(p.store.updateStop(SKY.id, { time: "16:00" }, QUIET));
+  assert.deepEqual(lost, { saved: false, reason: "notLanded" });
+  assert.equal(stopOf(p.store, SKY.id).time, "15:30", "the ticket shows what the backend has");
+  p.net.failing.clear();
+  const again = await p.store.outcome(p.store.updateStop(SKY.id, { time: "16:00" }, QUIET));
+  await p.store.idle();
+  assert.equal(again.saved, true);
+  assert.equal(byId((await backend(p.fake)).stops, SKY.id).time, "16:00");
+  assert.equal(stopRows(p.fake), 1);
+});
+
+test("R36: a waited-on stop edit refused by the backend comes back with its reason", async () => {
+  const p = phone({ seed: { stops: [SKY] } });
+  await p.store.boot();
+  dropDay(p.fake, "2026-12-12");
+  const out = await p.store.outcome(p.store.updateStop(SKY.id, { title: "Sky deck" }, QUIET));
+  assert.deepEqual(out, { saved: false, reason: "refused", message: "Pick a day of the trip." });
+  assert.equal(p.store.state.notice, null);
+  assert.equal(stopOf(p.store, SKY.id).title, "Shibuya Sky");
+});

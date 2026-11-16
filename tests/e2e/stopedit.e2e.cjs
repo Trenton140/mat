@@ -80,6 +80,62 @@ const setHidden = (page, hidden) => page.evaluate((h) => {
   document.dispatchEvent(new Event("visibilitychange"));
 }, hidden);
 
+// Network tricks on the shared fake backend, for one request of `action`:
+// - hold: it reaches the backend, but the reply waits for release();
+// - lose: it reaches the backend, but the reply never comes (no signal);
+// - drop: it never reaches the backend (no signal); the body is kept in
+//   `dropped`, so a test can make it land late with backend.handle(body).
+function hold(backend, action) {
+  const real = backend.handle;
+  let release;
+  const gate = new Promise((r) => (release = r));
+  backend.handle = async (body) => {
+    if (body.action !== action) return real(body);
+    backend.handle = real;
+    const env = await real(body);
+    await gate;
+    return env;
+  };
+  return release;
+}
+function lose(backend, action) {
+  const real = backend.handle;
+  backend.handle = async (body) => {
+    if (body.action !== action) return real(body);
+    backend.handle = real;
+    await real(body);
+    throw new Error("network");
+  };
+}
+function drop(backend, action) {
+  const real = backend.handle;
+  const dropped = [];
+  backend.handle = async (body) => {
+    if (body.action !== action) return real(body);
+    backend.handle = real;
+    dropped.push(body);
+    throw new Error("network");
+  };
+  return dropped;
+}
+const sentCount = (backend, action) => backend.requests.filter((r) => r.action === action).length;
+const removeDay = (backend, date) => {
+  const days = backend.fake.tables.Days;
+  const i = days.findIndex((r) => String(r.date).slice(0, 10) === date);
+  assert.ok(i >= 0, "the day is in the fake's Days tab");
+  days.splice(i, 1);
+};
+// Everything in the sheet as typed, and whether each field can be changed.
+const sheetFields = (page) => page.evaluate(() => ["stWhat", "stTime", "stDetail", "stGo", "stMin", "stPlace", "stLink", "stSign"].map((id) => [id, document.getElementById(id).value, document.getElementById(id).disabled]));
+const TOWER = { "#stWhat": "Tower Records", "#stTime": "16:00", "#stDetail": "Seven floors", "#stGo": "Walk down Jingumae", "#stMin": "15", "#stPlace": "Tower Records Shibuya", "#stSign": "タワーレコード" };
+async function typeTower(page) {
+  await openAdd(page);
+  for (const [sel, v] of Object.entries(TOWER)) await page.fill(sel, v);
+}
+async function typedIntact(page) {
+  for (const [sel, v] of Object.entries(TOWER)) assert.equal(await value(page, sel), v, sel + " is kept");
+}
+
 // History's rows, newest first.
 const tape = (page) => page.$$eval("#tape .tp-row", (rows) => rows.map((r) => ({
   id: r.dataset.id,
@@ -519,6 +575,194 @@ module.exports = [
       }
       await page.click("#stSave");
       await waitSheetClosed(page);
+    },
+  },
+  {
+    name: "R36: Save waits for a slow reply: the sheet says Saving…, is inert, then closes with the stop on the ticket",
+    async run({ page }) {
+      const backend = await ready(page);
+      const rows = backend.fake.tables.Stops.length;
+      await typeTower(page);
+      const release = hold(backend, "addStop");
+      await page.click("#stSave");
+      await until(() => sentCount(backend, "addStop") === 1, "the add reaches the backend");
+      await expectText(page, "#stSave", "Saving…");
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await disabled(page, "#stSave"), true);
+      assert.equal(await disabled(page, "#stDone"), true);
+      assert.ok((await sheetFields(page)).every(([, , off]) => off), "no field can be changed while saving");
+      // Done, Escape and a tap outside do not close it.
+      await page.evaluate(() => document.getElementById("stDone").click());
+      await page.keyboard.press("Escape");
+      await page.click("#stopScrim", { position: { x: 195, y: 20 } });
+      await page.waitForTimeout(100);
+      assert.equal(await isOpen(page, "stop"), true, "still open while saving");
+      assert.equal(await page.evaluate(() => document.getElementById("ubar").hidden), true, "nothing on the bar yet");
+      release();
+      await waitSheetClosed(page);
+      await until(async () => (await rowTitles(page, D12)).includes("Tower Records"), "Tower Records is on the ticket");
+      await expectText(page, "#ubarT", "Added Tower Records.");
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.length, rows + 1);
+      assert.equal(sentCount(backend, "addStop"), 1);
+    },
+  },
+  {
+    name: "R36: a double tap on Save sends one request",
+    async run({ page }) {
+      const backend = await ready(page);
+      await typeTower(page);
+      const release = hold(backend, "addStop");
+      await page.evaluate(() => {
+        const b = document.getElementById("stSave");
+        b.click();
+        b.click();
+        b.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await until(() => sentCount(backend, "addStop") === 1, "the add reaches the backend");
+      release();
+      await waitSheetClosed(page);
+      await idle(page);
+      assert.equal(sentCount(backend, "addStop"), 1);
+      assert.equal(backend.fake.tables.Stops.filter((r) => r.title === "Tower Records").length, 1);
+    },
+  },
+  {
+    name: "R36: refused by the backend only (the day was removed): the sheet stays, typing intact, reason shown, nothing stored",
+    async run({ page }) {
+      const backend = await ready(page);
+      const rows = backend.fake.tables.Stops.length;
+      removeDay(backend, D12);
+      await typeTower(page);
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "Pick a day of the trip.");
+      assert.equal(await isOpen(page, "stop"), true);
+      await typedIntact(page);
+      assert.ok((await sheetFields(page)).every(([, , off]) => !off), "the fields can be corrected");
+      assert.equal(await disabled(page, "#stSave"), false, "Save works again");
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.length, rows, "nothing stored");
+      assert.equal((await rowTitles(page, D12)).includes("Tower Records"), false);
+    },
+  },
+  {
+    name: "R36: an edit refused by the backend only keeps what was typed and shows the reason",
+    async run({ page }) {
+      const backend = await ready(page);
+      removeDay(backend, D12);
+      await openEdit(page, SKY);
+      await page.fill("#stDetail", "Gate B");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "Pick a day of the trip.");
+      assert.equal(await isOpen(page, "stop"), true);
+      assert.equal(await value(page, "#stDetail"), "Gate B");
+      await idle(page);
+      assert.notEqual(backend.fake.tables.Stops.find((r) => r.id === SKY).detail, "Gate B");
+    },
+  },
+  {
+    name: "R36: no reply and the stop did not land: the sheet says so, keeps the typing, and Save again makes exactly one stop",
+    async run({ page }) {
+      const backend = await ready(page);
+      const rows = backend.fake.tables.Stops.length;
+      await typeTower(page);
+      const releaseRev = hold(backend, "rev"); // before drop: each puts back the handler it found
+      drop(backend, "addStop");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "No answer from the trip sheet yet. Checking whether it was saved…");
+      assert.equal(await isOpen(page, "stop"), true);
+      releaseRev();
+      await expectText(page, "#stMsg", "That wasn’t saved. Tap Add stop to try again.");
+      assert.equal(await isOpen(page, "stop"), true);
+      await typedIntact(page);
+      assert.equal((await text(page, "#stop")).includes("Someone removed"), false);
+      assert.equal(await disabled(page, "#stSave"), false);
+      assert.equal(backend.fake.tables.Stops.length, rows);
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.length, rows + 1, "exactly one stop");
+      await until(async () => (await rowTitles(page, D12)).includes("Tower Records"), "Tower Records is on the ticket");
+    },
+  },
+  {
+    name: "R36: no reply and the stop did land: the sheet closes as saved, one stop",
+    async run({ page }) {
+      const backend = await ready(page);
+      const rows = backend.fake.tables.Stops.length;
+      await typeTower(page);
+      lose(backend, "addStop");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await until(async () => (await rowTitles(page, D12)).includes("Tower Records"), "Tower Records is on the ticket");
+      await expectText(page, "#ubarT", "Added Tower Records.");
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.length, rows + 1);
+      assert.equal(sentCount(backend, "addStop"), 1);
+    },
+  },
+  {
+    name: "R36: a retry after the first try landed late keeps one stop, with what was typed since",
+    async run({ page }) {
+      const backend = await ready(page);
+      const rows = backend.fake.tables.Stops.length;
+      await typeTower(page);
+      const dropped = drop(backend, "addStop");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "That wasn’t saved. Tap Add stop to try again.");
+      // The first request reaches the Sheet after the check.
+      const late = await backend.handle(dropped[0]);
+      assert.equal(late.ok, true, JSON.stringify(late));
+      await page.fill("#stDetail", "Seven floors of records");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.length, rows + 1, "one stop");
+      assert.equal(backend.fake.tables.Stops.at(-1).detail, "Seven floors of records");
+      await expectText(page, '.r[data-id="' + dropped[0].args.stop.id + '"] .r-n', /Tower Records/);
+    },
+  },
+  {
+    name: "R36: an edit with no reply: landed closes as saved; not landed says so and Save again saves it",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openEdit(page, SKY);
+      await page.fill("#stTime", "15:00");
+      lose(backend, "updateStop");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await expectText(page, row(SKY) + " .r-t", "15:00");
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.find((r) => r.id === SKY).time, "15:00");
+      await openEdit(page, SKY);
+      await page.fill("#stTime", "15:30");
+      drop(backend, "updateStop");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "That wasn’t saved. Tap Save to try again.");
+      assert.equal(await value(page, "#stTime"), "15:30");
+      assert.equal(backend.fake.tables.Stops.find((r) => r.id === SKY).time, "15:00");
+      await page.click("#stSave");
+      await waitSheetClosed(page);
+      await expectText(page, row(SKY) + " .r-t", "15:30");
+      await idle(page);
+      assert.equal(backend.fake.tables.Stops.find((r) => r.id === SKY).time, "15:30");
+    },
+  },
+  {
+    name: "R36: closed with Done while it checks, and it did not land: the bar says so",
+    async run({ page }) {
+      const backend = await ready(page);
+      await typeTower(page);
+      const releaseRev = hold(backend, "rev");
+      drop(backend, "addStop");
+      await page.click("#stSave");
+      await expectText(page, "#stMsg", "No answer from the trip sheet yet. Checking whether it was saved…");
+      assert.equal(await disabled(page, "#stDone"), false, "Done works while it checks");
+      await page.click("#stDone");
+      await waitSheetClosed(page);
+      releaseRev();
+      await expectText(page, "#ubarT", "That stop wasn’t saved.");
+      assert.equal((await rowTitles(page, D12)).includes("Tower Records"), false);
     },
   },
 ];

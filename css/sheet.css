@@ -123,6 +123,12 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:scale(.97)
 .st-btns button:disabled{opacity:.3;transform:none}
 #stSave{flex:1;border:0;background:var(--print);color:var(--stock)}
 #stDel{flex:none;padding:0 18px;border:1.5px solid var(--shu);background:none;color:var(--shu)}
+/* Saving (R36): the fields cannot be changed but stay in black print, and
+   Saving… on the button stays readable. */
+.st-f input:disabled,.st-f textarea:disabled{opacity:1;color:var(--print);-webkit-text-fill-color:var(--print);border-style:dashed}
+.st-sw input:disabled{opacity:.6}
+.stop.is-saving #stSave:disabled{opacity:.6}
+.stop .sheet-top button:disabled{opacity:.3}
 
 /* Try another day: the trip's days as a grid of buttons, "Sat 12". */
 .set-days{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}

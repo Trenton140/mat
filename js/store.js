@@ -159,6 +159,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   let reloadAfter = null;
   let contactReload = null;
   let unsureUndos = []; // undos of unconfirmed writes, waiting for a contact
+  let loadWaiters = []; // { after, resolve }: waiting for a load started after `after` loads
 
   // ---- deriving and telling ----
 
@@ -370,7 +371,19 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     saveCache();
     changed();
     afterContact();
+    wakeLoadWaiters(mine);
     return true;
+  }
+
+  // Resolves once a load started after `after` loads has been applied.
+  function nextLoad(after) {
+    return new Promise((resolve) => loadWaiters.push({ after, resolve }));
+  }
+
+  function wakeLoadWaiters(upTo) {
+    const due = loadWaiters.filter((w) => w.after < upTo);
+    loadWaiters = loadWaiters.filter((w) => w.after >= upTo);
+    for (const w of due) w.resolve();
   }
 
   async function checkRev() {
@@ -496,8 +509,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   function begin(op) {
     writes.set(op.token, op);
     ops.push(op);
-    state.lastChange = { token: op.token, action: op.action, kind: op.kind, item: bare(op.after), canUndo: true };
-    if (op.action === "edit") state.lastChange.before = bare(op.before);
+    // A write its caller waits on (op.quiet) is shown on the bar once saved.
+    if (op.quiet) op.outcome = new Promise((resolve) => { op.finish = resolve; });
+    else showChange(op, op.after);
     if (op.api === "addExpense" && !state.online) {
       // Known to be without signal: keep it on the phone (so it provably never
       // left) and check for signal; the next contact sends it.
@@ -537,7 +551,10 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       else if (op.logId !== null) stepRev(r.rev);
       if (op.logId === null && !isAdd(op)) op.noop = true; // the backend already had it so
       const lc = state.lastChange;
-      if (lc && lc.token === op.token) state.lastChange = { ...lc, item: copy(item) };
+      if (op.quiet) {
+        showChange(op, item);
+        op.finish({ saved: true, item: copy(item) });
+      } else if (lc && lc.token === op.token) state.lastChange = { ...lc, item: copy(item) };
     } catch (err) {
       op.inFlight = false;
       if (fateUnknown(err)) op.lost = true;
@@ -547,6 +564,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         op.status = "queued"; // the same id resent later is safe
       } else if (op.api === "addExpense") {
         op.status = "failed";
+      } else if (op.quiet) {
+        removeOp(op);
+        settleQuiet(op, err);
       } else {
         removeOp(op);
         state.notice = failNotice(err);
@@ -561,6 +581,47 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     changed();
   }
 
+  // The undo bar's line for a write (`item` as it is now).
+  function showChange(op, item) {
+    state.lastChange = { token: op.token, action: op.action, kind: op.kind, item: bare(copy(item)), canUndo: true };
+    if (op.action === "edit") state.lastChange.before = bare(op.before);
+  }
+
+  // A write its caller waits on did not go through: the caller is told how
+  // (op.finish) and says it itself, so no notice. With no reply, the caller
+  // hears at once that it is unsure (op.onUnsure), and the outcome follows
+  // the first load after it: saved when the backend has it, else not landed.
+  function settleQuiet(op, err) {
+    if (neverSent(err)) {
+      op.finish({ saved: false, reason: "notSent" });
+      return;
+    }
+    if (!noReply(err)) {
+      op.finish({ saved: false, reason: "refused", message: (err && err.message) || UNCONFIRMED });
+      return;
+    }
+    if (typeof op.onUnsure === "function") {
+      try {
+        op.onUnsure();
+      } catch {
+        // the caller's own trouble
+      }
+    }
+    wantReload();
+    nextLoad(loadCount).then(() => {
+      const item = (base && Array.isArray(base[LIST[op.kind]]) ? base[LIST[op.kind]] : []).find((x) => x[KEY_FIELD[op.kind]] === op.id) || null;
+      const landed = !!item && (!op.before || sameAs(item, op.patch));
+      if (!landed) {
+        op.finish({ saved: false, reason: "notLanded" });
+        return;
+      }
+      showChange(op, item);
+      changed();
+      op.finish({ saved: true, item: copy(item) });
+    });
+    track(checkRev());
+  }
+
   // What a write that did not go through says. A write with no reply is
   // rolled back for now, and the next contact reloads to show the truth.
   function failNotice(err) {
@@ -572,7 +633,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return (err && err.message) || UNCONFIRMED;
   }
 
-  function change(kind, id, action, apiAction, patch) {
+  // opts.quiet: the caller waits on store.outcome(token) and tells the
+  // person itself (a stop sheet); opts.onUnsure: called when no reply came.
+  function change(kind, id, action, apiAction, patch, { quiet = false, onUnsure = null } = {}) {
     const before = find(kind, id);
     if (!before) return null;
     const after = { ...bare(before), ...patch };
@@ -582,6 +645,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       before: bare(before), after,
       view: (cur) => (cur ? { ...cur, ...patch } : null),
       status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: myName,
+      quiet, onUnsure,
     });
   }
 
@@ -592,15 +656,28 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   // A new stop, shown at once and sent as addStop. Not queued: with no
   // signal, or no reply, it is rolled back like an edit (see runWrite).
-  function addStop(draft) {
-    const stop = { id: newId(), ...copy(draft) };
+  // opts.id: the id to use (a retry passes the first try's, so the backend
+  // keeps one stop); opts.quiet and opts.onUnsure as for change().
+  function addStop(draft, { id, quiet = false, onUnsure = null } = {}) {
+    const stop = { ...copy(draft), id: typeof id === "string" && id ? id : newId() };
     const after = { ...STOP_BLANK, ...copy(stop), deleted: false };
     return begin({
       token: newId(), kind: "stop", id: stop.id, action: "add", api: "addStop",
       args: { stop: copy(stop) }, before: null, after,
       view: (cur) => ({ ...(cur || {}), ...after }),
       status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: myName,
+      quiet, onUnsure,
     });
+  }
+
+  // How a write made with opts.quiet ended: { saved: true, item } (item as
+  // the backend has it), or { saved: false, reason } with reason "refused"
+  // (and the backend's message), "notSent" (it provably never left the
+  // phone) or "notLanded" (no reply, and the backend does not have it).
+  // With no reply it resolves only after a load, however long that takes.
+  function outcome(token) {
+    const op = writes.get(token);
+    return op && op.outcome ? op.outcome : Promise.resolve(null);
   }
 
   function addPayment({ from, to, cad }) {
@@ -1082,7 +1159,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     removePayment: (id) => takeBackLive("payment", id) || change("payment", id, "unstamp", "removePayment", { removed: true }),
     restorePayment: (id) => change("payment", id, "restamp", "restorePayment", { removed: false }),
     addStop,
-    updateStop: (id, patch) => change("stop", id, "edit", "updateStop", patch),
+    updateStop: (id, patch, opts) => change("stop", id, "edit", "updateStop", patch, opts),
+    outcome,
     deleteStop: (id) => change("stop", id, "delete", "deleteStop", { deleted: true }),
     restoreStop: (id) => change("stop", id, "restore", "restoreStop", { deleted: false }),
     retry, discard, unsaved: (id) => !!unsavedAdd(id), outbox, undo, undoEntry, loadHistory, historyFor,
