@@ -89,3 +89,54 @@ test("setup() checks the rate after building the tabs", () => {
   const body = s.slice(s.indexOf("function setup()"), s.indexOf("function seedIfEmpty_"));
   assert.match(body, /requireLiveRate_\(\);\s*\}\s*$/);
 });
+
+// ---------- the planner sheet (Task 12, R39) ----------
+// Made-up id and rows. Setup.js and Env.js over stand-ins for Sheets and Logger.
+const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
+const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
+
+function plannerWorld({ props = {}, get }) {
+  const logged = [];
+  const asked = [];
+  const ctx = vm.createContext({
+    PropertiesService: { getScriptProperties: () => ({ getProperty: (k) => (k in props ? props[k] : null), setProperty: (k, v) => { props[k] = String(v); } }) },
+    Sheets: { Spreadsheets: { Values: { get: (...a) => { asked.push(a); return get(...a); } } } },
+    Logger: { log: (x) => logged.push(String(x)) },
+  });
+  for (const f of ["Pure.js", "Env.js", "Setup.js"]) vm.runInContext(src(f), ctx, { filename: f });
+  return { ctx, logged, asked, props };
+}
+
+test("plannerRows_ asks the Sheets service for Payments!A1:R, unformatted, dates as shown; setPlannerId_ keeps the id in PLANNER_ID", () => {
+  const w = plannerWorld({ props: {}, get: () => ({ values: [PHEAD] }) });
+  assert.equal(w.ctx.plannerId_(), null);
+  w.ctx.setPlannerId_(PLANNER_ID);
+  assert.equal(w.props.PLANNER_ID, PLANNER_ID);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.ctx.plannerRows_())), [PHEAD]);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.asked)), [[PLANNER_ID, "Payments!A1:R", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" }]]);
+  const empty = plannerWorld({ props: { PLANNER_ID }, get: () => ({}) });
+  assert.deepEqual(JSON.parse(JSON.stringify(empty.ctx.plannerRows_())), []);
+});
+
+test("checkPlanner logs the row count or the problem, never a value or the id", () => {
+  const row = PHEAD.map((h) => ({ payment_id: "X7", payer: "Mo", description: "Secret Inn", amount: 24750, currency: "JPY", split_between: "Mo", split_type: "equal", include_in_split: "yes" })[h] || "");
+  const good = plannerWorld({ props: { PLANNER_ID }, get: () => ({ values: [PHEAD, row, [], row.map((c, i) => (i === 0 ? "X8" : c))] }) });
+  good.ctx.checkPlanner();
+  assert.deepEqual(good.logged, ["Planner: 2 payment rows, columns ok"]);
+
+  const missing = plannerWorld({ props: { PLANNER_ID }, get: () => ({ values: [PHEAD.filter((h) => h !== "amount_cad"), row] }) });
+  missing.ctx.checkPlanner();
+  assert.deepEqual(missing.logged, ["Planner: The planner’s Payments tab is missing the column amount_cad."]);
+
+  const fails = plannerWorld({ props: { PLANNER_ID }, get: () => { throw new Error("Requested entity was not found: " + PLANNER_ID); } });
+  fails.ctx.checkPlanner();
+  assert.deepEqual(fails.logged, ["Planner: couldn’t read its Payments tab. Check the id and that this account can open the sheet."]);
+
+  const none = plannerWorld({ props: {}, get: () => { throw new Error("not called"); } });
+  none.ctx.checkPlanner();
+  assert.deepEqual(none.logged, ["Planner: not linked yet. Link it with linkPlanner first."]);
+
+  const all = [good, missing, fails, none].flatMap((w) => w.logged).join("\n");
+  assert.equal(all.includes(PLANNER_ID), false);
+  assert.equal(/Secret Inn|24750|X7/.test(all), false);
+});

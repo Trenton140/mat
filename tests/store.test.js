@@ -2363,3 +2363,83 @@ test("R36: a waited-on stop edit refused by the backend comes back with its reas
   assert.equal(p.store.state.notice, null);
   assert.equal(stopOf(p.store, SKY.id).title, "Shibuya Sky");
 });
+
+// ---------- payments from the planner sheet (Task 12, R39) ----------
+// Made-up planner rows and id.
+
+const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
+const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
+const prow = (o) => PHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
+const PX7 = { payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", booking_ref: "AB12", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" };
+const PQ3 = { ...PX7, payment_id: "Q3", description: "Noodle bar", amount_cad: "", amount: 3600, vendor: "Ramen Ya", booking_ref: "" };
+
+test("syncPayments pulls, reloads so the lines are there, says what came in, and resolves with the counts", async () => {
+  const p = phone({ seed: { ...SEED, planner: [PHEAD, prow(PX7), prow(PQ3), prow({ ...PX7, payment_id: "P5", split_type: "personal" })], plannerId: PLANNER_ID } });
+  await p.store.boot();
+  assert.equal(p.store.state.plannerLinked, true);
+  const before = p.store.state.expenses.length;
+  const r = await p.store.syncPayments();
+  assert.deepEqual(r, { added: 2, changed: 0, same: 0, removed: 0, notCounted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }] });
+  assert.equal(p.store.state.notice, "Added 2 payments from the planner. 1 row couldn’t be read.");
+  assert.equal(p.store.state.expenses.length, before + 2);
+  assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass" && e.amount === 221.52 && !e.pending));
+  assert.equal(p.net.sent.filter((b) => b.action === "syncPayments").length, 1);
+  assert.equal(p.net.sent.filter((b) => b.action === "syncPayments")[0].actor, "Mo");
+  assert.equal(JSON.stringify(p.storage.map.get("mat.cache")).includes(PLANNER_ID), false);
+
+  await p.store.syncPayments();
+  assert.equal(p.store.state.notice, "Nothing new in the planner. 1 row couldn’t be read.");
+});
+
+test("syncPayments: each sentence it says", async () => {
+  const cases = [
+    [{ added: 0, changed: 0 }, "Nothing new in the planner."],
+    [{ added: 1, changed: 0 }, "Added 1 payment from the planner."],
+    [{ added: 3, changed: 0 }, "Added 3 payments from the planner."],
+    [{ added: 0, changed: 1 }, "Changed 1 payment to match the planner."],
+    [{ added: 0, changed: 4 }, "Changed 4 payments to match the planner."],
+    [{ added: 2, changed: 1 }, "Added 2 and changed 1 to match the planner."],
+    [{ added: 1, changed: 0, problems: [{ id: "", message: "x" }] }, "Added 1 payment from the planner. 1 row couldn’t be read."],
+    [{ added: 0, changed: 0, problems: [{ id: "a", message: "x" }, { id: "b", message: "y" }] }, "Nothing new in the planner. 2 rows couldn’t be read."],
+  ];
+  for (const [counts, said] of cases) {
+    const p = phone({ seed: SEED });
+    await p.store.boot();
+    const data = { added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: [], ...counts };
+    p.net.override = (b) => (b.action === "syncPayments" ? { ok: true, rev: 0, data } : null);
+    const loads = p.net.sent.filter((b) => b.action === "load").length;
+    assert.deepEqual(await p.store.syncPayments(), data);
+    assert.equal(p.store.state.notice, said, JSON.stringify(counts));
+    assert.equal(p.net.sent.filter((b) => b.action === "load").length, loads + 1, "it reloads");
+  }
+});
+
+test("syncPayments with the phone known offline sends nothing and says No signal; a refusal shows the backend's sentence", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  assert.equal(p.store.state.plannerLinked, false);
+  p.net.knownOffline = true;
+  const sent = p.net.sent.length;
+  assert.equal(await p.store.syncPayments(), null);
+  assert.equal(p.net.sent.length, sent, "nothing sent");
+  assert.equal(p.store.state.notice, "No signal. Try again.");
+
+  p.net.knownOffline = false;
+  assert.equal(await p.store.syncPayments(), null);
+  assert.equal(p.store.state.notice, "No planner sheet is linked yet. Ask Mo to link it.");
+
+  p.net.override = (b) => (b.action === "syncPayments" ? { ok: false, error: "planner_unreadable", message: "Couldn’t read the planner sheet. Ask Mo to check its permission." } : null);
+  assert.equal(await p.store.syncPayments(), null);
+  assert.equal(p.store.state.notice, "Couldn’t read the planner sheet. Ask Mo to check its permission.");
+});
+
+test("syncPayments with no reply says it couldn't confirm and the next contact reloads", async () => {
+  const p = phone({ seed: { ...SEED, planner: [PHEAD, prow(PX7)], plannerId: PLANNER_ID } });
+  await p.store.boot();
+  p.net.lose.add("syncPayments");
+  assert.equal(await p.store.syncPayments(), null);
+  assert.equal(p.store.state.notice, "Couldn’t confirm that. Checking…");
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass"), "what landed shows after the next contact");
+});

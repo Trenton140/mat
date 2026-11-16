@@ -79,3 +79,20 @@ function ensureClaudeToken_() {
   if (claudeToken_()) return;
   setProp_("CLAUDE_TOKEN", Utilities.getUuid().replace(/-/g, ""));
 }
+
+// The planner sheet (R39): Mo's own spreadsheet, read only, never written.
+// Its id is kept only in PLANNER_ID: never logged, never in a reply.
+function plannerId_() {
+  return getProp_("PLANNER_ID") || null;
+}
+
+function setPlannerId_(id) {
+  setProp_("PLANNER_ID", id);
+}
+
+// The planner's Payments tab, row 1 its column names, through the Sheets
+// advanced service (scope spreadsheets.readonly). Throws when it cannot read.
+function plannerRows_() {
+  var got = Sheets.Spreadsheets.Values.get(plannerId_(), "Payments!A1:R", { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
+  return (got && got.values) || [];
+}

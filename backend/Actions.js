@@ -4,7 +4,7 @@
 // tests/fake-backend.cjs):
 //   readTable_, appendObj_, updateById_, updateWhere_, ensureColumns_,
 //   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_,
-//   claudeToken_, ensureClaudeToken_
+//   claudeToken_, ensureClaudeToken_, newId_, plannerId_, setPlannerId_, plannerRows_
 // It also uses the pure helpers from Pure.js.
 
 var MSG_ = {
@@ -31,7 +31,13 @@ var MSG_ = {
   badHistory: "That history request didn’t come through properly.",
   server: "Something went wrong on our side. Try again.",
   noClaude: "The Claude link isn’t set up yet. Ask Mo to run migrate.",
+  noPlanner: "No planner sheet is linked yet. Ask Mo to link it.",
+  plannerUnreadable: "Couldn’t read the planner sheet. Ask Mo to check its permission.",
+  badPlannerId: "That isn’t a spreadsheet id.",
 };
+
+// A Google spreadsheet id, as linkPlanner takes it.
+var PLANNER_SHEET_ID_RE_ = /^[A-Za-z0-9_-]{20,80}$/;
 
 // The trip plan: stops, stays and day headers differ only in these. `key` is
 // the column a row is found by (and the Log's ref); `fields` are the API
@@ -89,6 +95,13 @@ function dispatch_(body) {
     var token = claudeToken_();
     return token ? ok_({ token: token }, rev_()) : err_("not_found", MSG_.noClaude);
   }
+  // The planner sheet's id (R39), run once from a terminal. Not logged, never
+  // given back.
+  if (action === "linkPlanner") {
+    if (typeof args.id !== "string" || !PLANNER_SHEET_ID_RE_.test(args.id)) return err_("bad_input", MSG_.badPlannerId);
+    setPlannerId_(args.id);
+    return ok_({ linked: true }, rev_());
+  }
 
   var write;
   switch (action) {
@@ -109,11 +122,14 @@ function dispatch_(body) {
     case "restoreStay": write = function (a, c) { return setPlanDeleted_("stay", a, c, false); }; break;
     case "setDay": write = setDay_; break;
     case "undo": write = undo_; break;
+    case "syncPayments": write = null; break;
     default: return err_("bad_input", MSG_.badAction);
   }
   var names = peopleNames_();
   if (typeof body.actor !== "string" || names.indexOf(body.actor) === -1) return err_("bad_input", MSG_.badActor);
   var ctx = { actor: body.actor, via: body.via === "claude" ? "claude" : "app", names: names };
+  // Reads the planner first, then takes the lock itself.
+  if (action === "syncPayments") return syncPayments_(ctx);
   // Fetching the day's rate can take a few seconds; do it before taking the lock.
   if (action === "addExpense") ctx.rate = getRate_();
   return withLock_(function () { return write(args, ctx); });
@@ -242,6 +258,7 @@ function load_() {
     rateToday: rate.rate,
     rateSource: rate.source,
     sheetUrl: sheetUrl_(),
+    plannerLinked: plannerId_() !== null,
   }, rev);
 }
 
@@ -295,6 +312,13 @@ function updateExpense_(args, ctx) {
   for (var i = 0; i < keys.length; i++) {
     if (EXPENSE_PATCH_KEYS_.indexOf(keys[i]) === -1) return err_("bad_input", MSG_.patchKey);
   }
+  return editExpense_(id, patch, ctx, false);
+}
+
+// The edit itself, for updateExpense and the planner pull. The app's own
+// edits write every editable column; onlyChanged (the pull) writes only the
+// columns that change, so a hand-typed cell the change leaves alone stays.
+function editExpense_(id, patch, ctx, onlyChanged) {
   var row = findRow_("Expenses", id);
   if (!row) return err_("not_found", MSG_.noExpense);
   var cur = expenseFromRow(row);
@@ -302,13 +326,15 @@ function updateExpense_(args, ctx) {
 
   // Validate the whole line as it would be, not the patch alone.
   var merged = editableOf_(cur);
-  keys.forEach(function (k) { merged[k] = patch[k]; });
+  Object.keys(patch).forEach(function (k) { merged[k] = patch[k]; });
   merged.id = id;
   var v = validateExpense(merged, ctx.names);
   if (!v.ok) return err_("bad_input", v.message);
 
   var cols = expenseToRow(editableOf_(v.value));
-  if (same_(cols, expenseToRow(editableOf_(cur)))) return ok_({ expense: cur, logId: null }, rev_());
+  var was = expenseToRow(editableOf_(cur));
+  if (same_(cols, was)) return ok_({ expense: cur, logId: null }, rev_());
+  if (onlyChanged) Object.keys(was).forEach(function (k) { if (same_(cols[k], was[k])) delete cols[k]; });
   var saved = expenseFromRow(updateById_("Expenses", id, cols));
   var log = appendLog_(ctx, "edit", "expense", id, summarize("edit", "expense", cur, saved), cur, saved);
   return ok_({ expense: saved, logId: log.id }, bumpRev_());
@@ -325,6 +351,93 @@ function setExpenseDeleted_(args, ctx, deleted) {
   var action = deleted ? "delete" : "restore";
   var log = appendLog_(ctx, action, "expense", id, summarize(action, "expense", cur, saved), cur, saved);
   return ok_({ expense: saved, logId: log.id }, bumpRev_());
+}
+
+// ---- payments from the planner sheet (R39) ----
+// A pull reads the planner (never writes it), then, under the lock and
+// against the Sheet as it is then, adds each included payment it has no
+// expense for and brings the planner's fields of one it has up to date,
+// through addExpense_ and editExpense_: validated, logged (via "planner")
+// and undoable like any other change. An expense deleted in the app stays
+// deleted; nothing is deleted by a pull. The planner's id is never in a reply.
+
+function syncPayments_(ctx) {
+  if (!plannerId_()) return err_("no_planner", MSG_.noPlanner);
+  var rows;
+  try {
+    rows = plannerRows_();
+  } catch (e) {
+    return err_("planner_unreadable", MSG_.plannerUnreadable);
+  }
+  var read = paymentsFromRows(rows);
+  var pull = { actor: ctx.actor, via: "planner", names: ctx.names };
+  // As for addExpense: fetching the day's rate can take a few seconds.
+  if (read.payments.some(function (p) { return p.include; })) pull.rate = getRate_();
+  return withLock_(function () { return pullPayments_(read, pull); });
+}
+
+function pullPayments_(read, ctx) {
+  var dayDates = tripDates_();
+  var expenses = readTable_("Expenses").filter(function (r) { return cellText_(r.id) !== ""; }).map(expenseFromRow);
+  var out = { added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: read.problems.slice() };
+  read.payments.forEach(function (p) {
+    var found = expenseOfPayment_(expenses, p.id);
+    if (!p.include) {
+      if (found && !found.deleted) out.notCounted.push(p.id);
+      return;
+    }
+    var x = expenseFromPayment(p, ctx.names, dayDates);
+    if (!x.ok) {
+      out.problems.push({ id: p.id, message: x.message });
+      return;
+    }
+    if (found && found.deleted) {
+      out.removed++;
+      return;
+    }
+    var r;
+    if (!found) {
+      var e = x.value;
+      e.id = newId_();
+      r = addExpense_({ expense: e }, ctx);
+      if (r.ok) {
+        out.added++;
+        expenses.push(r.data.expense);
+      }
+    } else {
+      var patch = plannerPatch_(found, x.value);
+      if (Object.keys(patch).length === 0) {
+        out.same++;
+        return;
+      }
+      r = editExpense_(found.id, patch, ctx, true);
+      if (r.ok && r.data.logId === null) out.same++;
+      else if (r.ok) out.changed++;
+    }
+    if (!r.ok) out.problems.push({ id: p.id, message: r.message });
+  });
+  return ok_(out, rev_());
+}
+
+// The expense tied to payment pid by its note (paymentIdOf): a live one if
+// there is one, else a deleted one, else null.
+function expenseOfPayment_(expenses, pid) {
+  var gone = null;
+  for (var i = 0; i < expenses.length; i++) {
+    if (paymentIdOf(expenses[i].note) !== pid) continue;
+    if (!expenses[i].deleted) return expenses[i];
+    if (!gone) gone = expenses[i];
+  }
+  return gone;
+}
+
+// The fields the planner owns that differ: title, amount, currency, payer,
+// split (the same people in any order is the same split) and note.
+function plannerPatch_(cur, v) {
+  var patch = {};
+  ["title", "amount", "currency", "paidBy", "note"].forEach(function (k) { if (cur[k] !== v[k]) patch[k] = v[k]; });
+  if (!same_(cur.split.slice().sort(), v.split.slice().sort())) patch.split = v.split;
+  return patch;
 }
 
 // ---- payments ----

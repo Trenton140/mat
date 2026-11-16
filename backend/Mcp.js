@@ -8,8 +8,9 @@
 //   do, so it is validated, logged (via "claude") and undoable. Nothing here
 //   touches the Sheet itself; the reads are handle_'s load and history, and
 //   People for who the writes are made as.
-// - A reply never holds the trip key, the token, an e-Transfer address or an
-//   email (mcpScrub_), and an error reply says nothing about the trip.
+// - A reply never holds the trip key, the token, the planner sheet's id, an
+//   e-Transfer address or an email (mcpScrub_), and an error reply says
+//   nothing about the trip.
 // - Nothing here logs.
 //
 // One registry of tools (mcpTools_), read by tools/list and tools/call. It is
@@ -190,7 +191,7 @@ function mcpWrite_(kind, action, args, who) {
 // whole text is that address (an address like "Tokyo" must not hide the word
 // in "Tokyo Tower").
 function mcpSecrets_(people) {
-  var anywhere = [tripKey_(), claudeToken_()];
+  var anywhere = [tripKey_(), claudeToken_(), plannerId_()];
   var whole = [];
   people.forEach(function (p) {
     var a = String(p.etransfer || "").trim();
@@ -330,7 +331,8 @@ function mcpGetHistory_(args, who) {
         // The sentence the app's History shows (js/format.js historySentence).
         // An e-Transfer change is kept, as its sentence only: the address is
         // never in a sentence (summarize in Pure.js).
-        return { id: e.id, when: e.at, who: e.who, sentence: e.who + " " + e.summary + (e.via === "claude" ? " (through Claude)" : ""), can_undo: e.canUndo };
+        var by = e.via === "claude" ? " (through Claude)" : e.via === "planner" ? " (from the planner)" : "";
+        return { id: e.id, when: e.at, who: e.who, sentence: e.who + " " + e.summary + by, can_undo: e.canUndo };
       }),
     },
   };
@@ -398,6 +400,14 @@ function mcpSetDay_(args, who) {
   var patch = {};
   Object.keys(args).forEach(function (k) { if (k !== "date") patch[mcpCamel_(k)] = args[k]; });
   return mcpWrite_("day", "setDay", { date: args.date, patch: patch }, who);
+}
+
+// A pull from the planner sheet: its counts, with the problems it met.
+function mcpSyncPayments_(args, who) {
+  var r = mcpAsk_("syncPayments", {}, who.actor);
+  if (!r.ok) return r;
+  var d = r.data;
+  return { ok: true, value: { added: d.added, changed: d.changed, same: d.same, removed: d.removed, not_counted: d.notCounted, problems: d.problems } };
 }
 
 function mcpUndo_(args, who) {
@@ -533,6 +543,13 @@ function mcpTools_() {
       description: "Use this to undo one change from get_history, as the app’s Undo does; only the newest change to an item can be undone. The undo shows in the app’s History too.",
       args: { log_id: arg("integer", "The change’s id, from get_history or a write’s log_id.", true) },
       run: mcpUndo_,
+    },
+    {
+      name: "sync_payments",
+      write: true,
+      description: "Use this to bring in what’s been paid from the planner sheet’s Payments tab: new payments are added and changed ones updated. " + MCP_UNDOABLE_,
+      args: {},
+      run: mcpSyncPayments_,
     },
   ];
 }

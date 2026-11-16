@@ -54,3 +54,28 @@ function showInvite() {
   var key = PropertiesService.getScriptProperties().getProperty("TRIP_KEY");
   Logger.log(key ? "Trip key: " + key : "No trip key yet. Run setup() first.");
 }
+
+// The planner sheet (R39): run once from the script editor after linkPlanner.
+// Running it is how the owner grants the read-only permission the pull needs.
+// It logs how many payment rows there are, or what is wrong: never a value
+// from the sheet and never its id.
+function checkPlanner() {
+  if (!plannerId_()) {
+    Logger.log("Planner: not linked yet. Link it with linkPlanner first.");
+    return;
+  }
+  var rows;
+  try {
+    rows = plannerRows_();
+  } catch (e) {
+    Logger.log("Planner: couldn’t read its Payments tab. Check the id and that this account can open the sheet.");
+    return;
+  }
+  var read = paymentsFromRows(rows);
+  if (read.problems.length && read.problems[0].message.indexOf("missing the column") !== -1) {
+    Logger.log("Planner: " + read.problems[0].message);
+    return;
+  }
+  var n = rows.slice(1).filter(function (r) { return !plannerBlank_(r); }).length;
+  Logger.log("Planner: " + n + " payment rows, columns ok");
+}

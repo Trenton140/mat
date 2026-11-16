@@ -5,6 +5,16 @@ const { SEED, NOON12, open, until, text, expectText, visible } = require("./help
 
 // ---- small tools for this file ----
 
+// A made-up planner sheet: its id and Payments tab (Task 12).
+const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
+const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
+const prow = (o) => PHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
+const PLANNER = [
+  PHEAD,
+  prow({ payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", booking_ref: "AB12", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" }),
+  prow({ payment_id: "Q3", date_paid: "2026-12-12", payer: "Ajen", description: "Noodle bar", category: "food", vendor: "Ramen Ya", amount: 3600, currency: "JPY", split_between: "Mo, Ajen", split_type: "equal", include_in_split: "yes" }),
+];
+
 const isOpen = (page) => page.evaluate(() => document.getElementById("you").classList.contains("is-open"));
 // Open, and risen all the way (the sheet slides up over 500 ms).
 const waitYou = (page) =>
@@ -54,7 +64,7 @@ module.exports = [
       assert.equal(await text(page, "#you .sheet-top span"), "You設定");
       assert.equal(await page.evaluate(() => document.getElementById("you").contains(document.activeElement)), true, "focus moves into the sheet");
       const order = await page.evaluate(() => {
-        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setDemo", "setHow", "setInstall", "setInvite", "setClaude", "setSheet", "setReport"];
+        const ids = ["setWho", "setMail", "setSound", "setHist", "setFresh", "setDemo", "setHow", "setInstall", "setInvite", "setClaude", "setPlanner", "setSheet", "setReport"];
         const all = [...document.querySelectorAll("#you *")];
         return ids.map((id) => all.indexOf(document.getElementById(id)));
       });
@@ -524,6 +534,64 @@ module.exports = [
       await until(async () => !(await page.isDisabled("#setClaude")), "the tap has finished");
       assert.equal(await clipboard(page), "before", "nothing was copied after Settings closed");
       assert.notEqual(await text(page, "#ubarT"), "Claude link copied.");
+    },
+  },
+  {
+    name: "Planner payments: no row while no planner sheet is linked",
+    async run({ page }) {
+      await ready(page);
+      await openYou(page);
+      assert.equal(await page.evaluate(() => document.getElementById("setPlanner").hidden), true, "the row is there, hidden");
+      assert.equal(await page.isHidden("#setPlanner"), true);
+    },
+  },
+  {
+    name: "Planner payments: a tap brings the planner's payments onto the receipt and says so; a second tap finds nothing new; History says from the planner",
+    async run({ page }) {
+      const backend = await ready(page, { seed: { ...SEED, planner: PLANNER, plannerId: PLANNER_ID } });
+      await openYou(page);
+      assert.equal(await page.isVisible("#setPlanner"), true);
+      assert.equal(await page.evaluate(() => document.querySelector("#setPlanner > span").firstChild.textContent), "Planner payments");
+      assert.equal(await text(page, "#setPlanner small"), "Brings in what’s been paid from the planner sheet");
+      assert.equal(await text(page, "#setPlanner b"), "Fetch");
+
+      // While the pull runs: Fetching…, and a second tap does nothing.
+      let release;
+      const gate = new Promise((r) => (release = r));
+      const handle = backend.handle;
+      backend.handle = async (body) => {
+        if (body.action === "syncPayments") await gate;
+        return handle(body);
+      };
+      await page.click("#setPlanner");
+      await expectText(page, "#setPlanner b", "Fetching…");
+      await page.evaluate(() => document.getElementById("setPlanner").click());
+      release();
+      await expectText(page, "#ubarT", "Added 2 payments from the planner.");
+      await expectText(page, "#setPlanner b", "Fetch");
+      assert.equal(backend.requests.filter((r) => r.action === "syncPayments").length, 1, "one pull for two taps");
+      backend.handle = handle;
+
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      const titles = () => page.$$eval("#rc .rc-row .rc-t", (els) => els.map((e) => e.firstChild.textContent));
+      await until(async () => (await titles()).includes("Rail pass") && (await titles()).includes("Noodle bar"), "the payments are on the receipt");
+
+      await page.evaluate(() => globalThis.__matTest.store.clearNotice());
+      await openYou(page);
+      await page.click("#setPlanner");
+      await expectText(page, "#ubarT", "Nothing new in the planner.");
+      assert.equal(backend.fake.primitives.readTable_("Expenses").filter((e) => e.note.startsWith("X7 · ")).length, 1, "nothing added twice");
+
+      await page.click("#youDone");
+      await waitYouClosed(page);
+      await page.evaluate(() => document.getElementById("histBtn").click());
+      await until(
+        () => page.$$eval("#tape .tp-row .tp-s", (els) => els.some((e) => e.textContent === "Mo rang up Rail pass $221.52 (from the planner)")),
+        "History says the line came from the planner",
+      );
+      const seen = await page.evaluate(() => [document.body.innerHTML, JSON.stringify({ ...localStorage })].join("|"));
+      assert.equal(seen.includes(PLANNER_ID), false, "the planner's id is never on the phone");
     },
   },
 ];

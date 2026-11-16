@@ -41,8 +41,9 @@ const NOT_SAVED = "No signal. That wasn’t saved.";
 // No reply: it may or may not be on the backend; the next contact shows which.
 const UNCONFIRMED = "Couldn’t confirm that. Checking…";
 const STALE = "That was changed again since. Undo the newer change first.";
+const NO_SIGNAL = "No signal. Try again.";
 
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl"];
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked"];
 // Every kind of item the store keeps, the field it is found by and the flag
 // that marks it gone. Stays and day headers only ever change here through an
 // undo from History (their writes come in later tasks).
@@ -102,6 +103,19 @@ function unreadable(kind, x, names) {
   return null;
 }
 
+// What a pull from the planner says it did.
+function plannerNotice(d) {
+  const plural = (n, one, many) => (n === 1 ? one : many);
+  let said;
+  if (d.added && d.changed) said = "Added " + d.added + " and changed " + d.changed + " to match the planner.";
+  else if (d.added) said = "Added " + d.added + plural(d.added, " payment", " payments") + " from the planner.";
+  else if (d.changed) said = "Changed " + d.changed + plural(d.changed, " payment", " payments") + " to match the planner.";
+  else said = "Nothing new in the planner.";
+  const bad = Array.isArray(d.problems) ? d.problems.length : 0;
+  if (bad) said += " " + bad + plural(bad, " row couldn’t be read.", " rows couldn’t be read.");
+  return said;
+}
+
 function isData(d) {
   return !!d && typeof d === "object" && Array.isArray(d.expenses) && Array.isArray(d.payments) && Array.isArray(d.people);
 }
@@ -135,7 +149,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "",
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false,
     loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
@@ -1025,6 +1039,28 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     throw err;
   }
 
+  // ---- payments from the planner sheet ----
+
+  // Asks the backend to bring in the planner's payments (R39): a plain call,
+  // never queued. On success it reloads, so the lines are on the receipt, and
+  // says what came in; resolves with the counts, or null when it did not
+  // go through (the notice says why).
+  async function syncPayments() {
+    let r;
+    try {
+      r = await call("syncPayments", {});
+    } catch (err) {
+      state.notice = neverSent(err) ? NO_SIGNAL : failNotice(err);
+      changed();
+      return null;
+    }
+    const d = r.data;
+    await refresh();
+    state.notice = plannerNotice(d);
+    changed();
+    return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems };
+  }
+
   // ---- history ----
 
   let historySeq = 0; // numbers each first-page load
@@ -1150,7 +1186,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       return () => subs.delete(fn);
     },
     boot, refresh, checkRev, flush, idle,
-    setMe, setPerson, markSeen, notify, clearNotice, claudeToken,
+    setMe, setPerson, markSeen, notify, clearNotice, claudeToken, syncPayments,
     addExpense,
     updateExpense: (id, patch) => change("expense", id, "edit", "updateExpense", patch),
     deleteExpense: (id) => takeBackLive("expense", id) || change("expense", id, "delete", "deleteExpense", { deleted: true }),

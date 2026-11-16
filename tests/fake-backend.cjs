@@ -5,8 +5,10 @@
 // on write, only patched columns written, same return values, and cells read
 // back the way Sheets hands them back (a stored "'=x" reads as "=x").
 //
-// seed = { expenses?, payments?, people?, days?, stops?, stays? } (see
-// constraints R6). stops and stays are arrays in API shape (deleted: true marks
+// seed = { expenses?, payments?, people?, days?, stops?, stays?, planner?,
+// plannerId? } (see constraints R6). planner: the planner sheet's Payments tab
+// as rows (row 1 its column names); plannerId: PLANNER_ID in Script Properties.
+// stops and stays are arrays in API shape (deleted: true marks
 // one deleted), each logged as added by Mo; days is a per-date patch in the
 // Sheet's own column names.
 // The returned function takes a request body and resolves to the envelope.
@@ -20,7 +22,9 @@
 // request the connector makes reaches handle_), fake.primitives (the in-memory helpers), fake.props (Script
 // Properties), fake.propReads (every Script Properties key read, in order),
 // fake.setRate(rate, source) (today's rate and where it came from: "live",
-// "last" or "fallback"; default 111, "live").
+// "last" or "fallback"; default 111, "live"), fake.planner ({ rows, fails,
+// reads }: the planner's Payments tab; fails makes reading it throw, with the
+// planner's id in the error's text; reads counts the reads).
 
 const fs = require("fs");
 const path = require("path");
@@ -80,6 +84,8 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   // Seeded Log rows are not writes, so REV starts at 0 even when seeded (an
   // unset REV would otherwise fall back to the Log's highest id).
   const props = { TRIP_KEY, CLAUDE_TOKEN, REV: "0" };
+  if (seed && seed.plannerId) props.PLANNER_ID = seed.plannerId;
+  const planner = { rows: copy(seed && seed.planner) || [], fails: false, reads: 0 };
   const propReads = [];
   const rate = { rate: RATE, source: "live" };
   const cache = {}; // the script cache, for the trip key
@@ -166,6 +172,17 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     ensureClaudeToken_() {
       if (!primitives.claudeToken_()) props.CLAUDE_TOKEN = crypto.randomBytes(16).toString("hex");
     },
+    // Same as Env.js: PLANNER_ID, and the planner's Payments tab as the
+    // Sheets API hands it back. Reading throws when it cannot read.
+    plannerId_: () => (Object.prototype.hasOwnProperty.call(props, "PLANNER_ID") && props.PLANNER_ID) || null,
+    setPlannerId_(id) {
+      props.PLANNER_ID = String(id);
+    },
+    plannerRows_() {
+      planner.reads++;
+      if (planner.fails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
+      return copy(planner.rows) || [];
+    },
   };
   Object.assign(world, primitives);
   ACTIONS.runInContext(world);
@@ -232,6 +249,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     };
   };
   fake.props = props;
+  fake.planner = planner;
   fake.propReads = propReads;
   fake.setRate = (r, source) => {
     rate.rate = r;

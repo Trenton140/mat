@@ -8,7 +8,7 @@
 // showing the notice and loading the first page again. Text from people or
 // the Sheet goes in with textContent only.
 
-import { clock, dayHead, localDay } from "../format.js";
+import { clock, dayHead, localDay, viaText } from "../format.js";
 
 const LOADING = "…";
 const NO_HISTORY = "History needs a connection.";
@@ -56,7 +56,7 @@ export function mountHistory(root, store) {
     const when = el("time", "", isFinite(ms) ? clock(ms) : "");
     const said = el("span", "tp-s");
     said.append(el("b", "", en.who), " " + en.summary);
-    if (en.via === "claude") said.append(el("i", "", " (through Claude)"));
+    if (viaText(en.via)) said.append(el("i", "", viaText(en.via)));
     row.append(when, said);
     if (en.canUndo && !en.undoneBy) {
       const undo = el("button", "tp-undo", "Undo");

@@ -1,6 +1,7 @@
 // Settings (the "You 設定" sheet): who you are, your e-Transfer address, the
 // stamp sound, History, when the figures were last fetched, how this works,
-// the invite link, the Claude link, the Google Sheet and "Report a problem".
+// the invite link, the Claude link, planner payments (only once a planner
+// sheet is linked), the Google Sheet and "Report a problem".
 // One sheet, no sub-pages.
 //
 // mountYou(root, store, { onHistory(), onDemo(date), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
@@ -48,6 +49,7 @@ const MARKUP = `
   <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
   <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b>Copy</b></button>
   <button type="button" class="set-r" id="setClaude"><span>Claude link<small>Lets your Claude add stops and expenses. Keep it to yourself.</small></span><b>Copy</b></button>
+  <button type="button" class="set-r" id="setPlanner" hidden><span>Planner payments<small>Brings in what’s been paid from the planner sheet</small></span><b id="setPlannerV">Fetch</b></button>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
   <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b>Copy</b></button>
 </div>`;
@@ -104,6 +106,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const demoV = $("setDemoV");
   const demoDays = $("setDemoDays");
   const sheetLink = $("setSheet");
+  const planner = $("setPlanner");
   const report = $("setReport");
   const install = $("setInstall");
   const installHow = $("setInstallHow");
@@ -170,6 +173,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     drawDemoDays(s);
     setDemo(!demoDays.hidden);
     fresh.textContent = s.loadedAt === null ? NOT_YET : freshText(s.loadedAt);
+    planner.hidden = s.plannerLinked !== true;
     const url = typeof s.sheetUrl === "string" && /^https?:\/\//i.test(s.sheetUrl) ? s.sheetUrl : "";
     sheetLink.hidden = !url;
     if (url) sheetLink.href = url;
@@ -349,6 +353,25 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     }
   }
   claude.addEventListener("click", copyClaude);
+
+  // ---- planner payments ----
+  // One pull at a time: while it runs the row says so and a tap does nothing.
+  // The store says what came in (or why not) on the undo bar.
+  const plannerV = $("setPlannerV");
+  let pulling = false;
+  planner.addEventListener("click", async () => {
+    if (pulling) return;
+    pulling = true;
+    planner.disabled = true;
+    plannerV.textContent = "Fetching…";
+    try {
+      await store.syncPayments();
+    } finally {
+      pulling = false;
+      planner.disabled = false;
+      plannerV.textContent = "Fetch";
+    }
+  });
 
   // ---- Add to Home Screen ----
   // An app on the iPhone Home Screen keeps storage of its own, without the key

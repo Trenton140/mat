@@ -64,12 +64,37 @@ It answers `{"ok":true,...,"data":{"added":[...]}}` with the columns it added, f
 
 The backend is also an MCP server, so someone's Claude can read the trip and make changes in it.
 
-- **It can:** read the trip (`get_trip`), explain who owes whom and why (`explain_debt`), add an expense, add, change or remove stops, save or remove a stay, change a day's ticket (`set_day`), read History and undo an entry. Every change goes through the same checks as the app, is logged in History marked "(through Claude)", and can be undone.
+- **It can:** read the trip (`get_trip`), explain who owes whom and why (`explain_debt`), add an expense, add, change or remove stops, save or remove a stay, change a day's ticket (`set_day`), read History and undo an entry, and bring in payments from the planner sheet (`sync_payments`, below). Every change goes through the same checks as the app, is logged in History marked "(through Claude)", and can be undone.
 - **It cannot:** stamp payments, see or change e-Transfer addresses or emails, see the trip key or its own token, copy invite links, or change who is on the trip. (Its undo works on any History entry, as Undo in the app does.) Replies never contain the key, the token, an e-Transfer address or an email.
 - **The link:** Settings → Claude link → Copy. Anyone who has the invite link can copy it, and everyone's Claude link carries the same token: one token for the whole trip.
 - **The token sits in the connector's address** (`?t=…`). Treat the Claude link like the invite link: whoever has it can change the plan and add expenses.
 - **`as=`** in the link names who the changes are logged as (the person who copied it). A name that matches no one on the trip blocks every write until the link is copied again; with no `as=`, changes are logged as the first person.
 - **Changing the token:** in the script editor, Project Settings → Script Properties, either edit `CLAUDE_TOKEN` to a new long random value, or delete it and run `migrate` (above) to make a new one. Every Claude link copied before stops working; each person copies theirs again from Settings.
+
+## Payments from a planner sheet
+
+The app can bring in payments kept in a separate Google Sheet (the "planner"), on request: Settings → Planner payments → Fetch, or Claude's `sync_payments`. Nothing runs on a timer. The backend only reads the planner; it never writes to it.
+
+**The tab.** The planner needs a tab named `Payments`, with column names in row 1 (any order): `payment_id, date_paid, payer, description, category, vendor, booking_ref, amount, currency, amount_cad, cad_is_exact, split_between, split_type, status, include_in_split, source, added_by, notes`. `split_between` is a comma list of names; `split_type` is `equal` or `personal`.
+
+**The rule.** Only rows whose `include_in_split` is `yes` come in, and only equal splits between people on the trip. A new payment becomes an expense (in Canadian dollars when `amount_cad` is filled, otherwise in its own yen or dollars) whose note starts with the payment's id, which is how the two stay tied. The planner owns a payment's title, amount, currency, payer, split and note: a later pull brings those back in line with it. The app owns the day and kind. An expense deleted in the app is never brought back, a payment taken out of the split leaves its expense alone, and nothing is ever deleted by a pull. Every change is logged in History marked "(from the planner)" and can be undone. A row that can't be brought in is skipped and counted ("1 row couldn’t be read.").
+
+**Linking it.** After pushing this backend and updating the deployment, send `linkPlanner` once from a terminal, with the trip key and the planner's spreadsheet id (the long part of its address between `/d/` and `/edit`) in environment variables, never typed into a file:
+
+```bash
+read -rs MAT_KEY && export MAT_KEY          # paste the trip key, then Enter
+read -rs PLANNER_ID && export PLANNER_ID    # paste the planner's spreadsheet id, then Enter
+curl -sL -H 'Content-Type: text/plain;charset=utf-8' \
+  --data "{\"key\":\"$MAT_KEY\",\"action\":\"linkPlanner\",\"args\":{\"id\":\"$PLANNER_ID\"}}" \
+  "https://script.google.com/macros/s/<deployment id>/exec"
+unset MAT_KEY PLANNER_ID
+```
+
+It answers `{"ok":true,...,"data":{"linked":true}}`. The id is kept only in the Script Property `PLANNER_ID`: never in a reply, the Log or History.
+
+**The permission.** Then the owner (the account the web app runs as, which must be able to open the planner) runs `checkPlanner` once from the script editor. Google asks for the new read-only permission (`spreadsheets.readonly`) at that point; the log then says how many payment rows it found, or which column is missing. Until then a pull answers "Couldn’t read the planner sheet."
+
+**Unlinking it.** In the script editor, Project Settings → Script Properties, delete `PLANNER_ID`. The Settings row goes away on the next load; expenses already brought in stay.
 
 ## The Sheet
 

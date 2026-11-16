@@ -82,9 +82,14 @@ export function freshText(ms) {
   return "Up to date " + clock(ms);
 }
 
+// Who a change came through, after its sentence: " (through Claude)", " (from the planner)" or "".
+export function viaText(via) {
+  return via === "claude" ? " (through Claude)" : via === "planner" ? " (from the planner)" : "";
+}
+
 // A history entry as one sentence: "Ajen rang up Tempura ¥101".
 export function historySentence(entry) {
-  return entry.who + " " + entry.summary + (entry.via === "claude" ? " (through Claude)" : "");
+  return entry.who + " " + entry.summary + viaText(entry.via);
 }
 
 // Where the viewer stands, from money.js standing().

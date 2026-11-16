@@ -44,7 +44,7 @@ test("the handshake needs no token; everything else does", () => {
   assert.equal(fake.mcp(rpc("initialize", {}), {}).result.serverInfo.name, "mat");
   assert.equal(fake.mcp(rpc("tools/list"), {}).error.code, -32001);
   assert.equal(fake.mcp(rpc("tools/list"), { t: "test-key" }).error.code, -32001); // the trip key is not the token
-  assert.equal(fake.mcp(rpc("tools/list"), T).result.tools.length, 11);
+  assert.equal(fake.mcp(rpc("tools/list"), T).result.tools.length, 12);
   assert.equal(fake.mcp({ jsonrpc: "2.0", method: "notifications/initialized" }, T).error.code, -32600);
   assert.equal(fake.mcp(rpc("nope"), T).error.code, -32601);
 });
@@ -140,7 +140,7 @@ test("a set token must match whole; the trip key, a prefix, a longer string or a
   }
   assert.equal(fake.mcp(rpc("tools/list"), {}).error.code, -32001);
   assert.equal(fake.mcp(rpc("tools/list"), undefined).error.code, -32001);
-  assert.equal(fake.mcp(rpc("tools/list"), T).result.tools.length, 11);
+  assert.equal(fake.mcp(rpc("tools/list"), T).result.tools.length, 12);
 });
 
 test("a message that is not a request is -32600 with id null, before any token check", () => {
@@ -162,9 +162,9 @@ test("method not found, unknown tool and bad tools/call params", () => {
   assert.ok(fake.mcp(rpc("tools/call", { name: "get_trip" }), T).result, "no arguments at all is the same as {}");
 });
 
-test("tools/list names the eleven tools in order, each schema listing its own arguments", () => {
+test("tools/list names the twelve tools in order, each schema listing its own arguments", () => {
   const tools = createFakeBackend({}).mcp(rpc("tools/list"), T).result.tools;
-  assert.deepEqual(tools.map((t) => t.name), ["get_trip", "explain_debt", "add_expense", "add_stop", "change_stop", "remove_stop", "save_stay", "remove_stay", "set_day", "get_history", "undo"]);
+  assert.deepEqual(tools.map((t) => t.name), ["get_trip", "explain_debt", "add_expense", "add_stop", "change_stop", "remove_stop", "save_stay", "remove_stay", "set_day", "get_history", "undo", "sync_payments"]);
   const props = Object.fromEntries(tools.map((t) => [t.name, Object.keys(t.inputSchema.properties).sort()]));
   assert.deepEqual(props.add_expense, ["amount", "currency", "day", "kind", "note", "paid_by", "split", "title"]);
   assert.deepEqual(props.add_stop, ["booked", "date", "detail", "fixed", "getting_there", "link", "note", "photo", "place", "sign_jp", "time", "title", "travel_min"]);
@@ -172,6 +172,7 @@ test("tools/list names the eleven tools in order, each schema listing its own ar
   assert.deepEqual(props.save_stay, ["address_jp", "first_night", "id", "last_night", "link", "name", "name_jp", "note", "place"]);
   assert.deepEqual(props.set_day, ["city", "date", "from_en", "from_jp", "line_colour", "line_en", "line_jp", "title", "to_en", "to_jp"]);
   assert.deepEqual(props.undo, ["log_id"]);
+  assert.deepEqual(props.sync_payments, []);
   const req = Object.fromEntries(tools.map((t) => [t.name, (t.inputSchema.required || []).slice().sort()]));
   assert.deepEqual(req.add_expense, ["amount", "currency", "paid_by", "title"]);
   assert.deepEqual(req.add_stop, ["date", "title"]);
@@ -508,7 +509,7 @@ test("migrate makes CLAUDE_TOKEN (32 hex) when it is missing, keeps one that is 
   const t = fake.props.CLAUDE_TOKEN;
   await fake({ key: "test-key", action: "migrate", args: {} });
   assert.equal(fake.props.CLAUDE_TOKEN, t, "a second migrate keeps it");
-  assert.equal(fake.mcp(rpc("tools/list"), { t }).result.tools.length, 11);
+  assert.equal(fake.mcp(rpc("tools/list"), { t }).result.tools.length, 12);
 });
 
 test("Apps Script side: setup() and migrate make the token from Utilities.getUuid, newId_ is 20 letters and digits", () => {
@@ -541,6 +542,7 @@ test("R35: an `as` that names no one refuses every write with -32602 and stores 
     ["add_stop", { date: "2026-12-12", title: "Tea" }],
     ["remove_stop", { id: "planstop1101" }],
     ["undo", { log_id: 1 }],
+    ["sync_payments", {}],
   ]) {
     const r = call(fake, name, args, q);
     assert.equal(r.error && r.error.code, -32602, name);
@@ -700,4 +702,52 @@ test("M2: add_expense refuses a day that is neither pre nor a trip day; pre and 
   assert.equal(ok(fake, "add_expense", { ...base, day: "pre" }).expense.day, "pre");
   assert.equal(ok(fake, "add_expense", { ...base, day: "2026-12-12" }).expense.day, "2026-12-12");
   assert.equal(fake.tables.Expenses.length, rows + 2);
+});
+
+// ---------- payments from the planner sheet (Task 12, R39) ----------
+// Made-up planner rows and id.
+
+const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
+const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
+const prow = (o) => PHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
+const PX7 = { payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", booking_ref: "AB12", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" };
+const PLANNER = [PHEAD, prow(PX7), prow({ ...PX7, payment_id: "P5", split_type: "personal" }), prow({ ...PX7, payment_id: "Z1", include_in_split: "no" })];
+
+test("sync_payments brings the planner's payments in, as the person in the link, logged as from the planner", () => {
+  const fake = createFakeBackend({ planner: PLANNER, plannerId: PLANNER_ID });
+  const tool = fake.mcp(rpc("tools/list"), T).result.tools.find((t) => t.name === "sync_payments");
+  assert.equal(tool.description, "Use this to bring in what’s been paid from the planner sheet’s Payments tab: new payments are added and changed ones updated. The change shows in the app’s History and can be undone.");
+  assert.deepEqual(tool.inputSchema, { type: "object", properties: {}, additionalProperties: false });
+  const r = ok(fake, "sync_payments", {}, { ...T, as: " ajen " });
+  assert.deepEqual(r, { added: 1, changed: 0, same: 0, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }] });
+  assert.deepEqual(fake.tables.Log.map((l) => [l.who, l.via]), [["Ajen", "planner"]]);
+  assert.deepEqual(ok(fake, "sync_payments", {}), { added: 0, changed: 0, same: 1, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }] });
+  const h = ok(fake, "get_history", {});
+  assert.equal(h.entries[0].sentence, "Ajen rang up Rail pass $221.52 (from the planner)");
+  assert.equal(badArgs(fake, "sync_payments", { id: "x" }), "Invalid params: unknown argument id.");
+});
+
+test("sync_payments needs the token and a known `as`; a refusal is the backend's sentence; the planner id is never in a reply", () => {
+  const fake = createFakeBackend({ planner: PLANNER, plannerId: PLANNER_ID });
+  assert.equal(call(fake, "sync_payments", {}, {}).error.code, -32001);
+  const reads = fake.planner.reads;
+  const r = call(fake, "sync_payments", {}, { ...T, as: "nobody" });
+  assert.equal(r.error.code, -32602);
+  assert.equal(fake.planner.reads, reads, "the planner is not read");
+  assert.equal(fake.tables.Expenses.length, 0);
+
+  const replies = [];
+  fake.planner.fails = true;
+  replies.push(call(fake, "sync_payments", {}));
+  assert.equal(refusal(fake, "sync_payments", {}), "Couldn’t read the planner sheet. Ask Mo to check its permission.");
+  fake.planner.fails = false;
+  // A planner cell that holds the id itself is hidden too.
+  fake.planner.rows = [PHEAD, prow({ ...PX7, vendor: PLANNER_ID }), prow({ ...PX7, payment_id: "N2", payer: PLANNER_ID })];
+  replies.push(call(fake, "sync_payments", {}), call(fake, "get_trip", {}), call(fake, "get_history", {}));
+  const text = JSON.stringify(replies);
+  assert.equal(text.includes(PLANNER_ID), false);
+  assert.ok(text.includes("(hidden)"));
+
+  const unlinked = createFakeBackend({ planner: PLANNER });
+  assert.equal(refusal(unlinked, "sync_payments", {}), "No planner sheet is linked yet. Ask Mo to link it.");
 });

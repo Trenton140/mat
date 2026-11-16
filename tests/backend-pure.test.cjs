@@ -392,3 +392,164 @@ test("day rows, labels and links", () => {
   assert.equal(P.safeUrl("https://a.test/" + "x".repeat(500)), "");
   assert.equal(P.safeUrl(5), "");
 });
+
+// ---------- payments from the planner sheet (Task 12, R39) ----------
+// Every value here is made up: ids, vendors, refs and amounts.
+
+const PLAN_HEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
+// One planner row from named fields; the rest blank.
+const planRow = (o, head = PLAN_HEAD) => head.map((h) => (o[h] === undefined ? "" : o[h]));
+const X7 = { payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", booking_ref: "AB12", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" };
+const X9 = { payment_id: "X9", date_paid: "2026-11-02", payer: "Ajen", description: "Flight north", category: "flight", vendor: "Sky Air", booking_ref: "ZZ9", amount: 31500, currency: "JPY", amount_cad: 274.05, cad_is_exact: "no — est.", split_between: "Mo,Ajen,Trenton", split_type: "equal", include_in_split: "yes" };
+const PLAN_DATES = ["2026-12-10", "2026-12-11", "2026-12-12", "2026-12-13"];
+const payOf = (o) => {
+  const r = P.paymentsFromRows([PLAN_HEAD, planRow(o)]);
+  assert.equal(r.payments.length, 1, JSON.stringify(r.problems));
+  return r.payments[0];
+};
+const convert = (o) => P.expenseFromPayment(payOf({ ...X7, ...o }), NAMES, PLAN_DATES);
+
+test("paymentsFromRows reads each payment by column name, trimmed, numbers as numbers", () => {
+  const r = P.paymentsFromRows([PLAN_HEAD, planRow({ ...X7, payer: "  Mo ", vendor: " North Rail ", notes: "x" })]);
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(r.payments, [{
+    id: "X7", datePaid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", bookingRef: "AB12",
+    amount: 24750, currency: "JPY", amountCad: 221.52, cadExact: "yes", splitBetween: ["Mo", "Ajen", "Trenton"], splitType: "equal", include: true,
+  }]);
+});
+
+test("paymentsFromRows finds columns in any order", () => {
+  const head = PLAN_HEAD.slice().reverse();
+  const r = P.paymentsFromRows([head, planRow(X7, head)]);
+  assert.deepEqual(r.problems, []);
+  assert.equal(r.payments[0].id, "X7");
+  assert.equal(r.payments[0].amountCad, 221.52);
+  assert.deepEqual(r.payments[0].splitBetween, ["Mo", "Ajen", "Trenton"]);
+});
+
+test("paymentsFromRows: a missing column gives one problem and no payments", () => {
+  for (const name of ["payment_id", "payer", "description", "amount", "currency", "amount_cad", "split_between", "split_type", "include_in_split"]) {
+    const head = PLAN_HEAD.filter((h) => h !== name);
+    assert.deepEqual(P.paymentsFromRows([head, planRow(X7, head)]), { payments: [], problems: [{ id: "", message: "The planner’s Payments tab is missing the column " + name + "." }] }, name);
+  }
+  // The others are optional.
+  const head = PLAN_HEAD.filter((h) => !["date_paid", "category", "vendor", "booking_ref", "cad_is_exact", "status", "source", "added_by", "notes"].includes(h));
+  const r = P.paymentsFromRows([head, planRow(X7, head)]);
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual([r.payments[0].vendor, r.payments[0].datePaid, r.payments[0].cadExact], ["", "", ""]);
+  assert.deepEqual(P.paymentsFromRows([]), { payments: [], problems: [{ id: "", message: "The planner’s Payments tab is missing the column payment_id." }] });
+});
+
+test("paymentsFromRows reads numbers given as text, and NaN when it can't", () => {
+  const p = payOf({ ...X7, amount: "¥24,750", amount_cad: "CA$1,234.50" });
+  assert.deepEqual([p.amount, p.amountCad], [24750, 1234.5]);
+  assert.equal(payOf({ ...X7, amount_cad: " $ 12.30 " }).amountCad, 12.3);
+  assert.equal(payOf({ ...X7, amount_cad: "" }).amountCad, NaN);
+  assert.equal(payOf({ ...X7, amount_cad: "TBD" }).amountCad, NaN);
+  assert.equal(payOf({ ...X7, amount: "about 5" }).amount, NaN);
+});
+
+test("paymentsFromRows: include_in_split is yes, trimmed, in any case", () => {
+  assert.equal(payOf({ ...X7, include_in_split: "Yes" }).include, true);
+  assert.equal(payOf({ ...X7, include_in_split: " yes " }).include, true);
+  assert.equal(payOf({ ...X7, include_in_split: "no (until charged)" }).include, false);
+  assert.equal(payOf({ ...X7, include_in_split: "" }).include, false);
+});
+
+test("paymentsFromRows skips blank rows, leaves out unusable and repeated ids, and reads 300 at most", () => {
+  const r = P.paymentsFromRows([
+    PLAN_HEAD, [], planRow({}), ["", " ", null],
+    planRow(X7), planRow({ ...X7, payment_id: "" }), planRow({ ...X7, payment_id: "has space" }), planRow({ ...X7, payment_id: "-dash" }),
+    planRow({ ...X7, payment_id: "x".repeat(21) }), planRow({ ...X7, description: "again" }), planRow(X9),
+  ]);
+  assert.deepEqual(r.payments.map((p) => p.id), ["X7", "X9"]);
+  assert.equal(r.payments[0].description, "Rail pass", "the first of a repeated id is kept");
+  assert.deepEqual(r.problems, [
+    { id: "", message: "That payment’s id isn’t usable." },
+    { id: "", message: "That payment’s id isn’t usable." },
+    { id: "", message: "That payment’s id isn’t usable." },
+    { id: "", message: "That payment’s id isn’t usable." },
+    { id: "X7", message: "That payment id is in the planner twice." },
+  ]);
+  assert.equal(payOf({ ...X7, payment_id: "A_b-9" }).id, "A_b-9");
+  assert.equal(payOf({ ...X7, payment_id: 42 }).id, "42");
+
+  const many = [PLAN_HEAD];
+  for (let i = 0; i < 301; i++) many.push(planRow({ ...X7, payment_id: "P" + i }), []);
+  const capped = P.paymentsFromRows(many);
+  assert.equal(capped.payments.length, 300);
+  assert.equal(capped.payments[299].id, "P299");
+  assert.deepEqual(capped.problems, [{ id: "", message: "Only the first 300 payments were read." }]);
+  many.pop();
+  many.pop();
+  assert.deepEqual(P.paymentsFromRows(many).problems, []);
+});
+
+test("expenseFromPayment: the two note examples, word for word", () => {
+  const a = P.expenseFromPayment(payOf(X7), NAMES, PLAN_DATES);
+  assert.deepEqual(a, { ok: true, value: { title: "Rail pass", amount: 221.52, currency: "CAD", paidBy: "Mo", split: ["Mo", "Ajen", "Trenton"], day: "2026-12-11", kind: "transport", note: "X7 · North Rail · ref AB12 · ¥24,750 charged" } });
+  const b = P.expenseFromPayment(payOf(X9), NAMES, PLAN_DATES);
+  assert.equal(b.value.note, "X9 · Sky Air · ref ZZ9 · ¥31,500 charged · CAD amount is an estimate");
+  assert.deepEqual([b.value.amount, b.value.currency, b.value.day, b.value.kind, b.value.paidBy], [274.05, "CAD", "pre", "transport", "Ajen"]);
+});
+
+test("expenseFromPayment: only equal splits, only the trip's people, in their own spelling", () => {
+  assert.deepEqual(convert({ split_type: "personal" }), { ok: false, message: "Only payments split equally can be brought in." });
+  assert.deepEqual(convert({ split_type: "" }), { ok: false, message: "Only payments split equally can be brought in." });
+  assert.equal(convert({ split_type: " Equal " }).ok, true);
+  assert.deepEqual(convert({ payer: "Nadia" }), { ok: false, message: "Nadia isn’t one of the people on this trip." });
+  assert.deepEqual(convert({ split_between: "Mo, Nadia" }), { ok: false, message: "Nadia isn’t one of the people on this trip." });
+  assert.deepEqual(convert({ split_between: " , " }), { ok: false, message: "That payment has nobody to split it between." });
+  assert.deepEqual(convert({ payer: "" }), { ok: false, message: "That payment doesn’t say who paid." });
+  const v = convert({ payer: " ajen ", split_between: "MO,trenton " }).value;
+  assert.deepEqual([v.paidBy, v.split], ["Ajen", ["Mo", "Trenton"]]);
+});
+
+test("expenseFromPayment: the amount is amount_cad when there is one, else yen or dollars as charged", () => {
+  assert.deepEqual([convert({ amount_cad: 10.005 }).value.amount, convert({ amount_cad: 10.005 }).value.currency], [10.01, "CAD"]);
+  const yen = convert({ amount_cad: "", amount: 4200.6 }).value;
+  assert.deepEqual([yen.amount, yen.currency, yen.note], [4201, "JPY", "X7 · North Rail · ref AB12"]);
+  const cad = convert({ amount_cad: 0, amount: 12.345, currency: " cad " }).value;
+  assert.deepEqual([cad.amount, cad.currency], [12.35, "CAD"]);
+  for (const o of [{ amount_cad: "", currency: "USD", amount: 30 }, { amount_cad: -5, amount: 0 }, { amount_cad: "", amount: "" }]) {
+    assert.deepEqual(convert(o), { ok: false, message: "That payment has no usable amount." }, JSON.stringify(o));
+  }
+});
+
+test("expenseFromPayment: the title is the description, whitespace collapsed, at most 80 letters", () => {
+  assert.equal(convert({ description: "  Rail \n pass   north " }).value.title, "Rail pass north");
+  assert.deepEqual(convert({ description: "  " }), { ok: false, message: "That payment has no description." });
+  const long = convert({ description: "word ".repeat(30) }).value.title;
+  assert.ok(long.length <= 80, long.length);
+  assert.equal(long, "word ".repeat(16).trim() + "…", "the 79th letter ends a whole word: it stays");
+  assert.equal(convert({ description: "abc ".repeat(19) + "abcdefgh more" }).value.title, "abc ".repeat(19).trim() + "…", "a part-word at the cut is dropped");
+  assert.equal(convert({ description: "x".repeat(100) }).value.title, "x".repeat(79) + "…");
+  assert.equal(convert({ description: "y".repeat(80) }).value.title, "y".repeat(80));
+});
+
+test("expenseFromPayment: the day, the kind and the note's other parts", () => {
+  assert.equal(convert({ date_paid: "2026-12-13" }).value.day, "2026-12-13");
+  for (const d of ["", "soon", "2026-11-30", "12/11/2026"]) assert.equal(convert({ date_paid: d }).value.day, "pre", d);
+  assert.equal(convert({ date_paid: "2026-12-25" }).value.day, "2026-12-13");
+  const kinds = { lodging: "stay", Transport: "transport", flight: "transport", food: "food", shopping: "shopping", tickets: "activity", "": "activity" };
+  for (const [c, k] of Object.entries(kinds)) assert.equal(convert({ category: c }).value.kind, k, c);
+  assert.equal(convert({ vendor: "", booking_ref: "" }).value.note, "X7 · ¥24,750 charged");
+  assert.equal(convert({ currency: "USD", amount: 45.5 }).value.note, "X7 · North Rail · ref AB12 · 45.5 USD");
+  assert.equal(convert({ currency: "CAD", amount: 221.52 }).value.note, "X7 · North Rail · ref AB12");
+  assert.equal(convert({ cad_is_exact: "" }).value.note, "X7 · North Rail · ref AB12 · ¥24,750 charged · CAD amount is an estimate");
+  assert.equal(convert({ cad_is_exact: "Yes, from the statement" }).value.note, "X7 · North Rail · ref AB12 · ¥24,750 charged");
+  const long = convert({ vendor: "Vendor ".repeat(40) }).value.note;
+  assert.ok(long.length <= 200, long.length);
+  assert.match(long, /^X7 · Vendor Vendor .*Vendor…$/);
+});
+
+test("paymentIdOf: the note's first part when it is an id", () => {
+  assert.equal(P.paymentIdOf("X7 · North Rail · ref AB12 · ¥24,750 charged"), "X7");
+  assert.equal(P.paymentIdOf("X7"), "X7");
+  assert.equal(P.paymentIdOf("ref NK-4471"), null);
+  assert.equal(P.paymentIdOf(""), null);
+  assert.equal(P.paymentIdOf("Dinner at 8 · tip"), null);
+  assert.equal(P.paymentIdOf("dinner · tip"), "dinner", "a one-word first part is an id by the rule");
+  assert.equal(P.paymentIdOf(undefined), null);
+  assert.equal(P.paymentIdOf("x".repeat(21) + " · a"), null);
+});

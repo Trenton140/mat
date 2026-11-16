@@ -37,6 +37,7 @@ test("freshText and historySentence", () => {
   assert.equal(freshText(Date.parse("2026-12-12T13:20:00")), "Up to date 13:20");
   assert.equal(historySentence({ who: "Ajen", summary: "rang up Tempura ¥101", via: "app" }), "Ajen rang up Tempura ¥101");
   assert.equal(historySentence({ who: "Ajen", summary: "renamed A to B", via: "claude" }), "Ajen renamed A to B (through Claude)");
+  assert.equal(historySentence({ who: "Mo", summary: "rang up Rail pass $221.52", via: "planner" }), "Mo rang up Rail pass $221.52 (from the planner)");
 });
 
 test("localDay is the phone's own day, and empty for no time", () => {

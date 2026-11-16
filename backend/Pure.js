@@ -708,7 +708,7 @@ function logShape_(o) {
     id: Number(o.id),
     at: cellStamp_(o.at),
     who: cellText_(o.who),
-    via: o.via === "claude" ? "claude" : "app",
+    via: o.via === "claude" || o.via === "planner" ? o.via : "app",
     action: cellText_(o.action),
     kind: cellText_(o.kind),
     ref: cellText_(o.ref),
@@ -731,6 +731,163 @@ function entryFromRow(o, allRows) {
   return e;
 }
 
+// ---- payments from the planner sheet (R39) ----
+// The planner is a separate Google Sheet with a Payments tab; what it holds
+// is read as untrusted text. These turn its rows into expenses for the app's
+// own validation (validateExpense) to check.
+
+var PAYMENT_ID_RE_ = /^[A-Za-z0-9][A-Za-z0-9_-]{0,19}$/;
+var PLANNER_NEEDS_ = ["payment_id", "payer", "description", "amount", "currency", "amount_cad", "split_between", "split_type", "include_in_split"];
+var PLANNER_MAX_ROWS_ = 300;
+var PLANNER_KINDS_ = { lodging: "stay", transport: "transport", flight: "transport", food: "food", shopping: "shopping" };
+
+function plannerText_(v) { return v === undefined || v === null ? "" : String(v).trim(); }
+
+// A number, or text such as "CA$1,234.50" or "¥24,750"; NaN when unreadable.
+function plannerNum_(v) {
+  if (typeof v === "number") return isFinite(v) ? v : NaN;
+  if (typeof v !== "string") return NaN;
+  var s = v.replace(/CA\$/gi, "").replace(/[$¥\s,]/g, "");
+  if (s === "") return NaN;
+  var n = Number(s);
+  return isFinite(n) ? n : NaN;
+}
+
+function plannerBlank_(row) {
+  return !Array.isArray(row) || row.every(function (c) { return plannerText_(c) === ""; });
+}
+
+// rows: the Payments tab as Sheets hands it back, row 1 the column names.
+// -> { payments, problems: [{ id, message }] }
+function paymentsFromRows(rows) {
+  var list = Array.isArray(rows) ? rows : [];
+  var head = (Array.isArray(list[0]) ? list[0] : []).map(function (h) { return plannerText_(h).toLowerCase(); });
+  for (var i = 0; i < PLANNER_NEEDS_.length; i++) {
+    if (head.indexOf(PLANNER_NEEDS_[i]) === -1) {
+      return { payments: [], problems: [{ id: "", message: "The planner’s Payments tab is missing the column " + PLANNER_NEEDS_[i] + "." }] };
+    }
+  }
+  var cell = function (row, name) {
+    var c = head.indexOf(name);
+    return c === -1 ? "" : row[c];
+  };
+  var payments = [];
+  var problems = [];
+  var seen = {};
+  var read = 0;
+  for (var r = 1; r < list.length; r++) {
+    var row = list[r];
+    if (plannerBlank_(row)) continue;
+    if (read === PLANNER_MAX_ROWS_) {
+      problems.push({ id: "", message: "Only the first 300 payments were read." });
+      break;
+    }
+    read++;
+    var id = plannerText_(cell(row, "payment_id"));
+    if (!PAYMENT_ID_RE_.test(id)) {
+      problems.push({ id: "", message: "That payment’s id isn’t usable." });
+      continue;
+    }
+    if (seen[id] === true) {
+      problems.push({ id: id, message: "That payment id is in the planner twice." });
+      continue;
+    }
+    seen[id] = true;
+    payments.push({
+      id: id,
+      datePaid: plannerText_(cell(row, "date_paid")),
+      payer: plannerText_(cell(row, "payer")),
+      description: plannerText_(cell(row, "description")),
+      category: plannerText_(cell(row, "category")),
+      vendor: plannerText_(cell(row, "vendor")),
+      bookingRef: plannerText_(cell(row, "booking_ref")),
+      amount: plannerNum_(cell(row, "amount")),
+      currency: plannerText_(cell(row, "currency")),
+      amountCad: plannerNum_(cell(row, "amount_cad")),
+      cadExact: plannerText_(cell(row, "cad_is_exact")),
+      splitBetween: plannerText_(cell(row, "split_between")).split(",").map(plannerText_).filter(function (s) { return s !== ""; }),
+      splitType: plannerText_(cell(row, "split_type")),
+      include: plannerText_(cell(row, "include_in_split")).toLowerCase() === "yes",
+    });
+  }
+  return { payments: payments, problems: problems };
+}
+
+// s cut to max letters: at max - 1, less a trailing part-word, then "…".
+function plannerCut_(s, max) {
+  if (s.length <= max) return s;
+  var t = s.slice(0, max - 1);
+  if (s.charAt(max - 1) !== " " && t.charAt(t.length - 1) !== " " && t.lastIndexOf(" ") > 0) t = t.slice(0, t.lastIndexOf(" "));
+  return t.replace(/\s+$/, "") + "…";
+}
+
+// The person among people that name means, in their own spelling, or null.
+function plannerPerson_(name, people) {
+  var want = plannerText_(name).toLowerCase();
+  for (var i = 0; i < people.length; i++) if (people[i].trim().toLowerCase() === want) return people[i];
+  return null;
+}
+
+// An included payment as the expense fields the planner owns, plus the day
+// and kind a new expense starts with. -> { ok, value } | { ok: false, message }
+function expenseFromPayment(p, people, dayDates) {
+  if (p.splitType.toLowerCase() !== "equal") return fail_("Only payments split equally can be brought in.");
+  if (p.payer === "") return fail_("That payment doesn’t say who paid.");
+  var paidBy = plannerPerson_(p.payer, people);
+  if (paidBy === null) return fail_(p.payer + " isn’t one of the people on this trip.");
+  if (!p.splitBetween.length) return fail_("That payment has nobody to split it between.");
+  var split = [];
+  for (var i = 0; i < p.splitBetween.length; i++) {
+    var who = plannerPerson_(p.splitBetween[i], people);
+    if (who === null) return fail_(p.splitBetween[i] + " isn’t one of the people on this trip.");
+    split.push(who);
+  }
+  var charged = p.currency.toUpperCase();
+  var useCad = p.amountCad > 0;
+  var amount, currency;
+  if (useCad) {
+    amount = round2_(p.amountCad);
+    currency = "CAD";
+  } else if ((charged === "JPY" || charged === "CAD") && p.amount > 0) {
+    currency = charged;
+    amount = charged === "JPY" ? Math.round(p.amount) : round2_(p.amount);
+  } else {
+    return fail_("That payment has no usable amount.");
+  }
+  var title = p.description.replace(/\s+/g, " ").trim();
+  if (title === "") return fail_("That payment has no description.");
+
+  var day = "pre";
+  if (dayDates.indexOf(p.datePaid) !== -1) day = p.datePaid;
+  else if (validDay_(p.datePaid) && dayDates.length && p.datePaid > dayDates[0]) day = dayDates[dayDates.length - 1];
+
+  var parts = [p.id, p.vendor, p.bookingRef ? "ref " + p.bookingRef : ""];
+  if (useCad && isFinite(p.amount)) {
+    if (charged === "JPY") parts.push(money_(p.amount, "JPY") + " charged");
+    else if (charged !== "CAD" && charged !== "") parts.push(p.amount + " " + p.currency);
+  }
+  if (useCad && p.cadExact.toLowerCase().indexOf("yes") !== 0) parts.push("CAD amount is an estimate");
+  var note = parts.filter(function (x) { return x !== ""; }).join(" · ");
+
+  return {
+    ok: true,
+    value: {
+      title: plannerCut_(title, 80), amount: amount, currency: currency, paidBy: paidBy, split: split, day: day,
+      kind: PLANNER_KINDS_[p.category.toLowerCase()] || "activity", note: plannerCut_(note, 200),
+    },
+  };
+}
+
+// The payment an expense was brought in from: its note's first part (before
+// " · "), when that is a payment id. Expenses rung up by hand in this format
+// are recognised the same way.
+function paymentIdOf(note) {
+  if (typeof note !== "string") return null;
+  var i = note.indexOf(" · ");
+  var head = i === -1 ? note : note.slice(0, i);
+  return PAYMENT_ID_RE_.test(head) ? head : null;
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf };
 }
