@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reportText } from "../js/views/you.js";
+import { reportText, plannerWord } from "../js/views/you.js";
 import { freshText, historySentence, localDay } from "../js/format.js";
 
 const base = { me: "Ajen", screen: "Money", version: "7", when: "Sat Dec 12, 13:20" };
@@ -49,4 +49,16 @@ test("reportText lists the ids of Sheet lines the app left out (F3)", () => {
   const t = reportText({ ...base, sentences: [], setAside: [{ kind: "expense", id: "exp00001", title: "Lodge", reason: "name" }, { kind: "payment", id: "pay00002", title: "Ajen → Moe", reason: "name" }] });
   assert.ok(t.split("\n").includes("Lines in the Sheet the app can’t read: exp00001, pay00002"), t);
   assert.equal(reportText({ ...base, sentences: [] }).includes("can’t read"), false);
+});
+
+test("plannerWord: the few words the Planner payments row shows after a pull", () => {
+  const r = (o) => ({ added: 0, changed: 0, same: 0, removed: 0, notCounted: 0, problems: [], more: false, capped: false, ...o });
+  assert.equal(plannerWord(r({ added: 2, problems: [{ id: "P5" }] })), "Added 2");
+  assert.equal(plannerWord(r({ added: 1, changed: 3 })), "Added 1");
+  assert.equal(plannerWord(r({ changed: 1 })), "Changed 1");
+  assert.equal(plannerWord(r({ same: 4, problems: [{ id: "P5" }] })), "Needs a look");
+  assert.equal(plannerWord(r({ same: 4 })), "Nothing new");
+  assert.equal(plannerWord(r({})), "Nothing new");
+  assert.equal(plannerWord(null), "Not fetched");
+  assert.equal(plannerWord(undefined), "Not fetched");
 });

@@ -48,7 +48,10 @@ i{font-style:normal}
 .net b{font-weight:900;font-variant-numeric:tabular-nums;white-space:nowrap}
 
 /* ---------- sheets ---------- */
-.sheet{position:absolute;left:0;right:0;bottom:0;z-index:24;max-height:90%;overflow-y:auto;overscroll-behavior:contain;
+/* A notice raised while a sheet is open shows at the top of the phone, over
+   the sheet (.ubar, z-index 30): a sheet stops short of it, so the notice
+   never covers the sheet's Done, also under a notch. */
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:24;max-height:min(90%, calc(100% - 76px - env(safe-area-inset-top, 0px)));overflow-y:auto;overscroll-behavior:contain;
   padding:12px var(--gr) calc(18px + env(safe-area-inset-bottom, 0px)) var(--gl);background:var(--ground);border-top:1px solid #000;
   border-radius:18px 18px 0 0;box-shadow:0 -24px 40px -10px #000;transform:translateY(104%);transition:transform .5s var(--sheet);scrollbar-width:none}
 .sheet::-webkit-scrollbar{display:none}

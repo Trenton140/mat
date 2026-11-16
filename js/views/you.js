@@ -30,6 +30,20 @@ const COPY_FAILED = "Couldn’t copy. Try again.";
 const NO_SIGNAL = "No signal. Try again.";
 const REPORT_LINES = 5;
 
+// The word on the right of a row that copies or fetches answers the tap:
+// at once, then with what happened for a moment, then back to its own word.
+const COPY = "Copy";
+const COPIED = "Copied ✓";
+const NOT_COPIED = "Not copied";
+const GETTING = "Getting…";
+const FETCH = "Fetch";
+const FETCHING = "Fetching…";
+const FETCHED = "Up to date ✓";
+const NO_SIGNAL_WORD = "No signal";
+const SAID_MS = 2000; // how long a row says it worked
+const FAILED_MS = 3000; // how long a row says it did not
+const PULLED_MS = 4000; // how long Planner payments says what came in
+
 const MARKUP = `
 <div class="sheet-top"><span>You<i>設定</i></span><button type="button" id="youDone">Done</button></div>
 <div class="set">
@@ -53,17 +67,17 @@ const MARKUP = `
   </div>
   <button type="button" class="set-r" id="setSound"><span>Stamp sound</span><b id="setSoundV">On</b></button>
   <button type="button" class="set-r" id="setHist"><span>History<small>Every change, with undo</small></span><b>Open</b></button>
-  <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh"></b></button>
+  <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh" aria-live="polite" data-w="Up to date 00:00"></b></button>
   <button type="button" class="set-r" id="setDemo" aria-expanded="false" aria-controls="setDemoDays"><span>Try another day<small>See how a day will look before you go</small></span><b id="setDemoV">Pick</b></button>
   <div class="set-days" id="setDemoDays" hidden></div>
   <button type="button" class="set-r" id="setHow" aria-expanded="false" aria-controls="setHowLines"><span>How this works</span><b id="setHowV">Show</b></button>
   <div class="how" id="setHowLines" hidden></div>
   <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
-  <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b>Copy</b></button>
-  <button type="button" class="set-r" id="setClaude"><span>Claude link<small>Lets your Claude add stops and expenses. Keep it to yourself.</small></span><b>Copy</b></button>
-  <button type="button" class="set-r" id="setPlanner" hidden><span>Planner payments<small>Brings in what’s been paid from the planner sheet</small></span><b id="setPlannerV">Fetch</b></button>
+  <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b id="setInviteV" aria-live="polite" data-w="Not copied">Copy</b></button>
+  <button type="button" class="set-r" id="setClaude"><span>Claude link<small>Lets your Claude add stops and expenses. Keep it to yourself.</small></span><b id="setClaudeV" aria-live="polite" data-w="Not copied">Copy</b></button>
+  <button type="button" class="set-r" id="setPlanner" hidden><span>Planner payments<small>Brings in what’s been paid from the planner sheet</small></span><b id="setPlannerV" aria-live="polite" data-w="Needs a look">Fetch</b></button>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
-  <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b>Copy</b></button>
+  <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b id="setReportV" aria-live="polite" data-w="Not copied">Copy</b></button>
 </div>`;
 
 function el(tag, cls, text) {
@@ -87,6 +101,17 @@ export function reportText({ me, screen, version, when, sentences, setAside = []
   return lines.join("\n");
 }
 
+// The few words the Planner payments row shows after a pull, from what
+// store.syncPayments resolved with (null: it did not go through). The full
+// sentence goes to the notice.
+export function plannerWord(r) {
+  if (!r) return "Not fetched";
+  if (r.added) return "Added " + r.added;
+  if (r.changed) return "Changed " + r.changed;
+  if (Array.isArray(r.problems) && r.problems.length) return "Needs a look";
+  return "Nothing new";
+}
+
 // "Sat Dec 12, 13:20", in the phone's own clock.
 function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
@@ -104,6 +129,9 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   sheet.inert = true;
   sheet.innerHTML = MARKUP;
   root.append(scrim, sheet);
+  // iPhone Safari draws a row's pressed look (:active) on touch only when
+  // something listens for the touch.
+  sheet.addEventListener("touchstart", () => {}, { passive: true });
 
   const $ = (id) => sheet.querySelector("#" + id);
   const who = $("setWho");
@@ -139,6 +167,25 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   let picBusy = false; // a picture is being shrunk or saved: no second one
   let reporting = false;
   let session = 0; // counts each opening and closing of the sheet
+
+  // say(word, text, ms, back): the row's word reads `text`; after `ms` it
+  // reads back() again. A newer say() on the same word replaces the older.
+  const saying = new Map(); // word element -> its timer
+  function say(word, text, ms = 0, back = null) {
+    clearTimeout(saying.get(word));
+    saying.delete(word);
+    word.textContent = text;
+    if (!ms) return;
+    saying.set(
+      word,
+      setTimeout(() => {
+        saying.delete(word);
+        word.textContent = back();
+      }, ms),
+    );
+  }
+  const copyWord = () => COPY;
+  const said = (word, ok) => say(word, ok ? COPIED : NOT_COPIED, ok ? SAID_MS : FAILED_MS, copyWord);
 
   const mePerson = (s) => s.people.find((p) => p.name === s.me) || null;
   const addressOf = (s) => {
@@ -206,6 +253,8 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     picRow.classList.toggle("has-pic", has);
   }
 
+  const freshWord = (s) => (s.loadedAt === null ? NOT_YET : freshText(s.loadedAt));
+
   function render(s) {
     drawWho(s);
     drawMail(s);
@@ -213,7 +262,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     soundV.textContent = soundOn() ? "On" : "Off";
     drawDemoDays(s);
     setDemo(!demoDays.hidden);
-    fresh.textContent = s.loadedAt === null ? NOT_YET : freshText(s.loadedAt);
+    if (!fetching && !saying.has(fresh)) fresh.textContent = freshWord(s);
     planner.hidden = s.plannerLinked !== true;
     const url = typeof s.sheetUrl === "string" && /^https?:\/\//i.test(s.sheetUrl) ? s.sheetUrl : "";
     sheetLink.hidden = !url;
@@ -362,7 +411,23 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   });
 
   $("setHist").addEventListener("click", () => onHistory());
-  $("setFreshRow").addEventListener("click", () => store.refresh());
+  // Last updated: Fetching… while it loads, then Up to date ✓ (or No
+  // signal) for a moment, then the time of the last fetch.
+  let fetching = false;
+  $("setFreshRow").addEventListener("click", async () => {
+    if (fetching) return;
+    fetching = true;
+    say(fresh, FETCHING);
+    let ok = false;
+    try {
+      ok = (await store.refresh()) === true;
+    } catch {
+      ok = false;
+    } finally {
+      fetching = false;
+    }
+    say(fresh, ok ? FETCHED : NO_SIGNAL_WORD, SAID_MS, () => freshWord(store.state));
+  });
   how.addEventListener("click", () => setHow(howLines.hidden));
   demoRow.addEventListener("click", () => setDemo(demoDays.hidden));
   demoDays.addEventListener("click", (ev) => {
@@ -372,17 +437,33 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
 
   const inviteLink = (key) => location.origin + location.pathname + "#k=" + encodeURIComponent(key);
 
-  // Copies the invite link and says so; false when there is no key.
+  // Copies the invite link and says so; resolves with whether it was copied.
   async function copyInvite() {
     const key = getKey();
     if (!key) {
       store.notify(NO_KEY);
       return false;
     }
-    store.notify((await copyText(inviteLink(key))) ? "Link copied." : COPY_FAILED);
-    return true;
+    const ok = await copyText(inviteLink(key));
+    store.notify(ok ? "Link copied." : COPY_FAILED);
+    return ok;
   }
-  $("setInvite").addEventListener("click", copyInvite);
+  const invite = $("setInvite");
+  const inviteV = $("setInviteV");
+  let inviting = false;
+  invite.addEventListener("click", async () => {
+    if (inviting) return;
+    inviting = true;
+    let ok = false;
+    try {
+      ok = await copyInvite();
+    } catch {
+      ok = false;
+    } finally {
+      inviting = false;
+    }
+    said(inviteV, ok);
+  });
 
   // ---- the Claude link ----
   // The connector's address with its token and the viewer's name. iPhone
@@ -393,15 +474,19 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   // screen, not in storage, and a reply that comes after Settings closed is
   // dropped without copying.
   const claude = $("setClaude");
+  const claudeV = $("setClaudeV");
   let claudeBusy = false;
   async function copyClaude() {
     if (claudeBusy) return;
     if (globalThis.navigator && navigator.onLine === false) {
       store.notify(NO_SIGNAL);
+      said(claudeV, false);
       return;
     }
     claudeBusy = true;
     claude.disabled = true;
+    say(claudeV, GETTING);
+    let ok = null; // null: Settings closed meanwhile, the row just goes back to Copy
     const asked = session;
     const me = store.state.me;
     let failed = null;
@@ -418,33 +503,42 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     try {
       const copied = await copyText(link);
       if (asked !== session) return; // Settings closed meanwhile: nothing to say
+      ok = copied;
       if (copied) store.notify("Claude link copied.");
       else if (failed) store.notify(failed.code === "network" ? NO_SIGNAL : failed.message || COPY_FAILED);
       else store.notify(COPY_FAILED);
+    } catch {
+      if (asked === session) ok = false;
     } finally {
       claudeBusy = false;
       claude.disabled = false;
+      if (ok === null) say(claudeV, COPY);
+      else said(claudeV, ok);
     }
   }
   claude.addEventListener("click", copyClaude);
 
   // ---- planner payments ----
   // One pull at a time: while it runs the row says so and a tap does nothing.
-  // The store says what came in (or why not) on the undo bar.
+  // The store says what came in (or why not) on the undo bar; the row says
+  // it in a few words for a moment (plannerWord), then goes back to Fetch.
   const plannerV = $("setPlannerV");
   let pulling = false;
   planner.addEventListener("click", async () => {
     if (pulling) return;
     pulling = true;
     planner.disabled = true;
-    plannerV.textContent = "Fetching…";
+    say(plannerV, FETCHING);
+    let r = null;
     try {
-      await store.syncPayments();
+      r = await store.syncPayments();
+    } catch {
+      r = null;
     } finally {
       pulling = false;
       planner.disabled = false;
-      plannerV.textContent = "Fetch";
     }
+    say(plannerV, plannerWord(r), PULLED_MS, () => FETCH);
   });
 
   // ---- Add to Home Screen ----
@@ -524,16 +618,23 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     const sentences = !h || h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
     return reportText({ me: store.state.me, screen: screen(), version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [] });
   }
+  const reportV = $("setReportV");
   report.addEventListener("click", async () => {
     if (reporting) return;
     reporting = true;
     report.disabled = true;
+    say(reportV, GETTING); // the note waits for the latest history
+    let ok = false;
     try {
-      store.notify((await copyText(reportNote())) ? "Copied. Paste it to Mo or Claude." : COPY_FAILED);
+      ok = await copyText(reportNote());
+      store.notify(ok ? "Copied. Paste it to Mo or Claude." : COPY_FAILED);
+    } catch {
+      ok = false;
     } finally {
       reporting = false;
       report.disabled = false;
     }
+    said(reportV, ok);
   });
 
   store.subscribe(render);

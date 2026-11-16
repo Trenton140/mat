@@ -63,6 +63,11 @@
 button.set-r:active,a.set-r:active{background:var(--key-hi);transform:scale(.97)}
 .set-r small{display:block;color:var(--dim);font-size:12.5px;font-weight:500}
 .set-r b{font-weight:900;color:var(--dim);white-space:nowrap;font-size:14.5px;font-variant-numeric:tabular-nums}
+/* A word that answers a tap (Copy, Copied ✓, Not copied...) keeps the room
+   of the widest it can say (data-w), so the row never changes height under
+   the finger. */
+.set-r b[data-w]{display:block;text-align:right}
+.set-r b[data-w]::after{content:attr(data-w);display:block;height:0;overflow:hidden;visibility:hidden}
 .set-col{flex-direction:column;align-items:stretch;gap:8px}
 /* Your picture: a tap on the row opens the phone's picker. With none, Add
    on the right like the other rows; with one, its seal on the right and

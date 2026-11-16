@@ -1,7 +1,7 @@
 // Settings (Task 12): the "You 設定" sheet.
 
 const assert = require("node:assert/strict");
-const { SEED, NOON12, open, until, text, expectText, visible } = require("./helpers.cjs");
+const { SEED, NOON12, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
 
 // ---- small tools for this file ----
 
@@ -238,6 +238,8 @@ module.exports = [
       await until(() => loads(backend) === before + 1, "one load");
       await page.evaluate(() => globalThis.__matTest.store.idle());
       assert.equal(loads(backend), before + 1, "only one");
+      await expectText(page, "#setFresh", "Up to date ✓");
+      await advance(page, backend, 2000);
       await expectText(page, "#setFresh", "Up to date 13:20");
     },
   },
@@ -570,7 +572,7 @@ module.exports = [
       await page.evaluate(() => document.getElementById("setPlanner").click());
       release();
       await expectText(page, "#ubarT", "Added 2 payments from the planner. 1 payment needs a look in the planner.");
-      await expectText(page, "#setPlanner b", "Fetch");
+      await expectText(page, "#setPlanner b", "Added 2");
       assert.equal(backend.requests.filter((r) => r.action === "syncPayments").length, 1, "one pull for two taps");
       backend.handle = handle;
 
@@ -605,6 +607,8 @@ module.exports = [
       await openYou(page);
       await page.click("#setPlanner");
       await expectText(page, "#ubarT", "Added 10 payments from the planner. More to bring in: tap Fetch again.");
+      await expectText(page, "#setPlanner b", "Added 10");
+      await advance(page, backend, 4000);
       await expectText(page, "#setPlanner b", "Fetch");
       await page.evaluate(() => globalThis.__matTest.store.clearNotice());
       await page.click("#setPlanner");
