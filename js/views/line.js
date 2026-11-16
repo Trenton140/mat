@@ -9,6 +9,7 @@
 
 import { expenseShares, cadCents, jpyOf } from "../money.js";
 import { dollars, yen, typed, dayHead, pt, localDay, historySentence } from "../format.js";
+import { fillSeal } from "../picture.js";
 
 const NO_HISTORY = "History needs a connection.";
 const UNSAVED = "Not saved yet.";
@@ -101,7 +102,7 @@ export function mountLine(root, store, { onEdit = () => {} } = {}) {
   function drawLine(e) {
     const s = store.state;
     const person = (n) => s.people.find((p) => p.name === n);
-    const seal = (n) => el("span", "mini", (person(n) && person(n).initials) || String(n).slice(0, 2).toUpperCase());
+    const seal = (n) => fillSeal(el("span", "mini"), person(n), n, { named: true });
 
     title.textContent = e.title;
     amount.replaceChildren(fig("span", "", typed(e)));

@@ -67,7 +67,7 @@ It answers `{"ok":true,...,"data":{"added":[...]}}` with the columns it added, f
 The backend is also an MCP server, so someone's Claude can read the trip and make changes in it.
 
 - **It can:** read the trip (`get_trip`), explain who owes whom and why (`explain_debt`), add an expense, add, change or remove stops, save or remove a stay, change a day's ticket (`set_day`), read History and undo an entry, and bring in payments from the planner sheet (`sync_payments`, below). Every change goes through the same checks as the app, is logged in History marked "(through Claude)", and can be undone.
-- **It cannot:** stamp payments, see or change e-Transfer addresses or emails, see the trip key or its own token, copy invite links, or change who is on the trip. (Its undo works on any History entry, as Undo in the app does.) Replies never contain the key, the token, an e-Transfer address or an email.
+- **It cannot:** stamp payments, see or change e-Transfer addresses or emails, see or set anyone's picture (`get_trip` only says `has_picture` for each person), see the trip key or its own token, copy invite links, or change who is on the trip. (Its undo works on any History entry, as Undo in the app does, except a change to someone else's picture.) Replies never contain the key, the token, an e-Transfer address or an email.
 - **The link:** Settings → Claude link → Copy. Anyone who has the invite link can copy it, and everyone's Claude link carries the same token: one token for the whole trip.
 - **The token sits in the connector's address** (`?t=…`). Treat the Claude link like the invite link: whoever has it can change the plan and add expenses.
 - **`as=`** in the link names who the changes are logged as (the person who copied it). A name that matches no one on the trip blocks every write until the link is copied again; with no `as=`, changes are logged as the first person.
@@ -103,7 +103,13 @@ The app can bring in payments kept in a separate Google Sheet (the "planner"), o
 
 **Changing or unlinking it.** In the script editor, Project Settings → Script Properties, delete `PLANNER_ID` (then `linkPlanner` again to link another sheet). With none linked, the Settings row goes away on the next load; expenses already brought in stay.
 
+## You 設定
+
+**Your picture.** In You, "Your picture" opens the phone's own picker. The phone crops the picture to a centred square, shrinks it to 128 × 128 and sends it as a small JPEG (at most 12,000 characters; one that will not fit is refused before anything is sent). It then shows inside your round seal, in place of your initials, on every seal on every phone; Change and Remove are on the same row. Each person sets only their own. Setting, changing or removing it is one History entry, which its owner can undo.
+
 ## The Sheet
+
+- **People:** `name`, `initials`, `order`, `etransfer`, `simplify`, `email`, `photo`. `photo` is the person's picture as a JPEG data address, or empty for none (then the seal shows `initials`). Set it from the app, not by hand; `migrate` adds the column to an older Sheet.
 
 - Once the trip is live, do not delete rows by hand. Deleted expenses, stops and stays and removed payments stay as rows with a date in `deleted_at` / `removed_at`; clear that cell, or use History in the app, to bring one back. To take a row out by hand, put any date in its `deleted_at` instead of deleting it.
 - Text columns are stored as plain text, so a title like `=SUM(1)` or `1/2 price ramen` stays exactly as typed.

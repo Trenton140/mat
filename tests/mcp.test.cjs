@@ -334,7 +334,7 @@ test("get_trip gives the trip, names only, the days, and only live stops, stays,
   await app(fake, "deleteStop", { id: "planstop1102" });
   await app(fake, "deleteExpense", { id: "seedexp004" });
   const t = ok(fake, "get_trip", {});
-  assert.deepEqual(Object.keys(t), ["trip", "people", "days", "stops", "stays", "expenses", "payments", "owed", "owed_direct"]);
+  assert.deepEqual(Object.keys(t), ["trip", "people", "has_picture", "days", "stops", "stays", "expenses", "payments", "owed", "owed_direct"]);
   assert.deepEqual(t.people, NAMES);
   assert.equal(t.trip.name, "Japan 2026");
   assert.equal(t.days.length, 11);
@@ -769,4 +769,33 @@ test("sync_payments needs the token and a known `as`; a refusal is the backend's
 
   const unlinked = createFakeBackend({ planner: PLANNER });
   assert.equal(refusal(unlinked, "sync_payments", {}), "No planner sheet is linked yet. Ask Mo to link it.");
+});
+
+// ---------- Task 16: pictures ----------
+
+test("get_trip says who has a picture, never the picture; undoing one answers without it; no tool sets one", async () => {
+  const JPEG = require("./fixtures/picture.json").jpeg;
+  const fake = createFakeBackend({ ...seed, ...plan });
+  await app(fake, "setPerson", { name: "Ajen", patch: { photo: JPEG } }, "Ajen");
+  const t = ok(fake, "get_trip", {});
+  assert.deepEqual(t.people, NAMES);
+  assert.deepEqual(t.has_picture, { Mo: false, Ajen: true, Trenton: false });
+  const h = ok(fake, "get_history", {}).entries;
+  assert.equal(h[0].sentence, "Ajen set a picture");
+  const u = ok(fake, "undo", { log_id: h[0].id }, { ...T, as: "Ajen" });
+  assert.deepEqual(u.person, { name: "Ajen", has_picture: false });
+  await app(fake, "setPerson", { name: "Mo", patch: { photo: JPEG } });
+  const mine = ok(fake, "get_history", {}).entries[0];
+  const theirs = call(fake, "undo", { log_id: mine.id }, { ...T, as: "Ajen" });
+  assert.equal(theirs.result.isError, true, "Claude acting as Ajen cannot change Mo's");
+  assert.match(theirs.result.content[0].text, /own picture/);
+  const seen = [];
+  for (const name of ["get_trip", "get_history"]) seen.push(JSON.stringify(call(fake, name, {})));
+  seen.push(JSON.stringify(call(fake, "undo", { log_id: mine.id })));
+  seen.push(JSON.stringify(fake.mcp(rpc("tools/list"), T)));
+  const all = seen.join("");
+  assert.equal(all.includes("data:image"), false);
+  assert.equal(all.includes(JPEG.slice(30, 60)), false);
+  assert.equal(all.includes("photo\":\"data"), false);
+  assert.equal(fake.mcp(rpc("tools/list"), T).result.tools.length, 12, "no new tool");
 });

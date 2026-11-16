@@ -59,7 +59,9 @@ export function mountHistory(root, store) {
     said.append(el("b", "", en.who), " " + en.summary);
     if (viaText(en.via)) said.append(el("i", "", viaText(en.via)));
     row.append(when, said);
-    if (en.canUndo && !en.undoneBy) {
+    // A picture is only ever changed by its owner, Undo included (Task 16).
+    const notMine = en.kind === "picture" && en.ref !== store.state.me;
+    if (en.canUndo && !en.undoneBy && !notMine) {
       const undo = el("button", "tp-undo", "Undo");
       undo.type = "button";
       undo.setAttribute("aria-label", "Undo: " + said.textContent);

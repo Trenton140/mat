@@ -38,6 +38,7 @@ var MSG_ = {
   needsMigrate: "The trip sheet needs updating first. Ask Mo to run migrate.",
   notInPlanner: "That payment isn’t in the planner any more.",
   twoLines: "Two lines carry this payment’s id.",
+  notYourPicture: "You can only change your own picture.",
 };
 
 // A Google spreadsheet id, as linkPlanner takes it.
@@ -530,6 +531,11 @@ function setPerson_(args, ctx) {
   if (typeof args.name !== "string") return err_("bad_input", MSG_.badRequest);
   var v = validatePersonPatch(args.patch);
   if (!v.ok) return err_("bad_input", v.message);
+  // A picture is only ever set by its owner (Task 16), and needs its column.
+  if ("photo" in v.value) {
+    if (args.name !== ctx.actor) return err_("bad_input", MSG_.notYourPicture);
+    if (!hasColumn_("People", "photo")) return err_("needs_migrate", MSG_.needsMigrate);
+  }
   var row = null;
   peopleRows_().forEach(function (r) { if (!row && cellText_(r.name) === args.name) row = r; });
   if (!row) return err_("not_found", MSG_.noPerson);
@@ -545,7 +551,39 @@ function setPerson_(args, ctx) {
     var now = { name: saved.name, etransfer: saved.etransfer };
     appendLog_(ctx, "edit", "person", saved.name, summarize("edit", "person", was, now), was, now);
   }
+  // A picture change is its own entry, kind "picture", so it can be undone
+  // without making an e-Transfer change undoable. Its snapshots hold the
+  // picture so undo can put it back; History never sends them to the phones.
+  if (saved.photo !== cur.photo) {
+    var hadPic = { name: cur.name, photo: cur.photo };
+    var hasPic = { name: saved.name, photo: saved.photo };
+    appendLog_(ctx, "edit", "picture", saved.name, summarize("edit", "picture", hadPic, hasPic), hadPic, hasPic);
+  }
   return ok_({ person: saved }, bumpRev_());
+}
+
+// Undoing a picture change puts back the picture that was there (or none).
+// Only its owner may: nobody changes another person's picture (Task 16).
+// Answers like any undo, with the person as the item.
+function undoPicture_(entry, rows, ctx) {
+  if (entry.ref !== ctx.actor) return err_("bad_input", MSG_.notYourPicture);
+  if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
+  if (!canUndo(entry, rows.map(logShape_))) return err_("stale", MSG_.newer);
+  if (!entry.before || !entry.after) return err_("stale", MSG_.cantUndo);
+  var row = null;
+  peopleRows_().forEach(function (r) { if (!row && cellText_(r.name) === entry.ref) row = r; });
+  if (!row) return err_("not_found", MSG_.noPerson);
+  if (!hasColumn_("People", "photo")) return err_("needs_migrate", MSG_.needsMigrate);
+  var cur = personFromRow(row);
+  var target = undoTarget(entry);
+  var photo = typeof target.photo === "string" ? target.photo : "";
+  var saved = personFromRow(updateWhere_("People", "name", entry.ref, { photo: photo }));
+  var log = appendLog_(ctx, "undo", "picture", entry.ref, "undid: " + entry.summary, { name: cur.name, photo: cur.photo }, { name: saved.name, photo: saved.photo }, entry.id);
+  updateById_("Log", entry.id, { undone_by: log.id });
+  var rev = bumpRev_();
+  var shown = logShape_(log);
+  shown.canUndo = true;
+  return ok_({ entry: shown, logId: log.id, person: saved }, rev);
 }
 
 // ---- the trip plan: stops, stays, day headers ----
@@ -712,6 +750,7 @@ function undo_(args, ctx) {
   if (!row) return err_("not_found", MSG_.noLog);
 
   var entry = parseLogRow(row);
+  if (entry.kind === "picture") return undoPicture_(entry, rows, ctx);
   var plan = planKind_(entry.kind);
   if (entry.kind !== "expense" && entry.kind !== "payment" && !plan) return err_("stale", MSG_.cantUndo);
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);

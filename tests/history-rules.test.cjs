@@ -120,6 +120,21 @@ test("a person's e-Transfer change reads as a sentence without the address, and 
   assert.equal(P.canUndo(entry, [entry]), false);
 });
 
+test("a picture change reads as a sentence with no pronoun and no picture in it, and can be undone (Task 16)", () => {
+  const pic = "data:image/jpeg;base64,AAAA";
+  const pic2 = "data:image/jpeg;base64,BBBB";
+  assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: "" }, { name: "Mo", photo: pic }), "set a picture");
+  assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: pic }, { name: "Mo", photo: pic2 }), "changed picture");
+  assert.equal(P.summarize("edit", "picture", { name: "Mo", photo: pic }, { name: "Mo", photo: "" }), "removed the picture");
+  for (const [before, after] of [["", pic], [pic, pic2], [pic, ""]]) {
+    const entry = { id: 4, kind: "picture", ref: "Mo", before: { name: "Mo", photo: before }, after: { name: "Mo", photo: after }, undoneBy: null };
+    assert.deepEqual(P.undoTarget(entry), { name: "Mo", photo: before }, "undo puts back what was there");
+    assert.equal(P.canUndo(entry, [entry]), true);
+    assert.equal(P.canUndo(entry, [entry, { id: 5, kind: "picture", ref: "Mo" }]), false, "a newer picture change comes first");
+    assert.equal(P.canUndo(entry, [entry, { id: 5, kind: "person", ref: "Mo" }, { id: 6, kind: "picture", ref: "Ajen" }]), true, "an e-Transfer change or another person's picture does not block it");
+  }
+});
+
 const A = { id: "s1", date: "2026-12-12", time: "14:00", title: "Shibuya Sky", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "", deleted: false };
 test("stop sentences", () => {
   assert.equal(P.summarize("add", "stop", null, A), "added Shibuya Sky to Sat Dec 12");

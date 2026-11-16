@@ -126,8 +126,51 @@ test("rows round-trip between sheet and API shapes", () => {
   assert.equal(e.deleted, false);
   assert.equal(P.expenseFromRow({ id: "y", split: "Mo", split_mode: "", split_vals: "" }).splitMode, "equal");
   const who = P.personFromRow({ name: "Mo", initials: "MO", order: 1, etransfer: "mo@example.com", simplify: false, email: "private@example.com" });
-  assert.deepEqual(who, { name: "Mo", initials: "MO", etransfer: "mo@example.com", simplify: false });
+  assert.deepEqual(who, { name: "Mo", initials: "MO", etransfer: "mo@example.com", simplify: false, photo: "" });
   assert.equal(P.personFromRow({ name: "Ajen", initials: "AJ", simplify: "" }).simplify, true);
+});
+
+// ---- Task 16: a picture in each person's seal ----
+const JPEG = require("./fixtures/picture.json").jpeg;
+
+test("a picture is a small JPEG data address, or \"\" to take it away", () => {
+  assert.deepEqual(P.validatePersonPatch({ photo: JPEG }), { ok: true, value: { photo: JPEG } });
+  assert.deepEqual(P.validatePersonPatch({ photo: "" }), { ok: true, value: { photo: "" } });
+  const head = "data:image/jpeg;base64,";
+  const bad = [
+    "data:image/png;base64,iVBORw0KGgo=",
+    "data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=",
+    "data:image/svg+xml,<svg onload=alert(1)>",
+    "javascript:alert(1)",
+    "https://example.test/me.jpg",
+    head,
+    head + "AAAA\nAAAA",
+    head + "AAAA\"AAAA",
+    head + "AAAA'AAAA",
+    head + "AAAA===",
+    " " + JPEG,
+    head + "A".repeat(12001 - head.length),
+    12,
+    null,
+    { src: JPEG },
+  ];
+  for (const photo of bad) {
+    const v = P.validatePersonPatch({ photo });
+    assert.equal(v.ok, false, String(photo).slice(0, 40));
+    assert.equal(v.message, "That picture couldn’t be used. Try another.");
+  }
+  assert.equal(P.validatePersonPatch({ photo: head + "A".repeat(12000 - head.length) }).ok, true, "12,000 characters is the most");
+  assert.deepEqual(P.validatePersonPatch({ etransfer: "a@example.com", photo: "" }).value, { etransfer: "a@example.com", photo: "" });
+});
+
+test("the People row keeps the picture, after email, as text", () => {
+  const h = P.TABS.People;
+  assert.equal(h.indexOf("photo"), h.indexOf("email") + 1);
+  assert.equal(P.isTextColumn("People", "photo"), true);
+  const row = P.objToRow(h, { name: "Mo", initials: "MO", order: 1, etransfer: "", simplify: true, email: "", photo: JPEG });
+  const back = P.personFromRow(P.rowToObj(h, row));
+  assert.equal(back.photo, JPEG);
+  assert.equal(P.personFromRow({ name: "Ajen", initials: "AJ" }).photo, "", "an older row with no photo cell has none");
 });
 
 test("rows coped with as Sheets really hands them back", () => {

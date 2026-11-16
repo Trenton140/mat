@@ -265,6 +265,14 @@ function mcpLoad_(who) {
   return { ok: true, d: d, names: names, expenses: lines.expenses, payments: lines.payments };
 }
 
+// Whether each person has a picture in their seal, by name. The picture
+// itself is never given out: it would flood the model's context (Task 16).
+function mcpHasPicture_(people) {
+  var out = {};
+  people.forEach(function (p) { out[p.name] = !!p.photo; });
+  return out;
+}
+
 function mcpGetTrip_(args, who) {
   var t = mcpLoad_(who);
   if (!t.ok) return t;
@@ -274,6 +282,7 @@ function mcpGetTrip_(args, who) {
     value: {
       trip: t.d.trip,
       people: t.names,
+      has_picture: mcpHasPicture_(t.d.people),
       days: t.d.days,
       stops: t.d.stops.filter(live),
       stays: t.d.stays.filter(live),
@@ -416,7 +425,9 @@ function mcpUndo_(args, who) {
   if (!r.ok) return r;
   var kind = r.data.entry.kind;
   var value = {};
-  value[kind] = r.data[kind];
+  // A picture's undo answers with the person: only whether they now have one.
+  if (kind === "picture") value.person = { name: r.data.person.name, has_picture: !!r.data.person.photo };
+  else value[kind] = r.data[kind];
   value.log_id = r.data.logId;
   return { ok: true, value: value };
 }

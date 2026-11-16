@@ -12,6 +12,7 @@
 import { defaultRingDay, newId } from "../time.js";
 import { yen, dollars, pt, dayShort } from "../format.js";
 import { mountUneven, splitOf, toUnits, fromUnits } from "./uneven.js";
+import { fillSeal } from "../picture.js";
 
 // Each quick pick carries a kind, stored with the line and never shown.
 export const CHIPS = [
@@ -159,12 +160,12 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
 
   function drawSeals() {
     const people = store.state.people;
-    const sig = JSON.stringify(people.map((p) => [p.name, p.initials]));
+    const sig = JSON.stringify(people.map((p) => [p.name, p.initials, p.photo || ""]));
     if (sig === peopleShown) return;
     peopleShown = sig;
     const seals = (label) =>
       people.map((p) => {
-        const b = el("button", "seal", p.initials || p.name.slice(0, 2).toUpperCase());
+        const b = fillSeal(el("button", "seal"), p);
         b.type = "button";
         b.dataset.p = p.name;
         b.setAttribute("aria-label", label(p.name));

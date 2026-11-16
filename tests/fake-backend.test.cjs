@@ -184,7 +184,7 @@ test("setPerson turns Simplify off for Trenton, load shows it, rev rises and his
   const call = client();
   const r = await call("setPerson", { name: "Trenton", patch: { simplify: false } });
   assert.equal(r.ok, true);
-  assert.deepEqual(r.data.person, { name: "Trenton", initials: "TR", etransfer: "", simplify: false });
+  assert.deepEqual(r.data.person, { name: "Trenton", initials: "TR", etransfer: "", simplify: false, photo: "" });
   assert.equal(r.rev, 1);
   const load = await call("load");
   assert.equal(load.data.people.find((p) => p.name === "Trenton").simplify, false);
@@ -566,7 +566,7 @@ test("seed people and days are applied as patches, and seeded log rows use the s
     payments: [stampOf({ stampedAt: "2026-12-12T03:00:00.000Z" })],
   });
   const d = (await call("load")).data;
-  assert.deepEqual(d.people[2], { name: "Trenton", initials: "TR", etransfer: "tr@example.com", simplify: false });
+  assert.deepEqual(d.people[2], { name: "Trenton", initials: "TR", etransfer: "tr@example.com", simplify: false, photo: "" });
   const day = d.days.find((x) => x.date === "2026-12-11");
   assert.equal(day.city, "Tokyo");
   assert.equal(day.title, "Shibuya");
@@ -1401,4 +1401,97 @@ test("the planner id is never in a reply, a Log row or a History sentence", asyn
   replies.push(await call("syncPayments"));
   assert.equal(JSON.stringify(replies).includes(PLANNER_ID), false);
   assert.equal(JSON.stringify(call.fake.tables).includes(PLANNER_ID), false);
+});
+
+// ---------- Task 16: a picture in each person's seal ----------
+
+const JPEG = require("./fixtures/picture.json").jpeg;
+const JPEG2 = JPEG.replace(/.{4}$/, "AAA="); // a second, different address of the same shape
+
+test("migrate adds People.photo to an older Sheet once; until then a picture is refused, not lost", async () => {
+  const call = client({ missingColumns: ["People.photo"] });
+  assert.equal((await call("load")).data.people[0].photo, "");
+  const early = await call("setPerson", { name: "Mo", patch: { photo: JPEG } });
+  assert.deepEqual([early.ok, early.error, early.message], [false, "needs_migrate", "The trip sheet needs updating first. Ask Mo to run migrate."]);
+  assert.equal(call.fake.tables.Log.length, 0);
+  assert.equal((await call("setPerson", { name: "Mo", patch: { etransfer: "m@example.com" } })).ok, true, "other details still change");
+  assert.deepEqual((await call.fake({ key: KEY, action: "migrate", args: {} })).data, { added: ["People.photo"] });
+  assert.deepEqual((await call.fake({ key: KEY, action: "migrate", args: {} })).data, { added: [] });
+  assert.equal((await call("setPerson", { name: "Mo", patch: { photo: JPEG } })).ok, true);
+  assert.equal((await call("load")).data.people[0].photo, JPEG);
+});
+
+test("each person sets, changes and removes their own picture: one History sentence each, load carries it", async () => {
+  for (const name of ALL) {
+    const call = client();
+    const as = { actor: name };
+    const set = await call("setPerson", { name, patch: { photo: JPEG } }, as);
+    assert.equal(set.ok, true, JSON.stringify(set));
+    assert.equal(set.data.person.photo, JPEG);
+    assert.equal((await call("load")).data.people.find((p) => p.name === name).photo, JPEG);
+    assert.equal((await call("setPerson", { name, patch: { photo: JPEG } }, as)).rev, 1, "the same picture again changes nothing");
+    await call("setPerson", { name, patch: { photo: JPEG2 } }, as);
+    await call("setPerson", { name, patch: { photo: "" } }, as);
+    assert.equal((await call("load")).data.people.find((p) => p.name === name).photo, "");
+    const h = await historyAll(call);
+    assert.deepEqual(h.map((e) => [e.who, e.kind, e.ref, e.summary, e.canUndo]), [
+      [name, "picture", name, "removed the picture", true],
+      [name, "picture", name, "changed picture", false],
+      [name, "picture", name, "set a picture", false],
+    ]);
+    assert.equal(JSON.stringify(h).includes("data:image"), false, "history never carries the picture");
+    const log = call.fake.tables.Log;
+    assert.deepEqual(JSON.parse(log[0].before), { name, photo: "" });
+    assert.deepEqual(JSON.parse(log[0].after), { name, photo: JPEG });
+    assert.equal(call.fake.tables.People.find((p) => p.name === name).photo, "", "the cell is emptied, the row kept");
+  }
+});
+
+test("nobody sets another person's picture; a name not on the trip is refused; a bad picture is refused", async () => {
+  const call = client();
+  const other = await call("setPerson", { name: "Ajen", patch: { photo: JPEG } });
+  assert.deepEqual([other.ok, other.error, other.message], [false, "bad_input", "You can only change your own picture."]);
+  const both = await call("setPerson", { name: "Ajen", patch: { etransfer: "a@example.com", photo: "" } });
+  assert.equal(both.ok, false, "not even alongside an address");
+  assert.equal((await call("setPerson", { name: "Nobody", patch: { photo: JPEG } }, { actor: "Nobody" })).error, "bad_input", "an actor not on the trip");
+  const png = await call("setPerson", { name: "Mo", patch: { photo: "data:image/png;base64,iVBORw0KGgo=" } });
+  assert.deepEqual([png.ok, png.error, png.message], [false, "bad_input", "That picture couldn’t be used. Try another."]);
+  assert.equal(call.fake.tables.Log.length, 0);
+  assert.ok(call.fake.tables.People.every((p) => !p.photo));
+});
+
+test("undo of a picture puts back what was there: none, the earlier picture, or the removed one", async () => {
+  const call = client();
+  const photoOf = async () => (await call("load")).data.people.find((p) => p.name === "Mo").photo;
+  const top = async () => (await historyAll(call))[0];
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG } });
+  let u = await call("undo", { logId: (await top()).id });
+  assert.equal(u.ok, true, JSON.stringify(u));
+  assert.equal(u.data.person.photo, "");
+  assert.equal(u.data.entry.summary, "undid: set a picture");
+  assert.equal(await photoOf(), "");
+
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG } });
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG2 } });
+  u = await call("undo", { logId: (await top()).id });
+  assert.equal(u.data.person.photo, JPEG, "change undone: the earlier picture");
+  assert.equal(await photoOf(), JPEG);
+
+  await call("setPerson", { name: "Mo", patch: { photo: "" } });
+  u = await call("undo", { logId: (await top()).id });
+  assert.equal(await photoOf(), JPEG, "removal undone: the picture is back");
+  assert.equal((await top()).canUndo, true, "and that undo can itself be undone");
+  assert.equal(JSON.stringify(u).includes("undid: removed the picture"), true);
+});
+
+test("an older picture change cannot be undone over a newer one, and only its owner can undo it", async () => {
+  const call = client();
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG } });
+  const first = (await historyAll(call))[0];
+  await call("setPerson", { name: "Mo", patch: { photo: JPEG2 } });
+  assert.equal((await call("undo", { logId: first.id })).error, "stale");
+  const last = (await historyAll(call))[0];
+  const theirs = await call("undo", { logId: last.id }, { actor: "Ajen" });
+  assert.deepEqual([theirs.ok, theirs.message], [false, "You can only change your own picture."]);
+  assert.equal((await call("load")).data.people.find((p) => p.name === "Mo").photo, JPEG2);
 });

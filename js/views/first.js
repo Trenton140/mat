@@ -11,6 +11,8 @@
 // kept, and Safari itself clears a site's storage after a week without a
 // visit. The pasted key is never drawn anywhere else and never logged.
 
+import { fillSeal } from "../picture.js";
+
 export const HOW_LINES = ["Ring up what you paid.", "The slip says who pays whom.", "Stamp it the moment you send."];
 // Under the three lines, only in Safari (not from the Home Screen).
 const HOW_HOME = "Add it to your Home Screen from You 設定, so this phone stays signed in.";
@@ -187,7 +189,7 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
   });
 
   function drawPeople(people) {
-    const sig = JSON.stringify(people.map((p) => [p.name, p.initials]));
+    const sig = JSON.stringify(people.map((p) => [p.name, p.initials, p.photo || ""]));
     if (sig === shownPeople) return;
     shownPeople = sig;
     pick.replaceChildren(
@@ -195,7 +197,7 @@ export function mountFirst(root, store, { connected = true, storage = defaultSto
         const b = el("button");
         b.type = "button";
         b.dataset.me = p.name;
-        b.append(el("span", "seal", p.initials || p.name.slice(0, 2).toUpperCase()), document.createTextNode(p.name));
+        b.append(fillSeal(el("span", "seal"), p), document.createTextNode(p.name));
         return b;
       }),
     );

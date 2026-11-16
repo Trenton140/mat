@@ -3,7 +3,7 @@
 
 var TABS = {
   Trip: ["key", "value"],
-  People: ["name", "initials", "order", "etransfer", "simplify", "email"],
+  People: ["name", "initials", "order", "etransfer", "simplify", "email", "photo"],
   Days: ["date", "city", "title", "line_jp", "line_en", "line_colour", "from_jp", "from_en", "to_jp", "to_en"],
   Stops: ["id", "date", "time", "title", "detail", "getting_there", "travel_min", "fixed", "place", "sign_jp", "booked", "link", "photo", "note", "deleted_at"],
   Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "deleted_at"],
@@ -153,6 +153,12 @@ function validatePayment(input, peopleNames) {
   return { ok: true, value: { id: input.id, from: input.from, to: input.to, cad: cad, seed: input.seed, rot: input.rot } };
 }
 
+// A person's picture (Task 16): a square JPEG the phone has already shrunk,
+// as a data address, or "" for none. Nothing else is ever stored or drawn.
+var PHOTO_RE_ = /^data:image\/jpeg;base64,[A-Za-z0-9+\/]+={0,2}$/;
+var PHOTO_MAX_ = 12000;
+var PHOTO_BAD_ = "That picture couldn\u2019t be used. Try another.";
+
 function validatePersonPatch(patch) {
   if (!isObj_(patch)) return fail_("That didn’t come through properly.");
   var out = {};
@@ -168,8 +174,12 @@ function validatePersonPatch(patch) {
     } else if (k === "simplify") {
       if (typeof patch.simplify !== "boolean") return fail_("Simplify has to be on or off.");
       out.simplify = patch.simplify;
+    } else if (k === "photo") {
+      var ph = patch.photo;
+      if (typeof ph !== "string" || ph.length > PHOTO_MAX_ || (ph !== "" && !PHOTO_RE_.test(ph))) return fail_(PHOTO_BAD_);
+      out.photo = ph;
     } else {
-      return fail_("You can only change the e-Transfer address and Simplify.");
+      return fail_("You can only change the e-Transfer address, Simplify and your picture.");
     }
   }
   return { ok: true, value: out };
@@ -381,7 +391,7 @@ function paymentFromRow(o) {
 
 function personFromRow(o) {
   var off = o.simplify === false || String(o.simplify).trim().toUpperCase() === "FALSE";
-  return { name: cellText_(o.name), initials: cellText_(o.initials), etransfer: cellText_(o.etransfer), simplify: !off };
+  return { name: cellText_(o.name), initials: cellText_(o.initials), etransfer: cellText_(o.etransfer), simplify: !off, photo: cellText_(o.photo) };
 }
 
 function cellBool_(v) { return v === true || String(v).trim().toUpperCase() === "TRUE"; }
@@ -561,9 +571,9 @@ function setupSeedRows() {
       { key: "home", value: "CAD" }, { key: "currency", value: "JPY" }, { key: "tz", value: "Asia/Tokyo" },
     ],
     People: [
-      { name: "Mo", initials: "MO", order: 1, etransfer: "", simplify: true, email: "" },
-      { name: "Ajen", initials: "AJ", order: 2, etransfer: "", simplify: true, email: "" },
-      { name: "Trenton", initials: "TR", order: 3, etransfer: "", simplify: true, email: "" },
+      { name: "Mo", initials: "MO", order: 1, etransfer: "", simplify: true, email: "", photo: "" },
+      { name: "Ajen", initials: "AJ", order: 2, etransfer: "", simplify: true, email: "", photo: "" },
+      { name: "Trenton", initials: "TR", order: 3, etransfer: "", simplify: true, email: "", photo: "" },
     ],
     Days: days,
   };
@@ -641,6 +651,12 @@ function stopDiff_(before, after) {
 function summarize(action, kind, before, after) {
   // The address itself never goes in a sentence: it stays in the Sheet.
   if (kind === "person") return "changed " + (after || before).name + "\u2019s e-Transfer address";
+  // The picture itself never goes in a sentence either, and no pronoun does.
+  if (kind === "picture") {
+    if (!before || !before.photo) return "set a picture";
+    if (!after || !after.photo) return "removed the picture";
+    return "changed picture";
+  }
   if (kind === "payment") {
     var pay = after || before;
     var what = pay.from + " \u2192 " + pay.to + " " + money_(pay.cad, "CAD");

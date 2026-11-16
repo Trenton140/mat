@@ -1111,7 +1111,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   function undoEntry(logId) {
     const entry = state.history.entries.find((e) => e.id === logId);
-    const key = entry ? chainKey(entry.kind, entry.ref) : "log:" + logId;
+    // A picture change belongs to its person: it waits behind their other changes.
+    const key = entry ? chainKey(entry.kind === "picture" ? "person" : entry.kind, entry.ref) : "log:" + logId;
     return enqueue(key, async () => {
       let r;
       try {
@@ -1126,7 +1127,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         changed();
         return false;
       }
-      // The kind the reply names: an expense, a payment, a stop, a stay or a day.
+      // The kind the reply names: an expense, a payment, a stop, a stay or a
+      // day; a picture's undo answers with its person (found by the second rule).
       const kind = r.data.entry && LIST[r.data.entry.kind] ? r.data.entry.kind : Object.keys(LIST).find((k) => r.data[k]);
       const item = r.data[kind];
       confirm(kind, item);

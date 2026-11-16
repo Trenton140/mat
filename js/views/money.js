@@ -9,6 +9,7 @@ import { standing, jpyOf, cadCents, shares } from "../money.js";
 import { tripDay } from "../time.js";
 import { mountSlip, viewerOwed } from "./slip.js";
 import { yen, dollars, typed, dayHead, issuer, pt, freshText, sentence, tripSpan } from "../format.js";
+import { fillSeal } from "../picture.js";
 
 const UNREACHABLE = "Couldn’t reach the trip sheet.";
 const STAND_IN_RATE = "Yen is being converted at a stand-in rate of 111. Tell Mo.";
@@ -86,7 +87,7 @@ function drawLine(e, ctx) {
   }
   if (e.failed) t.append(el("small", "rc-fail", "not saved, tap to retry"));
   else if (e.pending && !ctx.online) t.append(el("small", "rc-wait", "will send when signal returns"));
-  row.append(el("span", "mini", (payer && payer.initials) || String(e.paidBy).slice(0, 2).toUpperCase()), t, fig("span", "rc-amt", typed(e)));
+  row.append(fillSeal(el("span", "mini"), payer, e.paidBy, { named: true }), t, fig("span", "rc-amt", typed(e)));
   return row;
 }
 

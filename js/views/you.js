@@ -1,6 +1,7 @@
 /* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
-// Settings (the "You 設定" sheet): who you are, your e-Transfer address, the
-// stamp sound, History, when the figures were last fetched, how this works,
+// Settings (the "You 設定" sheet): who you are, your e-Transfer address, your
+// picture (it shows in your seal; js/picture.js shrinks it first), the stamp
+// sound, History, when the figures were last fetched, how this works,
 // the invite link, the Claude link, planner payments (only once a planner
 // sheet is linked), the Google Sheet and "Report a problem".
 // One sheet, no sub-pages.
@@ -20,6 +21,7 @@ import { soundOn, setSound } from "../sound.js";
 import { clock, dayHead, dayShort, localDay, freshText, historySentence } from "../format.js";
 import { HOW_LINES, standalone } from "./first.js";
 import { copyText } from "../clip.js";
+import { fillSeal, choosePicture, isPicture } from "../picture.js";
 
 const NOT_YET = "Not updated yet";
 const HISTORY_UNAVAILABLE = "history unavailable";
@@ -39,6 +41,15 @@ const MARKUP = `
       <input id="setMail" type="email" inputmode="email" maxlength="80" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false" enterkeyhint="done" placeholder="name@example.com">
       <button type="button" id="setMailSave">Save</button>
     </div>
+  </div>
+  <div class="set-r set-pic" id="setPic">
+    <span>Your picture<small>Shows in your seal, on every phone</small></span>
+    <span class="seal is-on" id="setPicSeal" hidden></span>
+    <span class="set-pic-b">
+      <button type="button" id="setPicPick">Add</button>
+      <button type="button" id="setPicDel" hidden>Remove</button>
+    </span>
+    <input type="file" accept="image/*" id="setPicFile" tabindex="-1" aria-hidden="true" hidden>
   </div>
   <button type="button" class="set-r" id="setSound"><span>Stamp sound</span><b id="setSoundV">On</b></button>
   <button type="button" class="set-r" id="setHist"><span>History<small>Every change, with undo</small></span><b>Open</b></button>
@@ -98,6 +109,11 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const who = $("setWho");
   const mail = $("setMail");
   const mailSave = $("setMailSave");
+  const picRow = $("setPic");
+  const picSeal = $("setPicSeal");
+  const picPick = $("setPicPick");
+  const picDel = $("setPicDel");
+  const picFile = $("setPicFile");
   const soundV = $("setSoundV");
   const fresh = $("setFresh");
   const how = $("setHow");
@@ -119,6 +135,8 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   let shownMe = null; // whose address the field is following
   let shownMail = ""; // the address as last drawn; the field follows it until it is typed in
   let sentMail = null; // the text last sent with Save, kept in the field if the save fails
+  let shownPic = null; // the picture the row's seal was last filled with
+  let picBusy = false; // a picture is being shrunk or saved: no second one
   let reporting = false;
   let session = 0; // counts each opening and closing of the sheet
 
@@ -129,7 +147,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   };
 
   function drawWho(s) {
-    const sig = JSON.stringify(s.people.map((p) => [p.name, p.initials]));
+    const sig = JSON.stringify(s.people.map((p) => [p.name, p.initials, p.photo || ""]));
     if (sig !== shownWho) {
       shownWho = sig;
       who.replaceChildren(
@@ -137,7 +155,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
           const b = el("button");
           b.type = "button";
           b.dataset.me = p.name;
-          b.append(el("span", "seal", p.initials || p.name.slice(0, 2).toUpperCase()), document.createTextNode(p.name));
+          b.append(fillSeal(el("span", "seal"), p), document.createTextNode(p.name));
           return b;
         }),
       );
@@ -167,9 +185,31 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     mailSave.disabled = !s.me || mail.value.trim() === shownMail;
   }
 
+  // Your picture: Add with none; with one, its seal and Change / Remove.
+  function drawPic(s) {
+    const p = mePerson(s);
+    const has = !!p && isPicture(p.photo);
+    const pic = has ? p.photo : "";
+    if (pic !== shownPic) {
+      shownPic = pic;
+      if (has) fillSeal(picSeal, p);
+      else picSeal.replaceChildren();
+    }
+    picSeal.hidden = !has;
+    picDel.hidden = !has;
+    picPick.textContent = picBusy ? "Saving…" : has ? "Change" : "Add";
+    picPick.setAttribute("aria-label", picBusy ? "Saving your picture" : has ? "Change your picture" : "Add your picture");
+    picDel.setAttribute("aria-label", "Remove your picture");
+    picPick.disabled = !s.me || picBusy;
+    picDel.disabled = !s.me || picBusy;
+    picRow.classList.toggle("is-off", !s.me);
+    picRow.classList.toggle("has-pic", has);
+  }
+
   function render(s) {
     drawWho(s);
     drawMail(s);
+    drawPic(s);
     soundV.textContent = soundOn() ? "On" : "Off";
     drawDemoDays(s);
     setDemo(!demoDays.hidden);
@@ -280,6 +320,39 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
       ev.preventDefault();
       saveMail();
       mail.blur();
+    }
+  });
+
+  // ---- your picture ----
+  // A tap anywhere on the row but Remove opens the phone's own picker.
+  picRow.addEventListener("click", (ev) => {
+    if (ev.target === picFile || picDel.contains(ev.target) || !store.state.me || picBusy) return;
+    picFile.click();
+  });
+  picDel.addEventListener("click", async () => {
+    const me = store.state.me;
+    if (!me || picBusy) return;
+    picBusy = true;
+    drawPic(store.state);
+    try {
+      await store.setPerson(me, { photo: "" });
+    } finally {
+      picBusy = false;
+      drawPic(store.state);
+    }
+  });
+  picFile.addEventListener("change", async () => {
+    const file = picFile.files && picFile.files[0];
+    picFile.value = ""; // the same picture can be chosen again
+    const me = store.state.me;
+    if (!file || !me || picBusy) return;
+    picBusy = true;
+    drawPic(store.state);
+    try {
+      await choosePicture(file, { save: (photo) => store.setPerson(me, { photo }), notify: (t) => store.notify(t) });
+    } finally {
+      picBusy = false;
+      drawPic(store.state);
     }
   });
 
