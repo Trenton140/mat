@@ -26,6 +26,29 @@ const BOARD = {
 
 module.exports = [
   {
+    name: "within a day the newest line is at the top",
+    async run({ page }) {
+      const mk = (id, title, addedAt) => ({
+        id, day: "2026-12-11", title, amount: 1000, currency: "JPY", rate: 111, paidBy: "Mo", split: NAMES.slice(),
+        splitMode: "equal", splitVals: [], note: "", kind: "", addedBy: "Mo", addedAt, deleted: false,
+      });
+      const seed = withExtras({ expenses: [mk("ordexp001", "Earlier snack", "2026-12-11T09:00:00.000Z"), mk("ordexp002", "Later snack", "2026-12-11T15:00:00.000Z")] });
+      await open(page, { seed, nowMs: NOON12 });
+      await waitRows(page, 10);
+      const ids = await page.$$eval('.rc-group[data-day="2026-12-11"] .rc-row[data-id]', (els) => els.map((e) => e.dataset.id));
+      assert.deepEqual(ids.slice(0, 2), ["ordexp002", "ordexp001"], "the later one, then the earlier one, above the older lines");
+      // Lines with the same time keep the Sheet's order, flipped: a later row is higher.
+      const was = seed.expenses.filter((e) => !e.deleted && e.day === "2026-12-11" && !e.id.startsWith("ord")).map((e) => e.id);
+      assert.deepEqual(ids.slice(2), was.slice().reverse());
+      // The total stays at the foot of the receipt.
+      const below = await page.evaluate(() => {
+        const last = [...document.querySelectorAll("#rc .rc-group")].pop();
+        return !!(last.compareDocumentPosition(document.querySelector("#rc .rc-tot")) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+      assert.ok(below, "the total is under the last day");
+    },
+  },
+  {
     name: "sentence, summary and receipt from the standard seed",
     async run({ page }) {
       const { balances, owedList, standing, sentence, jpyOf, cadCents, yen, dollars } = await lib();
@@ -49,10 +72,11 @@ module.exports = [
 
       const heads = await page.$$eval("#rc .rc-day", (els) => els.map((e) => e.textContent));
       assert.equal(heads.length, 4, "four day headings");
-      assert.match(heads[0], /出発前/);
-      assert.match(heads[1], /Dec 10/);
-      assert.match(heads[2], /Dec 11/);
-      assert.match(heads[3], /Dec 12/);
+      // Newest day at the top; what was paid before the trip is at the bottom.
+      assert.match(heads[0], /Dec 12/);
+      assert.match(heads[1], /Dec 11/);
+      assert.match(heads[2], /Dec 10/);
+      assert.match(heads[3], /出発前/);
 
       const rows = await page.$$eval("#rc .rc-row[data-id]", (els) => els.map((e) => e.textContent));
       assert.equal(rows.length, 8);
