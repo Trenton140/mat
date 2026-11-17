@@ -1,7 +1,7 @@
 // Settings (Task 12): the "You 設定" sheet.
 
 const assert = require("node:assert/strict");
-const { SEED, NOON12, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
+const { ORIGIN, SEED, NOON12, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
 
 // ---- small tools for this file ----
 
@@ -271,7 +271,7 @@ module.exports = [
       await expectText(page, "#ubarT", "Link copied.");
       const expected = await page.evaluate(() => location.origin + location.pathname + "#k=test-key");
       assert.equal(await clipboard(page), expected);
-      assert.equal(expected, "http://localhost:4173/#k=test-key");
+      assert.equal(expected, ORIGIN + "/#k=test-key");
       assert.equal(await page.evaluate(() => document.body.innerText.includes("test-key") || document.body.innerHTML.includes("test-key")), false, "the key is not drawn anywhere");
       assert.equal(await page.evaluate(() => location.hash), "", "and not in the address bar");
     },
@@ -304,7 +304,7 @@ module.exports = [
       });
       await page.click("#setInstall");
       await expectText(page, "#ubarT", "Link copied.");
-      assert.equal(await clipboard(page), "http://localhost:4173/#k=test-key");
+      assert.equal(await clipboard(page), ORIGIN + "/#k=test-key");
       assert.equal(await page.evaluate(() => location.hash), "#k=test-key");
       const steps = await page.$$eval("#setInstallHow > span", (els) => els.map((e) => e.textContent));
       assert.deepEqual(steps, ["1. Tap Share, then Add to Home Screen.", "2. If it asks for your trip link, paste: it’s already copied."]);
@@ -318,11 +318,11 @@ module.exports = [
         "a keyed manifest stands in",
       );
       assert.ok(m.start_url.endsWith("#k=test-key"), m.start_url);
-      assert.equal(m.start_url, "http://localhost:4173/#k=test-key");
-      assert.equal(m.scope, "http://localhost:4173/");
-      assert.equal(m.id, "http://localhost:4173/");
+      assert.equal(m.start_url, ORIGIN + "/#k=test-key");
+      assert.equal(m.scope, ORIGIN + "/");
+      assert.equal(m.id, ORIGIN + "/");
       assert.equal(m.name, "MAT Japan 2026");
-      assert.ok(m.icons.length > 0 && m.icons.every((i) => i.src.startsWith("http://localhost:4173/icons/")), "absolute icon URLs");
+      assert.ok(m.icons.length > 0 && m.icons.every((i) => i.src.startsWith(ORIGIN + "/icons/")), "absolute icon URLs");
       assert.equal(await page.evaluate(() => document.body.innerText.includes("test-key")), false, "the key is not drawn");
 
       await page.click("#youDone");

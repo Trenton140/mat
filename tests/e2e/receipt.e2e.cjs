@@ -216,7 +216,7 @@ module.exports = [
         globalThis.__marker = 1; // gone if the page reloads
       });
 
-      for (const bad of ["", "   ", "hello there", "http://localhost:4173/", "http://localhost:4173/#x=1", "#k=", "abc"]) {
+      for (const bad of ["", "   ", "hello there", ORIGIN + "/", ORIGIN + "/#x=1", "#k=", "abc"]) {
         await page.fill("#keyPaste", bad);
         await page.click("#keyGo");
         await expectText(page, "#keyMsg", "That doesn’t look like a trip link.");
@@ -224,7 +224,7 @@ module.exports = [
       assert.equal(backend.requests.length, 0, "a bad paste calls nothing");
       assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), null);
 
-      await page.fill("#keyPaste", "  http://localhost:4173/#k=test-key  ");
+      await page.fill("#keyPaste", "  " + ORIGIN + "/#k=test-key  ");
       await page.click("#keyGo");
       await waitRows(page, 8);
       assert.equal(await visible(page, "#gate"), false);

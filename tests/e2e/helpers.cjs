@@ -10,7 +10,10 @@ const fs = require("fs");
 const path = require("path");
 const { createFakeBackend } = require("../fake-backend.cjs");
 
-const ORIGIN = "http://localhost:4173";
+// MAT_PORT picks the port (default 4173). Two checkouts testing at once need two ports:
+// on one port the second run would be served the first one's files.
+const PORT = Number(process.env.MAT_PORT) || 4173;
+const ORIGIN = "http://localhost:" + PORT;
 const SEED = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "fixtures", "seed.json"), "utf8"));
 // A small plan (days, stops, stays) to lay over the seed: WITH_PLAN.
 const PLAN = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "fixtures", "plan.json"), "utf8"));
@@ -162,4 +165,4 @@ function visible(page, selector) {
   }, selector);
 }
 
-module.exports = { ORIGIN, SEED, PLAN, WITH_PLAN, NOON12, SEEDED_AT, makeBackend, open, advance, until, text, expectText, visible };
+module.exports = { PORT, ORIGIN, SEED, PLAN, WITH_PLAN, NOON12, SEEDED_AT, makeBackend, open, advance, until, text, expectText, visible };

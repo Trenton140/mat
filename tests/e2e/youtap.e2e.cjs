@@ -3,7 +3,7 @@
 // notice it raises is seen above the open sheet.
 
 const assert = require("node:assert/strict");
-const { SEED, NOON12, open, advance, until, text, expectText } = require("./helpers.cjs");
+const { ORIGIN, SEED, NOON12, open, advance, until, text, expectText } = require("./helpers.cjs");
 
 const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
 const prow = (o) => PHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
@@ -94,7 +94,7 @@ module.exports = [
       assert.equal(await page.getAttribute("#setInviteV", "aria-live"), "polite");
       await page.click("#setInvite");
       await expectText(page, "#setInviteV", "Copied ✓");
-      assert.equal(await clipboard(page), "http://localhost:4173/#k=test-key", "the same link as before");
+      assert.equal(await clipboard(page), ORIGIN + "/#k=test-key", "the same link as before");
       await advance(page, backend, 1900);
       assert.equal(await text(page, "#setInviteV"), "Copied ✓");
       await advance(page, backend, 200);

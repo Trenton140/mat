@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, normalize, extname, sep } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const PORT = 4173;
+// MAT_PORT: another port, so two checkouts can run their tests at the same time.
+const PORT = Number(process.env.MAT_PORT) || 4173;
 
 const TYPES = {
   ".html": "text/html; charset=utf-8",

@@ -23,15 +23,16 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 const { chromium } = require("playwright-core");
+const { PORT, ORIGIN } = require("./helpers.cjs");
 
 const ROOT = path.join(__dirname, "..", "..");
 const SHOTS = "/private/tmp/claude-501/mat-shots/failures";
 const CASE_TIMEOUT_MS = 30000;
 
-// What is on port 4173: null (nothing), or the body of its front page.
+// What is on the test port: null (nothing), or the body of its front page.
 function frontPage() {
   return new Promise((resolve) => {
-    const req = http.get("http://localhost:4173/", (res) => {
+    const req = http.get(ORIGIN + "/", (res) => {
       let body = "";
       res.setEncoding("utf8");
       res.on("data", (c) => (body += c));
@@ -51,7 +52,7 @@ async function startServer() {
   if (already !== null) {
     // One is already running (npm run serve): use it only if it is this app.
     if (isThisApp(already)) return null;
-    throw new Error("Port 4173 is taken by something that is not this app. Stop it and run the tests again.");
+    throw new Error("Port " + PORT + " is taken by something that is not this app. Stop it and run the tests again.");
   }
   const child = spawn(process.execPath, [path.join(ROOT, "scripts", "serve.mjs")], { stdio: "ignore" });
   for (let i = 0; i < 100; i++) {
@@ -59,7 +60,7 @@ async function startServer() {
     await new Promise((r) => setTimeout(r, 50));
   }
   child.kill();
-  throw new Error("The test server did not start on port 4173.");
+  throw new Error("The test server did not start on port " + PORT + ".");
 }
 
 const CONTEXT = {
