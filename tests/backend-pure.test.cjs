@@ -228,7 +228,7 @@ test("the setup seed rows are the trip, three people and one day per date", () =
 });
 
 test("every column is plain text except the numbers and the on/off flags", () => {
-  const numbers = { Expenses: ["amount", "rate"], Settlements: ["cad", "seed", "rot"], People: ["order"], Stops: ["travel_min"], Log: ["id", "undoes", "undone_by"] };
+  const numbers = { Expenses: ["amount", "rate"], Settlements: ["cad", "seed", "rot"], Stamps: ["seed"], People: ["order"], Stops: ["travel_min"], Log: ["id", "undoes", "undone_by"] };
   const flags = { People: ["simplify"], Stops: ["fixed", "booked"] };
   for (const [tab, headers] of Object.entries(P.TABS)) {
     for (const h of headers) {
@@ -644,4 +644,50 @@ test("paymentIdOf: the note's first part when it is an id", () => {
   assert.equal(P.paymentIdOf("P005 · North Rail"), "P005");
   assert.equal(P.paymentIdOf(undefined), null);
   assert.equal(P.paymentIdOf("x".repeat(21) + " · a"), null);
+});
+
+// ---------- the stamp book: when a stamp is open ----------
+
+const SDEFS = [{ id: "d1", date: "2030-01-05" }, { id: "d2", date: "2030-01-06" }, { id: "iss", date: "" }];
+const [SD1, , SISS] = SDEFS;
+
+test("stampWindow: a day stamp is open 27 hours from 00:00 Japan time; the issue stamp until the last day closes", () => {
+  assert.deepEqual(P.stampWindow(SD1, SDEFS), { opens: Date.UTC(2030, 0, 4, 15), closes: Date.UTC(2030, 0, 5, 18) });
+  assert.deepEqual(P.stampWindow(SISS, SDEFS), { opens: 0, closes: Date.UTC(2030, 0, 6, 18) });
+  // no day stamps at all: the issue stamp does not close
+  assert.equal(P.stampWindow(SISS, [SISS]).closes, Infinity);
+  // a date that is not a day is never open
+  const bad = P.stampWindow({ id: "x", date: "someday" }, SDEFS);
+  assert.ok(bad.opens > bad.closes);
+});
+
+test("pressRefusal: the window edges, in Japan time", () => {
+  const at = (h, m = 0, s = 0, day = 5) => Date.UTC(2030, 0, day, h, m, s);
+  const same = (ms) => P.pressRefusal(SD1, SDEFS, ms, ms);
+  assert.equal(same(at(17, 59, 59)), "");
+  assert.equal(same(at(18)), "closed");
+  assert.equal(same(Date.UTC(2030, 0, 4, 14, 59, 59)), "not_open");
+  assert.equal(same(Date.UTC(2030, 0, 4, 15)), "");
+});
+
+test("pressRefusal: late after 48 hours, future past 5 minutes", () => {
+  const at = Date.UTC(2030, 0, 5, 10);
+  assert.equal(P.pressRefusal(SD1, SDEFS, at, Date.UTC(2030, 0, 7, 10, 0, 1)), "late");
+  assert.equal(P.pressRefusal(SD1, SDEFS, at, Date.UTC(2030, 0, 7, 10)), "");
+  assert.equal(P.pressRefusal(SD1, SDEFS, at + 6 * 60000, at), "future");
+  assert.equal(P.pressRefusal(SD1, SDEFS, at + 5 * 60000, at), "");
+  assert.equal(P.pressRefusal(SD1, SDEFS, NaN, at), "future");
+});
+
+test("pressRefusal: the issue stamp is open from the start until the last day closes", () => {
+  assert.equal(P.pressRefusal(SISS, SDEFS, Date.UTC(2029, 5, 1), Date.UTC(2029, 5, 1)), "");
+  assert.equal(P.pressRefusal(SISS, SDEFS, Date.UTC(2030, 0, 6, 17, 59), Date.UTC(2030, 0, 6, 17, 59)), "");
+  assert.equal(P.pressRefusal(SISS, SDEFS, Date.UTC(2030, 0, 6, 18), Date.UTC(2030, 0, 6, 18)), "closed");
+});
+
+test("stamp rows and the History sentence", () => {
+  assert.deepEqual(P.stampFromRow({ id: "d1|Mo", def: "d1", who: "Mo", at: "2030-01-05T01:00:00.000Z", seed: 7, gone: "" }), { def: "d1", who: "Mo", at: "2030-01-05T01:00:00.000Z", seed: 7 });
+  assert.equal(P.stampFromRow({ def: "d1", who: "Mo", at: "", seed: 7, gone: "yes" }).gone, true);
+  assert.equal(P.summarize("press", "stamp", null, { day: "2030-01-05" }), "stamped Jan 5");
+  assert.equal(P.summarize("press", "stamp", null, { day: "" }), "stamped the book");
 });

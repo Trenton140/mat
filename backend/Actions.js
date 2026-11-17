@@ -47,7 +47,15 @@ var MSG_ = {
   bothTakenOff: "That number is another item in the planner now: its tick was taken off and nobody is on it any more.",
   claudeTick: "Tick this one in the app.",
   claudeRetick: "Undo this one in the app.",
+  claudeStamp: "Press this one in the app.",
+  noStamp: "That stamp isn’t in the book.",
+  stampNotOpen: "That stamp isn’t open yet.",
+  stampClosed: "That stamp’s day has closed.",
+  stampLate: "That press took too long to arrive.",
+  stampFuture: "This phone’s clock is ahead of the trip’s. Check its date and time.",
+  stampLifted: "That stamp was lifted in History.",
 };
+var STAMP_REFUSALS_ = { not_open: "stampNotOpen", closed: "stampClosed", late: "stampLate", future: "stampFuture" };
 
 // A Google spreadsheet id, as linkPlanner takes it.
 var PLANNER_SHEET_ID_RE_ = /^[A-Za-z0-9_-]{20,80}$/;
@@ -149,6 +157,7 @@ function dispatch_(body) {
     case "undo": write = undo_; break;
     case "tickTodo": write = tickTodo_; break;
     case "claimTodo": write = claimTodo_; break;
+    case "pressStamp": write = pressStamp_; break;
     case "syncPayments": write = null; break;
     case "syncTodos": write = null; break;
     default: return err_("bad_input", MSG_.badAction);
@@ -292,6 +301,8 @@ function load_() {
     todos: todosShown_(),
     todosPulledAt: getProp_("TODOS_PULLED_AT") || "",
     paymentsPulledAt: getProp_("PAYMENTS_PULLED_AT") || "",
+    stampDefs: stampDefs_(),
+    stamps: stampsShown_(),
   }, rev);
 }
 
@@ -1385,6 +1396,108 @@ function logOwed_(id, ctx) {
   appendLog_({ actor: ctx.actor, via: ctx.via }, "note", "planner", id, "The planner still says Booked for this one; the app will put it back at the next fetch.", null, null);
 }
 
+// ---- the stamp book ----
+
+// The two tabs live only after migrate; until then the book is empty.
+function stampsReady_() {
+  return hasTab_("StampDefs") && hasTab_("Stamps") && hasColumn_("StampDefs", "shape") && hasColumn_("Stamps", "gone");
+}
+
+function stampDefs_() {
+  if (!stampsReady_()) return [];
+  return readTable_("StampDefs").filter(function (r) { return cellText_(r.id) !== ""; }).map(stampDefFromRow);
+}
+
+// Everyone's stamps that are not lifted.
+function stampsShown_() {
+  if (!stampsReady_()) return [];
+  return readTable_("Stamps")
+    .filter(function (r) { return cellText_(r.def) !== "" && cellText_(r.who) !== "" && cellText_(r.gone) !== "yes"; })
+    .map(stampFromRow);
+}
+
+var STAMP_AT_RE_ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+
+function randomStampSeed_() {
+  return 1 + Math.floor(Math.random() * 4294967295);
+}
+
+function stampDefById_(defs, id) {
+  for (var i = 0; i < defs.length; i++) if (defs[i].id === id) return defs[i];
+  return null;
+}
+
+// The caller presses a stamp for themselves: { def, at } (at: the time on
+// their phone when they pressed, ISO; seed: optional, how the ink wore, 1 to
+// 4294967295). Whether it is open is judged by `at` (Japan time) and the
+// backend's own clock for how late it arrived: see pressRefusal. Pressed
+// twice, it is one stamp (a resend answers the first). A lifted stamp is
+// pressed again, with a new time and seed, while its window is open. Never
+// through Claude.
+function pressStamp_(args, ctx) {
+  if (ctx.via === "claude") return err_("bad_input", MSG_.claudeStamp);
+  if (!stampsReady_()) return err_("needs_migrate", MSG_.needsMigrate);
+  var defs = stampDefs_();
+  var def = stampDefById_(defs, typeof args.def === "string" ? args.def : "");
+  if (!def) return err_("no_such_stamp", MSG_.noStamp);
+  if (typeof args.at !== "string" || !STAMP_AT_RE_.test(args.at) || !isFinite(Date.parse(args.at))) return err_("bad_input", MSG_.badRequest);
+  var atMs = Date.parse(args.at);
+  var at = new Date(atMs).toISOString();
+  var id = def.id + "|" + ctx.actor;
+  var row = findRow_("Stamps", id);
+  if (row && cellText_(row.gone) !== "yes") return ok_({ stamp: stampFromRow(row), logId: null }, rev_());
+  // The resend of a press that was lifted since: not a new press.
+  if (row && cellStamp_(row.at) === at) return err_("stale", MSG_.stampLifted);
+  var why = pressRefusal(def, defs, atMs, Date.parse(nowIso_()));
+  if (why) return err_(why, MSG_[STAMP_REFUSALS_[why]]);
+
+  var seed = typeof args.seed === "number" && args.seed % 1 === 0 && args.seed >= 1 && args.seed <= 4294967295 ? args.seed : randomStampSeed_();
+  var before = row ? stampSnap_(stampFromRow(row), def.date) : null;
+  if (before && before.seed === seed) seed = seed === 4294967295 ? 1 : seed + 1;
+  var savedRow;
+  if (row) savedRow = updateById_("Stamps", id, { at: at, seed: seed, gone: "" });
+  else {
+    appendObj_("Stamps", { id: id, def: def.id, who: ctx.actor, at: at, seed: seed, gone: "" });
+    savedRow = findRow_("Stamps", id);
+  }
+  var saved = stampFromRow(savedRow);
+  var after = stampSnap_(saved, def.date);
+  var log = appendLog_(ctx, "press", "stamp", id, summarize("press", "stamp", before, after), before, after);
+  return ok_({ stamp: saved, logId: log.id }, bumpRev_());
+}
+
+// Lifts a press, or (undoing a lift) puts it back as it was. Putting it back
+// is a press, so it needs the stamp's window to be open now, and never comes
+// through Claude. Lifting is always allowed.
+function undoStamp_(entry, rows, ctx) {
+  if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
+  if (!canUndo(entry, rows.map(logShape_))) return err_("stale", MSG_.newer);
+  if (!entry.after) return err_("stale", MSG_.cantUndo);
+  if (!stampsReady_()) return err_("needs_migrate", MSG_.needsMigrate);
+  var row = findRow_("Stamps", entry.ref);
+  if (!row) return err_("not_found", MSG_.noStamp);
+  var cur = stampFromRow(row);
+  var target = entry.before ? entry.before : { def: entry.after.def, who: entry.after.who, at: entry.after.at, seed: entry.after.seed, gone: true, day: entry.after.day };
+  var lift = target.gone === true;
+  if (!lift) {
+    if (ctx.via === "claude") return err_("bad_input", MSG_.claudeStamp);
+    var defs = stampDefs_();
+    var def = stampDefById_(defs, cur.def);
+    if (!def) return err_("no_such_stamp", MSG_.noStamp);
+    var nowMs = Date.parse(nowIso_());
+    var why = pressRefusal(def, defs, nowMs, nowMs);
+    if (why) return err_(why, MSG_[STAMP_REFUSALS_[why]]);
+  }
+  var day = entry.after.day;
+  var savedRow = updateById_("Stamps", entry.ref, { at: String(target.at), seed: Number(target.seed), gone: lift ? "yes" : "" });
+  var saved = stampFromRow(savedRow);
+  var log = appendLog_(ctx, "undo", "stamp", entry.ref, "undid: " + entry.summary, stampSnap_(cur, day), stampSnap_(saved, day), entry.id);
+  updateById_("Log", entry.id, { undone_by: log.id });
+  var shown = logShape_(log);
+  shown.canUndo = true;
+  return ok_({ entry: shown, logId: log.id, stamp: saved }, bumpRev_());
+}
+
 // ---- undo ----
 
 function undo_(args, ctx) {
@@ -1399,6 +1512,7 @@ function undo_(args, ctx) {
   var entry = parseLogRow(row);
   if (entry.kind === "picture") return undoPicture_(entry, rows, ctx);
   if (entry.kind === "todo") return undoTodo_(entry, rows, ctx);
+  if (entry.kind === "stamp") return undoStamp_(entry, rows, ctx);
   var plan = planKind_(entry.kind);
   if (entry.kind !== "expense" && entry.kind !== "payment" && !plan) return err_("stale", MSG_.cantUndo);
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);

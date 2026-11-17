@@ -11,6 +11,8 @@ var TABS = {
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
   Todos: ["id", "item", "book_by", "status", "note", "link", "claimed_by", "ticked_by", "ticked_at", "ticked_item", "planner_written", "planner_was", "gone"],
+  StampDefs: ["id", "date", "name_ja", "name_en", "place", "motif", "ink", "shape"],
+  Stamps: ["id", "def", "who", "at", "seed", "gone"],
 };
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
@@ -705,6 +707,11 @@ function summarize(action, kind, before, after) {
     if (action === "restore") return "put back the stay " + stayName;
     return "changed the stay " + stayName;
   }
+  // A stamp in the book: the day it is for (a snapshot's `day`), never a place or a drawing.
+  if (kind === "stamp") {
+    var st = after || before;
+    return !st.day ? "stamped the book" : "stamped " + shortDay_(st.day);
+  }
   if (kind === "day") return "changed the ticket for " + dayLabel((after || before).date);
   // A "Before we go" item: its own text (cut) and names, never a planner value.
   if (kind === "todo") {
@@ -1111,6 +1118,79 @@ function todoFromRow(o) {
   };
 }
 
+// ---- the stamp book ----
+
+// Japan time is fixed UTC+9 (no daylight saving). A day stamp is open from
+// 00:00 on its date until 03:00 the next day: 27 hours.
+var JAPAN_OFFSET_MS_ = 9 * 3600000;
+var STAMP_OPEN_MS_ = 27 * 3600000;
+var STAMP_LATE_MS_ = 48 * 3600000;
+var STAMP_AHEAD_MS_ = 5 * 60000;
+
+function shortDay_(date) {
+  var s = String(date);
+  if (!validDay_(s)) return s;
+  var mo = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][Number(s.slice(5, 7)) - 1];
+  return mo + " " + Number(s.slice(8, 10));
+}
+
+// When a stamp can be pressed, as epoch ms { opens, closes }. A day stamp
+// (date YYYY-MM-DD): from 00:00 Japan time on that date for 27 hours. The
+// issue stamp (date ""): from the beginning until the last day stamp closes
+// (never, when the book has no day stamps). Any other date: never open.
+function stampWindow(def, defs) {
+  var date = cellDate_(def && def.date);
+  if (date === "") {
+    var latest = null;
+    var list = Array.isArray(defs) ? defs : [];
+    for (var i = 0; i < list.length; i++) {
+      var d = cellDate_(list[i] && list[i].date);
+      if (d === "" || !validDay_(d)) continue;
+      var c = Date.UTC(Number(d.slice(0, 4)), Number(d.slice(5, 7)) - 1, Number(d.slice(8, 10))) - JAPAN_OFFSET_MS_ + STAMP_OPEN_MS_;
+      if (latest === null || c > latest) latest = c;
+    }
+    return { opens: 0, closes: latest === null ? Infinity : latest };
+  }
+  if (!validDay_(date)) return { opens: Infinity, closes: -Infinity };
+  var opens = Date.UTC(Number(date.slice(0, 4)), Number(date.slice(5, 7)) - 1, Number(date.slice(8, 10))) - JAPAN_OFFSET_MS_;
+  return { opens: opens, closes: opens + STAMP_OPEN_MS_ };
+}
+
+// Why a press made at atMs (the phone's time) and received at nowMs is
+// refused: "" (it is fine), "future" (the phone's time is ahead of ours by
+// more than 5 minutes), "not_open", "closed" (atMs is outside the stamp's
+// window) or "late" (it arrived more than 48 hours after it was pressed).
+function pressRefusal(def, defs, atMs, nowMs) {
+  if (!isFinite(atMs) || !isFinite(nowMs)) return "future";
+  if (atMs > nowMs + STAMP_AHEAD_MS_) return "future";
+  var w = stampWindow(def, defs);
+  if (atMs < w.opens) return "not_open";
+  if (atMs >= w.closes) return "closed";
+  if (nowMs - atMs > STAMP_LATE_MS_) return "late";
+  return "";
+}
+
+// A StampDefs row, every column as text.
+function stampDefFromRow(o) {
+  return {
+    id: cellText_(o.id), date: cellDate_(o.date), name_ja: cellText_(o.name_ja), name_en: cellText_(o.name_en),
+    place: cellText_(o.place), motif: cellText_(o.motif), ink: cellText_(o.ink), shape: cellText_(o.shape),
+  };
+}
+
+// A Stamps row as the app sees it ("gone" only on a lifted one).
+function stampFromRow(o) {
+  var s = { def: cellText_(o.def), who: cellText_(o.who), at: cellStamp_(o.at), seed: cellNum_(o.seed) };
+  if (cellText_(o.gone) === "yes") s.gone = true;
+  return s;
+}
+
+// What the Log keeps of a press: the stamp, whether it is lifted, and the
+// day it is for (so History can say "Jan 5" without reading the definitions).
+function stampSnap_(s, day) {
+  return { def: s.def, who: s.who, at: s.at, seed: s.seed, gone: s.gone === true, day: day };
+}
+
 // A column's A1 letters from its 0-based index: 0 is A, 26 is AA.
 function colLetter(i) {
   var s = "";
@@ -1151,5 +1231,5 @@ function changeLogRow(rows, fields) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_ };
 }
