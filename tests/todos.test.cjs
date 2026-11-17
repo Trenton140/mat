@@ -724,7 +724,7 @@ test("P7 (M1): an undo of a tick made through the Claude connector never reaches
   const out = JSON.parse(r.result.content[0].text);
   assert.deepEqual([out.planner, out.todo.tickedBy], ["kept", ""]);
   assert.equal(writes(call).length, 2, "only the tick's own two writes");
-  assert.equal(call.fake.planner.calls.filter((c) => c.op !== "read").length, 2);
+  assert.equal(call.fake.planner.calls.filter((c) => c.op !== "read" && c.op !== "formula").length, 2);
 });
 
 test("M1 (round 2): a tick through Claude is refused; nothing is saved or written", async () => {
@@ -879,7 +879,7 @@ test("round 2, 3: a planner write reads the Change Log, then Book Now, then writ
   await call("syncTodos");
   const start = call.fake.planner.calls.length;
   await call("tickTodo", { id: "1" });
-  assert.deepEqual(call.fake.planner.calls.slice(start).map((c) => c.op + " " + c.tab), ["read Change Log", "read Book Now", "cell Book Now", "append Change Log"]);
+  assert.deepEqual(call.fake.planner.calls.slice(start).map((c) => c.op + " " + c.tab), ["read Change Log", "read Book Now", "formula Book Now", "cell Book Now", "append Change Log"]);
 });
 
 test("round 2, 4: when the app can't record a planner write, the planner is put back; the tick stays and is retried", async () => {
@@ -965,4 +965,134 @@ test("round 2, 8: the stored list answered by the 30-second rule (or the 10-minu
   later(call, 5);
   assert.equal((await call("syncTodos")).data.stored, true);
   assert.equal("stored" in (await call("syncTodos", { force: true })).data, false);
+});
+
+// ---------- final fix wave ----------
+
+// A planner cell holding a formula: Book Now row 4 (item 1), column E.
+const withFormula = (call, cell = "E4") => { call.fake.planner.formulas["Book Now"] = { ...(call.fake.planner.formulas["Book Now"] || {}), [cell]: "=IF(F4>0,\"Booked\",\"Not booked\")" }; };
+const bookStatus = (call, row = 4) => call.fake.planner.tabs["Book Now"][row - 1][4];
+
+test("final 1: when recording the write throws, the planner is put back, no planner_written, answer pending", async () => {
+  const call = linked();
+  await call("syncTodos");
+  const real = call.fake.world.updateById_;
+  call.fake.world.updateById_ = (tab, id, patch) => {
+    if (tab === "Todos" && patch.planner_written === "yes") throw new Error("boom: Sheets error");
+    return real(tab, id, patch);
+  };
+  const t = await call("tickTodo", { id: "1" });
+  call.fake.world.updateById_ = real;
+  assert.deepEqual([t.ok, t.data.planner, t.data.todo.tickedBy], [true, "pending", "Mo"]);
+  assert.equal(bookStatus(call), "Not booked");
+  assert.equal(stored(call, "1").planner_written, "");
+  assert.deepEqual(writes(call).filter((w) => w.kind === "cell").map((w) => w.value), ["Booked", "Not booked"]);
+});
+
+test("final 1: when recording throws and the put-back fails too, History says Booked was left and the answer is pending", async () => {
+  const call = linked();
+  await call("syncTodos");
+  const real = call.fake.world.updateById_;
+  call.fake.world.updateById_ = (tab, id, patch) => {
+    if (tab === "Todos" && patch.planner_written === "yes") throw new Error("boom");
+    return real(tab, id, patch);
+  };
+  call.fake.planner.cellFails = (cell, value) => value !== "Booked";
+  const t = await call("tickTodo", { id: "1" });
+  call.fake.world.updateById_ = real;
+  assert.equal(t.data.planner, "pending");
+  assert.equal((await history(call))[0].kind, "planner");
+});
+
+const FORMULA_LINE = "The planner computes this one’s Status, so it was left alone.";
+
+test("final 2: a tick on a Status cell that holds a formula writes nothing to the planner and answers kept", async () => {
+  const call = linked();
+  await call("syncTodos");
+  withFormula(call);
+  const t = await call("tickTodo", { id: "1" });
+  assert.deepEqual([t.ok, t.data.planner, t.data.todo.tickedBy], [true, "kept", "Mo"]);
+  assert.deepEqual(writes(call), [], "no cell, no Change Log row");
+  assert.equal(stored(call, "1").planner_written, "");
+  const h = await history(call);
+  assert.deepEqual([h[0].kind, h[0].summary, h[0].canUndo], ["planner", FORMULA_LINE, false]);
+  // A later pull retries the tick: still nothing written, no second line.
+  await forced(call);
+  assert.deepEqual(writes(call), []);
+  assert.equal((await history(call)).filter((e) => e.summary === FORMULA_LINE).length, 1);
+});
+
+test("final 2: undo of a tick made on a formula cell writes nothing", async () => {
+  const call = linked();
+  await call("syncTodos");
+  withFormula(call);
+  const t = await call("tickTodo", { id: "1" });
+  later(call, 2);
+  const u = await call("undo", { logId: t.data.logId }, "Ajen");
+  assert.equal(u.ok, true);
+  assert.notEqual(u.data.planner, "written");
+  assert.deepEqual(writes(call), []);
+});
+
+test("final 2: a put-back never writes over a formula either", async () => {
+  const { call, logId } = await ticked();
+  withFormula(call);
+  later(call, 2);
+  const u = await call("undo", { logId }, "Ajen");
+  assert.equal(u.data.planner, "kept");
+  assert.equal(writes(call).length, 2, "only the tick's own two writes");
+});
+
+test("final 2: a formula that cannot be read leaves the tick pending, nothing written", async () => {
+  const call = linked();
+  await call("syncTodos");
+  call.fake.planner.formulaFails = true;
+  const t = await call("tickTodo", { id: "1" });
+  assert.equal(t.data.planner, "pending");
+  assert.deepEqual(writes(call), []);
+});
+
+test("final 3: a failed Change Log append puts the old Status back only while the cell still says what the app wrote", async () => {
+  const call = linked();
+  await call("syncTodos");
+  call.fake.planner.appendFails = true;
+  // Someone edits the cell after the app's write and before the put-back.
+  const orig = call.fake.planner.tabs;
+  const realAppend = call.fake.world.plannerAppendRow_;
+  call.fake.world.plannerAppendRow_ = (...a) => { orig["Book Now"][3][4] = "Booked - conf 123"; return realAppend(...a); };
+  const t = await call("tickTodo", { id: "1" });
+  call.fake.world.plannerAppendRow_ = realAppend;
+  assert.equal(t.data.planner, "pending");
+  assert.equal(bookStatus(call), "Booked - conf 123", "the hand edit is left alone");
+  assert.deepEqual(writes(call).filter((w) => w.kind === "cell").map((w) => w.value), ["Booked"]);
+});
+
+test("final 4: the Change Log row lands after the last used row, never in a blank gap above", async () => {
+  const gap = [LOG[0], CHEAD, LOG[2], [], [], LOG[3]];
+  const call = linked({ log: gap });
+  await call("syncTodos");
+  const t = await call("tickTodo", { id: "1" });
+  assert.equal(t.data.planner, "written");
+  const rows = call.fake.planner.tabs["Change Log"];
+  assert.equal(rows.length, 7);
+  assert.deepEqual([rows[3], rows[4]], [[], []], "the gap stays blank");
+  assert.equal(rows[6][5], "Rail pass reservation");
+  assert.equal(rows[6][0], 8);
+});
+
+test("final 5: the refusal that carries the stored list says stored: true", async () => {
+  const call = linked();
+  await call("syncTodos");
+  call.fake.planner.fails = true;
+  const r = await forced(call);
+  assert.equal(r.error, "planner_unreadable");
+  assert.equal(r.data.stored, true);
+  assert.equal(r.data.todos.length, 3);
+});
+
+test("final 4: nextLogRow is the row after the last one holding anything", () => {
+  assert.equal(P.nextLogRow([["a"], ["b"], [], [], ["c", ""], ["", " "]]), 6);
+  assert.equal(P.nextLogRow([["a"], [], []]), 2);
+  assert.equal(P.nextLogRow([]), 1);
+  assert.equal(P.nextLogRow(null), 1);
 });

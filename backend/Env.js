@@ -146,11 +146,22 @@ function plannerSetCell_(tab, cell, value) {
   Sheets.Spreadsheets.Values.update({ values: [[value]] }, plannerId_(), plannerA1_(tab) + cell, { valueInputOption: "RAW" });
 }
 
-// Appends one row (RAW) under the table whose header is on row headerRow,
-// inserting a row for it. Throws when it cannot.
-function plannerAppendRow_(tab, headerRow, values) {
-  var range = plannerA1_(tab) + "A" + headerRow + ":" + colLetter(values.length - 1) + headerRow;
-  Sheets.Spreadsheets.Values.append({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" });
+// The formula in one cell (row is the sheet's row number, col a 0-based
+// column) as text starting with "=", or "" for a plain cell. The planner is
+// read as values, so this is the only way to see a formula. Throws when it
+// cannot read.
+function plannerCellFormula_(tab, row, col) {
+  var got = Sheets.Spreadsheets.Values.get(plannerId_(), plannerA1_(tab) + colLetter(col) + row, { valueRenderOption: "FORMULA" });
+  var v = got && got.values && got.values[0] ? got.values[0][0] : "";
+  return typeof v === "string" && v.charAt(0) === "=" ? v : "";
+}
+
+// Writes one row (RAW) into row `row` of the tab, which the caller found
+// as the row after the sheet's last used one (never a gap higher up). Throws
+// when it cannot. headerRow is the table's header row (unused here).
+function plannerAppendRow_(tab, headerRow, values, row) {
+  var range = plannerA1_(tab) + "A" + row + ":" + colLetter(values.length - 1) + row;
+  Sheets.Spreadsheets.Values.update({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW" });
 }
 
 // Now in Toronto, as the planner's Change Log writes it: "YYYY-MM-DD HH:MM ET".

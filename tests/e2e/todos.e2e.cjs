@@ -244,7 +244,7 @@ module.exports = [
     },
   },
   {
-    name: "a tick the planner can't take yet: done in the app, and a line says the planner will be updated at the next fetch",
+    name: "a tick the planner can't take yet: done in the app, and a line says the planner hasn't been updated yet",
     async run({ page }) {
       const backend = await ready(page);
       backend.fake.planner.cellFails = true;
@@ -254,7 +254,7 @@ module.exports = [
       await until(() => page.evaluate((s) => { const p = document.querySelector(s); return p && !p.hidden; }, row(1) + " .bw-pl"), "the pending line on the stamped row");
       await advance(page, backend, 1700);
       await until(() => page.$('#bwDone .bw-d[data-id="1"]'), "moved to done");
-      await expectText(page, '#bwDone .bw-d[data-id="1"] .bw-pl', "The planner will be updated at the next fetch.");
+      await expectText(page, '#bwDone .bw-d[data-id="1"] .bw-pl', "The planner hasn't been updated yet.");
       assert.equal(stored(backend, "1").planner_written, "");
       // The next fetch writes it, and the line goes.
       backend.fake.planner.cellFails = false;

@@ -97,6 +97,16 @@ function checkPlannerTodos_() {
     // The year only fills in dates, which this does not show.
     var read = todosFromRows(plannerTab_("Book Now"), 2026);
     Logger.log("Book Now: " + (read.missing || read.items.length + " items, columns ok"));
+    if (!read.missing) {
+      // The app never writes over a formula: say how many Status cells are one.
+      var formulas = 0;
+      try {
+        read.items.forEach(function (it) { if (plannerCellFormula_("Book Now", it.row, it.statusCol) !== "") formulas++; });
+        Logger.log("Book Now: " + formulas + " Status cells are formulas (the app leaves those alone).");
+      } catch (e2) {
+        Logger.log("Book Now: couldn’t check its Status cells for formulas.");
+      }
+    }
   } catch (e) {
     Logger.log("Book Now: couldn’t read it.");
   }

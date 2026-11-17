@@ -859,7 +859,7 @@ function syncTodos_(args) {
   // A refusal still carries the list as stored, so a phone keeps showing it.
   var refuse = function (code, message) {
     var env = err_(code, message);
-    env.data = { todos: todosShown_(), pulledAt: last };
+    env.data = { todos: todosShown_(), pulledAt: last, stored: true };
     return env;
   };
   var rows;
@@ -987,8 +987,10 @@ function plannerTodo_(bookRows, id, item) {
 // Book Now row just found on a read made after it, so the row checked is the
 // row written with the smallest gap. Writes `to` into found's Status cell,
 // then appends one Change Log row; if the append fails, puts the old Status
-// back (best effort). Writes nothing when the Change Log has no header.
-// -> "written" | "pending"
+// back (best effort, and only while the cell still says what was just
+// written). Writes nothing when the Change Log has no header, nor when the
+// Status cell holds a formula (the planner computes it).
+// -> "written" | "pending" | "formula"
 function plannerWriteStatus_(logRows, found, to, why, actor) {
   var cell = colLetter(found.statusCol) + found.row;
   var log = changeLogRow(logRows, {
@@ -997,22 +999,27 @@ function plannerWriteStatus_(logRows, found, to, why, actor) {
     Why: why, "Proof / source": "MAT app History", "Verified?": "By " + actor,
   });
   if (!log) return "pending";
+  if (plannerCellFormula_(TODO_BOOK_TAB_, found.row, found.statusCol) !== "") return "formula";
   try {
     plannerSetCell_(TODO_BOOK_TAB_, cell, to);
   } catch (e) {
     return "pending";
   }
   try {
-    plannerAppendRow_(TODO_LOG_TAB_, log.headerRow, log.values);
+    // The row after the last used one, never a blank gap higher up.
+    plannerAppendRow_(TODO_LOG_TAB_, log.headerRow, log.values, nextLogRow(logRows));
   } catch (e) {
-    try { plannerSetCell_(TODO_BOOK_TAB_, cell, found.status); } catch (e2) { /* best effort */ }
+    try {
+      var again = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), found.id, found.item);
+      if (again && again.row === found.row && again.statusCol === found.statusCol && again.status === to) plannerSetCell_(TODO_BOOK_TAB_, cell, found.status);
+    } catch (e2) { /* best effort */ }
     return "pending";
   }
   return "written";
 }
 
 // The planner part of a tick, under the planner lock, never the app's.
-// -> { result: "written", was } | { result: "already", status } | { result: "pending" }
+// -> { result: "written", was } | { result: "already", status } | { result: "formula" } | { result: "pending" }
 function plannerTick_(id, item, actor) {
   var out = withPlannerLock_(function () {
     try {
@@ -1021,7 +1028,9 @@ function plannerTick_(id, item, actor) {
       if (!found) return { result: "pending" };
       // Booked there already (by hand): nothing to write; the app takes its word.
       if (isBooked(found.status)) return { result: "already", status: found.status };
-      return plannerWriteStatus_(logRows, found, "Booked", TODO_TICK_WHY_, actor) === "written" ? { result: "written", was: found.status } : { result: "pending" };
+      var wrote = plannerWriteStatus_(logRows, found, "Booked", TODO_TICK_WHY_, actor);
+      if (wrote === "formula") return { result: "formula" };
+      return wrote === "written" ? { result: "written", was: found.status } : { result: "pending" };
     } catch (e) {
       return { result: "pending" };
     }
@@ -1041,7 +1050,8 @@ function plannerUntick_(id, item, was, actor, why) {
       var found = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), id, item);
       if (!found) return "pending";
       if (found.status !== "Booked") return "kept";
-      return plannerWriteStatus_(logRows, found, was, why || TODO_UNTICK_WHY_, actor);
+      var put = plannerWriteStatus_(logRows, found, was, why || TODO_UNTICK_WHY_, actor);
+      return put === "formula" ? "kept" : put;
     } catch (e) {
       return "pending";
     }
@@ -1057,7 +1067,13 @@ function plannerUntick_(id, item, was, actor, why) {
 // so. -> "written" | "pending"
 function settleTick_(id, item, by, out) {
   if (out.result === "pending") return "pending";
-  var rec = withLock_(function () {
+  if (out.result === "formula") {
+    logFormulaLeft_(id, item, by);
+    return "kept";
+  }
+  var rec;
+  try {
+    rec = withLock_(function () {
     var row = findRow_("Todos", id);
     var still = row && cellText_(row.ticked_by) !== "" && sameItem_(tickedItemOf_(row), item) && cellText_(row.gone) !== "yes";
     if (!still) return { ok: true, revert: out.result === "written" };
@@ -1069,13 +1085,32 @@ function settleTick_(id, item, by, out) {
       bumpRev_();
     }
     return { ok: true, revert: false };
-  });
+    });
+  } catch (e) {
+    // The recording threw: the same as not being able to record it.
+    rec = { ok: false };
+  }
   if (out.result === "written" && (!rec.ok || rec.revert)) {
     var back = plannerUntick_(id, item, out.was, by, rec.ok ? TODO_UNTICK_WHY_ : TODO_UNRECORDED_WHY_);
     if (back === "pending") logBookedLeft_(id, item, by);
     return "pending";
   }
   return rec.ok ? "written" : "pending";
+}
+
+// History's one note that the planner computes an item's Status, so the app
+// left the planner alone (the tick stays in the app). Said once per item,
+// however often a pull retries. Not undoable.
+function logFormulaLeft_(id, item, by) {
+  var said = "The planner computes this one’s Status, so it was left alone.";
+  withLock_(function () {
+    var seen = logRows_().some(function (r) { return cellText_(r.kind) === "planner" && cellText_(r.ref) === id && cellText_(r.summary) === said; });
+    if (!seen) {
+      appendLog_({ actor: by, via: "app" }, "note", "planner", id, said, null, null);
+      bumpRev_();
+    }
+    return { ok: true };
+  });
 }
 
 // History's note that a Booked the app wrote is still in the planner and the

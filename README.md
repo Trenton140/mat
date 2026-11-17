@@ -128,11 +128,12 @@ The app's "Before we go" list is the planner's `Book Now` tab: bookings and prep
 **Deploying it,** in this order (a deployment that needs a permission nobody has granted stops working for everyone):
 
 1. Push this backend (`clasp push -f`).
-2. The owner runs `checkPlanner` in the script editor and approves the Sheets permission; running it again logs the Book Now count and whether the Change Log was found.
+2. The owner runs `checkPlanner` in the script editor and approves the Sheets permission; running it again logs the Book Now count, how many Status cells are formulas, and whether the Change Log was found. Pre-flight, before going on: the Book Now count equals the real tab; `checkPlanner` reports 0 formula Status cells (or the owner accepts that those items stay untouched: the app never writes over a formula, it records the tick in the app only, answers `planner: "kept"` and History says "The planner computes this one’s Status, so it was left alone."); and the Change Log has no blank rows (a new row always goes after the last used row).
 3. Update the deployment on the same deployment id (`clasp create-deployment -i <deployment id> ...`).
 4. Run `migrate` (above): it adds the `Todos` tab (or its `ticked_item` and `planner_was` columns). Until then `syncTodos`, `tickTodo` and `claimTodo` are refused with "The trip sheet needs updating first."
 5. Pull once: `syncTodos` with `{"force":true}` (the app's Fetch, or curl as for `migrate`, with an `actor`).
 6. Check a real write: add a test row to the planner's Book Now tab, fetch, tick it in the app, then undo the tick. Look at the planner: the row's Status should read `Booked` after the tick and its old value after the undo, and the Change Log should have exactly two new rows, directly under the last one. Then delete the test row from the planner by hand.
+7. Last: publish the front end (merge to `main` / push to Pages, `APP_VERSION` 5) only after the backend's new version is live, `migrate` has run and one forced `syncTodos` has answered.
 
 ## You 設定
 

@@ -184,7 +184,7 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 .bw-seal.has-pic{overflow:hidden;border-width:2px}
 .bw-seal img{display:block;width:100%;height:100%;border-radius:50%;object-fit:cover;pointer-events:none}
 .bw-seal.is-booked{border-color:rgba(21,18,15,.5);color:var(--print);font-family:var(--seal);font-size:15px}
-.bw-b{display:grid;gap:2px;min-width:0;border:0;background:none;padding:0;color:var(--print);text-align:left;font-weight:700;border-radius:2px}
+.bw-b{display:grid;align-content:center;min-height:44px;gap:2px;min-width:0;border:0;background:none;padding:0;color:var(--print);text-align:left;font-weight:700;border-radius:2px}
 button.bw-b:active{background:rgba(21,18,15,.06)}
 .bw-n{font-size:15.5px;font-weight:900;line-height:1.25;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
 .bw-r.is-open .bw-n{display:block;-webkit-line-clamp:unset}
@@ -199,7 +199,7 @@ button.bw-b:active{background:rgba(21,18,15,.06)}
 @media (prefers-reduced-motion: reduce){ .bw-more{transition:none} }
 .bw-note{margin:0;padding-top:6px;font-size:13.5px;font-weight:500;overflow-wrap:anywhere}
 .bw-ctl{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px}
-.bw-ctl .r-map,.bw-ctl .r-edit{margin:9px 0 2px}
+.bw-ctl .r-map,.bw-ctl .r-edit{margin:9px 0 2px;min-height:44px;display:inline-flex;align-items:center;justify-content:center}
 /* Tick it off: the slip's empty stamp spot, the rarest and boldest act here. */
 .bw-tick{display:flex;align-items:center;gap:9px;margin:4px 0 0 auto;min-height:60px;border:0;background:none;padding:0 0 0 6px;color:var(--shu);
   font-size:17px;font-weight:900;letter-spacing:.01em;border-radius:4px}
@@ -229,9 +229,10 @@ button.bw-b:active{background:rgba(21,18,15,.06)}
   text-decoration:underline dotted rgba(21,18,15,.45) 2px;text-underline-offset:4px}
 .bw-fetch:disabled{text-decoration:none;opacity:.7}
 /* During the trip: one stub that opens the list. */
-.bw-fold{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:7px 12px 7px 10px;border:0;border-left:7px solid var(--shu);border-radius:4px;
+.bw-fold{display:flex;align-items:center;gap:10px;width:100%;min-height:48px;padding:7px 12px 7px 10px;border:0;border-left:7px solid var(--key-hi);border-radius:4px;
   background:var(--stock) var(--mat-pattern);color:var(--print);text-align:left;font-size:15px;font-weight:900;transition:transform .12s ease-out}
 .bw-fold:active{transform:scale(.98)}
+@media (prefers-reduced-motion: reduce){ .bw-fold:active{transform:none} }
 .bw-jp{flex:none;border:1.5px solid var(--print);border-radius:2px;padding:0 4px 1px;font-size:12.5px;font-weight:900}
 .bw-fold-t{flex:1;min-width:0}
 .bw-fold-c::before{content:"";display:block;width:8px;height:8px;border-right:2px solid var(--print);border-bottom:2px solid var(--print);transform:translateY(-2px) rotate(45deg)}

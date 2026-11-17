@@ -150,7 +150,7 @@ test("checkPlanner logs the row count or the problem, never a value or the id", 
   const tabs = ["Payments", "Book Now", "Change Log"];
   const good = plannerWorld({ props: { PLANNER_ID }, tabs, get: byRange([PHEAD, row, [], row.map((c, i) => (i === 0 ? "X8" : c))]) });
   good.ctx.checkPlanner();
-  assert.deepEqual(good.logged, ["Planner: 2 payment rows, columns ok", "Book Now: 2 items, columns ok", "Change Log: found"]);
+  assert.deepEqual(good.logged, ["Planner: 2 payment rows, columns ok", "Book Now: 2 items, columns ok", "Book Now: 0 Status cells are formulas (the app leaves those alone).", "Change Log: found"]);
 
   const missing = plannerWorld({ props: { PLANNER_ID }, tabs, get: byRange([PHEAD.filter((h) => h !== "amount_cad"), row], [["#", "Item", "Book by"]], [["#", "Tab"]]) });
   missing.ctx.checkPlanner();
@@ -198,14 +198,14 @@ test("plannerTab_ reads a tab from A1 by its quoted name; null when the sheet ha
   assert.throws(() => shut.ctx.plannerTab_("Change Log"), /denied/);
 });
 
-test("the two planner writers: one cell, RAW; one row appended under the table, RAW, rows inserted; Toronto time", () => {
+test("the two planner writers: one cell, RAW; one row written into the row it is given, RAW; Toronto time", () => {
   const w = plannerWorld({ props: { PLANNER_ID }, get: () => ({}) });
   w.ctx.plannerSetCell_("Book Now", "E4", "Booked");
-  w.ctx.plannerAppendRow_("Change Log", 2, [8, "x", "", "y"]);
+  w.ctx.plannerAppendRow_("Change Log", 2, [8, "x", "", "y"], 9);
   assert.equal(w.ctx.torontoNow_(), "2026-11-20 10:00 ET");
   assert.deepEqual(JSON.parse(JSON.stringify(w.asked)), [
     ["update", { values: [["Booked"]] }, PLANNER_ID, "'Book Now'!E4", { valueInputOption: "RAW" }],
-    ["append", { values: [[8, "x", "", "y"]] }, PLANNER_ID, "'Change Log'!A2:D2", { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" }],
+    ["update", { values: [[8, "x", "", "y"]] }, PLANNER_ID, "'Change Log'!A9:D9", { valueInputOption: "RAW" }],
     ["formatDate", "America/Toronto", "yyyy-MM-dd HH:mm"],
   ]);
   const refused = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), update: () => { throw new Error("no permission"); } });
@@ -236,4 +236,28 @@ test("withPlannerLock_ takes the document lock, never the script lock withLock_ 
   vm.runInContext(src("Env.js"), unbound, { filename: "Env.js" });
   assert.equal(unbound.withPlannerLock_(() => 1), 1);
   assert.deepEqual(seen, ["user.tryLock:5000", "user.release"]);
+});
+
+test("plannerCellFormula_ reads one cell as a formula: its text, or an empty string for a plain cell", () => {
+  const seen = [];
+  const w = plannerWorld({ props: { PLANNER_ID }, get: (id, range, opt) => { seen.push([range, opt]); return range.endsWith("E4") ? { values: [["=A1&B1"]] } : range.endsWith("E5") ? { values: [["Booked"]] } : {}; } });
+  assert.equal(w.ctx.plannerCellFormula_("Book Now", 4, 4), "=A1&B1");
+  assert.equal(w.ctx.plannerCellFormula_("Book Now", 5, 4), "");
+  assert.equal(w.ctx.plannerCellFormula_("Book Now", 6, 4), "");
+  assert.deepEqual(JSON.parse(JSON.stringify(seen[0])), ["'Book Now'!E4", { valueRenderOption: "FORMULA" }]);
+});
+
+test("checkPlanner counts the Status cells that are formulas, with no value in the line", () => {
+  const tabs = ["Payments", "Book Now", "Change Log"];
+  const mk = (formulas) => plannerWorld({ props: { PLANNER_ID }, tabs, get: (id, range, opt) => {
+    if (opt && opt.valueRenderOption === "FORMULA") { const v = formulas[range.replace("'Book Now'!", "")]; return v ? { values: [[v]] } : {}; }
+    return byRange([PHEAD])(id, range);
+  } });
+  const none = mk({});
+  none.ctx.checkPlanner();
+  assert.ok(none.logged.includes("Book Now: 0 Status cells are formulas (the app leaves those alone)."), none.logged.join("|"));
+  const two = mk({ D3: "=1+1", D4: "=\"Booked\"" });
+  two.ctx.checkPlanner();
+  assert.ok(two.logged.includes("Book Now: 2 Status cells are formulas (the app leaves those alone)."), two.logged.join("|"));
+  assert.equal(two.logged.join("\n").includes("=1+1"), false);
 });

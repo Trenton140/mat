@@ -43,7 +43,7 @@ const FETCHING = "Fetching…";
 const FETCHED = "Up to date ✓";
 const MORE = "More to fetch";
 const NOT_FETCHED = "Not fetched";
-const PENDING = "The planner will be updated at the next fetch.";
+const PENDING = "The planner hasn't been updated yet.";
 const AUTO_FAILED = "Couldn’t fetch the list from the planner.";
 
 function el(tag, cls, text) {

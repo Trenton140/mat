@@ -104,7 +104,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const planner = {
     rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0,
     tabs: copy((seed && seed.plannerTabs) || {}), writes: [], cellFails: false, appendFails: false,
-    lockFails: false, calls: [], between: null,
+    lockFails: false, calls: [], between: null, formulas: {}, formulaFails: false,
   };
   const held = { app: false, planner: false };
   const plannerCall = (op, tab, cell) => planner.calls.push({ op, tab, ...(cell ? { cell } : {}), appLock: held.app, plannerLock: held.planner });
@@ -263,11 +263,27 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       rows[r][col] = value;
       planner.writes.push({ kind: "cell", tab, cell, value: copy(value) });
     },
-    // Same as Env.js: one row appended under the table whose header is headerRow.
-    plannerAppendRow_(tab, headerRow, values) {
+    // Same as Env.js: the formula in a cell (row: the sheet's row number, col:
+    // 0-based) or "". A test makes one with planner.formulas[tab][cell] = "=...".
+    plannerCellFormula_(tab, row, col) {
+      plannerCall("formula", tab, P.colLetter(col) + row);
+      if (planner.fails || planner.formulaFails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
+      return ((planner.formulas[tab] || {})[P.colLetter(col) + row]) || "";
+    },
+    // Same as Env.js: the row written is `row` (1-based). Without one this
+    // acts as Sheets' own append does: just after the table's first run of
+    // filled rows below the header, so a blank row inside the sheet takes it.
+    plannerAppendRow_(tab, headerRow, values, row) {
       plannerCall("append", tab);
       if (planner.appendFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
-      planner.tabs[tab].push(copy(values));
+      const rows = planner.tabs[tab];
+      let at = row;
+      if (at === undefined) {
+        at = headerRow + 1;
+        while (at <= rows.length && rows[at - 1] && rows[at - 1].some((c) => c !== "")) at++;
+      }
+      while (rows.length < at - 1) rows.push([]);
+      rows[at - 1] = copy(values);
       planner.writes.push({ kind: "append", tab, headerRow, values: copy(values) });
     },
     // Same as Env.js: now in Toronto, "YYYY-MM-DD HH:MM ET", by this backend's clock.
@@ -311,6 +327,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   fake.tables = tables;
   fake.requests = requests;
   fake.primitives = primitives;
+  fake.world = world; // test-only: replace a helper (e.g. make updateById_ throw)
   fake.lockWaitedMs = () => lockWaited;
   // Test-only: what the Plan 1 backend (0a66cbd) answered to load, for a
   // phone still holding that cache: days, stops and stays as plainRow_ made

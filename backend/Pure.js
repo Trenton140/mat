@@ -1124,6 +1124,17 @@ function changeLogRow(rows, fields) {
   return { headerRow: h + 1, values: values };
 }
 
+// The sheet row a new Change Log row goes in: the one after the last row that
+// holds anything, however many blank rows sit above it (1-based).
+function nextLogRow(rows) {
+  var list = Array.isArray(rows) ? rows : [];
+  for (var r = list.length - 1; r >= 0; r--) {
+    var cells = Array.isArray(list[r]) ? list[r] : [];
+    for (var c = 0; c < cells.length; c++) if (cells[c] !== "" && cells[c] !== null && cells[c] !== undefined && String(cells[c]).trim() !== "") return r + 2;
+  }
+  return 1;
+}
+
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow };
+  module.exports = { nextLogRow, TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow };
 }
