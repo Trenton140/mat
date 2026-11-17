@@ -22,6 +22,20 @@ function readTable_(tab) {
   });
 }
 
+// A tab's rows like readTable_, found and read once; null when the Sheet has no
+// such tab or its row 1 lacks one of `columns` (an older Sheet before migrate).
+function readTableOrNull_(tab, columns) {
+  var sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(tab);
+  if (!sh || sh.getLastColumn() === 0) return null;
+  var headers = headersOf_(sh);
+  for (var i = 0; i < columns.length; i++) if (headers.indexOf(columns[i]) === -1) return null;
+  var last = sh.getLastRow();
+  if (last < 2) return [];
+  return sh.getRange(2, 1, last - 1, headers.length).getValues().map(function (row) {
+    return rowToObj(headers, row);
+  });
+}
+
 // Writes one row below the last, formatting it first (text columns "@", the
 // rest "General") so it never relies on setup() having formatted enough rows.
 // Callers hold the write lock, so getLastRow() + 1 is free.

@@ -116,6 +116,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const missing = new Set((seed && seed.missingColumns) || []);
   const missingTabs = new Set((seed && seed.missingTabs) || []);
   const tableReads = {};
+  const sheetCalls = { hasTab: 0, hasColumn: 0, orNull: 0 };
   const propReads = [];
   const rate = { rate: RATE, source: "live" };
   const cache = {}; // the script cache, for the trip key
@@ -172,8 +173,23 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       missingTabs.clear();
       return added;
     },
-    hasColumn_: (tab, col) => headers(tab).indexOf(col) !== -1,
-    hasTab_: (tab) => Boolean(P.TABS[tab]) && !missingTabs.has(tab),
+    hasColumn_(tab, col) {
+      sheetCalls.hasColumn++;
+      return headers(tab).indexOf(col) !== -1;
+    },
+    hasTab_(tab) {
+      sheetCalls.hasTab++;
+      return Boolean(P.TABS[tab]) && !missingTabs.has(tab);
+    },
+    // Same as Sheets.js: one lookup and one read of a tab, null when it is missing or lacks a column.
+    readTableOrNull_(tab, columns) {
+      sheetCalls.orNull++;
+      if (!P.TABS[tab] || missingTabs.has(tab)) return null;
+      const h = headers(tab);
+      if (columns.some((c) => h.indexOf(c) === -1)) return null;
+      tableReads[tab] = (tableReads[tab] || 0) + 1;
+      return tables[tab].map((r) => readRow(tab, r));
+    },
     getProp_(key) {
       propReads.push(key);
       return Object.prototype.hasOwnProperty.call(props, key) ? props[key] : null;
@@ -376,6 +392,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   fake.props = props;
   fake.planner = planner;
   fake.tableReads = tableReads;
+  fake.sheetCalls = sheetCalls;
   fake.propReads = propReads;
   fake.setRate = (r, source) => {
     rate.rate = r;

@@ -199,21 +199,50 @@ test("Claude can lift a stamp through undo (lifting is not pressing)", async () 
   assert.equal(r.ok, true);
 });
 
-test("History: another person's press is not blocked by mine; only the latest line per stamp can be undone", async () => {
+test("History: another person's press is not blocked by mine; each can undo only their own", async () => {
   const call = book();
   const a = (await call("pressStamp", { def: "d1", at: IN_D1 }, "Mo")).data;
   const b = (await call("pressStamp", { def: "d1", at: IN_D1 }, "Ajen")).data;
   const h = (await call("history")).data.entries;
   assert.deepEqual(h.map((e) => e.canUndo), [true, true]);
-  assert.equal((await call("undo", { logId: a.logId })).ok, true);
-  assert.equal((await call("undo", { logId: b.logId })).ok, true);
+  assert.equal((await call("undo", { logId: a.logId }, "Mo")).ok, true);
+  assert.equal((await call("undo", { logId: b.logId }, "Ajen")).ok, true);
+});
+
+test("nobody acts on someone else's stamp: Mo cannot lift Ajen's press, nor put back Ajen's lift; Ajen can do both", async () => {
+  const call = book();
+  const press = (await call("pressStamp", { def: "d1", at: IN_D1 }, "Ajen")).data;
+  const refused = await call("undo", { logId: press.logId }, "Mo");
+  assert.deepEqual([refused.ok, refused.error, refused.message], [false, "bad_input", "You can only change your own stamp."]);
+  assert.equal(rows(call)[0].gone, "", "still pressed");
+  assert.equal(lines(call).length, 1, "no new line");
+  const lift = await call("undo", { logId: press.logId }, "Ajen");
+  assert.equal(lift.ok, true);
+  const putBack = await call("undo", { logId: lift.data.logId }, "Mo");
+  assert.deepEqual([putBack.ok, putBack.error], [false, "bad_input"]);
+  assert.equal(rows(call)[0].gone, "yes");
+  assert.equal((await call("undo", { logId: lift.data.logId }, "Ajen")).ok, true);
+  assert.equal(rows(call)[0].gone, "");
+});
+
+test("the Claude connector obeys the same rule: a link acting as Mo cannot undo Ajen's stamp", async () => {
+  const call = book();
+  const press = (await call("pressStamp", { def: "d1", at: IN_D1 }, "Ajen")).data;
+  const r = await call("undo", { logId: press.logId }, "Mo", { via: "claude" });
+  assert.deepEqual([r.ok, r.message], [false, "You can only change your own stamp."]);
+  const viaTool = call.fake.mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "undo", arguments: { log_id: press.logId } } }, { t: "claude-token", as: "Mo" });
+  assert.match(JSON.stringify(viaTool), /own stamp/);
+  assert.equal(rows(call)[0].gone, "");
+  const own = call.fake.mcp({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "undo", arguments: { log_id: press.logId } } }, { t: "claude-token", as: "Ajen" });
+  assert.doesNotMatch(JSON.stringify(own), /own stamp/);
+  assert.equal(rows(call)[0].gone, "yes");
 });
 
 test("load lists the definitions in full and everyone's stamps without the lifted ones", async () => {
   const call = book();
   await call("pressStamp", { def: "d1", at: IN_D1 }, "Mo");
   const ajen = (await call("pressStamp", { def: "d1", at: IN_D1 }, "Ajen")).data;
-  await call("undo", { logId: ajen.logId });
+  await call("undo", { logId: ajen.logId }, "Ajen");
   const d = (await call("load")).data;
   assert.deepEqual(d.stampDefs, DEFS);
   assert.deepEqual(d.stamps.map((s) => [s.def, s.who]), [["d1", "Mo"]]);
@@ -290,4 +319,74 @@ test("migrate (the real ensureColumns_) adds both tabs with their headers, twice
   const after = {};
   for (const name of Object.keys(old)) after[name] = ss.sheets.get(name).grid;
   assert.equal(JSON.stringify(after), before, "no other tab's cells changed");
+});
+
+// ---------- a Date in a definition's date cell; the Sheets calls a load makes ----------
+
+function sheetsVm(tabs, tz) {
+  const calls = { getSheetByName: 0, getRange: 0, getLastRow: 0, getLastColumn: 0, getValues: 0 };
+  const grids = new Map(Object.entries(tabs));
+  const sheet = (grid) => ({
+    getLastColumn() { calls.getLastColumn++; return grid.reduce((n, r) => Math.max(n, r.length), 0); },
+    getLastRow() { calls.getLastRow++; return grid.length; },
+    getRange(r, c, nr = 1, nc = 1) {
+      calls.getRange++;
+      return { getValues() { calls.getValues++; return Array.from({ length: nr }, (_, i) => Array.from({ length: nc }, (_, j) => (grid[r - 1 + i] && grid[r - 1 + i][c - 1 + j] !== undefined ? grid[r - 1 + i][c - 1 + j] : ""))); } };
+    },
+  });
+  const ctx = vm.createContext({
+    SpreadsheetApp: { getActiveSpreadsheet: () => ({ getSheetByName: (n) => { calls.getSheetByName++; return grids.has(n) ? sheet(grids.get(n)) : null; } }) },
+    Session: { getScriptTimeZone: () => tz },
+    Utilities: { formatDate: (d, zone) => new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(d) },
+  });
+  for (const f of ["Pure.js", "Sheets.js", "Actions.js"]) vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "backend", f), "utf8"), ctx, { filename: f });
+  return { ctx, calls };
+}
+
+test("a definition's date that Sheets turned into a Date is the same day as the text, in the script's zone", () => {
+  for (const [tz, iso] of [["Asia/Tokyo", "2030-12-11T15:00:00.000Z"], ["America/Los_Angeles", "2030-12-12T08:00:00.000Z"], ["UTC", "2030-12-12T00:00:00.000Z"]]) {
+    const { ctx } = sheetsVm({}, tz);
+    const dateCell = vm.runInContext("new Date(" + JSON.stringify(iso) + ")", ctx); // as Sheets hands it back, made in the script's own realm
+    const asDate = ctx.stampDefFromRow({ id: "d", date: dateCell });
+    assert.equal(asDate.date, "2030-12-12", tz);
+    assert.equal(ctx.stampDefFromRow({ id: "d", date: "2030-12-12" }).date, "2030-12-12");
+    const a = ctx.stampWindow({ id: "d", date: dateCell }, []);
+    const b = ctx.stampWindow({ id: "d", date: "2030-12-12" }, []);
+    assert.deepEqual([a.opens, a.closes], [b.opens, b.closes], tz + ": the same window");
+    assert.equal(a.opens, Date.UTC(2030, 11, 11, 15));
+  }
+});
+
+const DEF_HEAD = ["id", "date", "name_ja", "name_en", "place", "motif", "ink", "shape"];
+const STAMP_HEAD = ["id", "def", "who", "at", "seed", "gone"];
+
+test("a load reads each stamp tab once; with the tabs missing it asks once and stops", () => {
+  const present = sheetsVm({ StampDefs: [DEF_HEAD, ["d1", "2030-01-05", "", "T", "", "lantern", "shu", "round"]], Stamps: [STAMP_HEAD, ["d1|Mo", "d1", "Mo", "2030-01-05T01:00:00.000Z", 7, ""]] }, "Asia/Tokyo");
+  const got = present.ctx.stampBook_();
+  assert.equal(got.defs.length, 1);
+  assert.equal(got.stamps.length, 1);
+  // per tab: find it (1), read its header (getLastColumn x2 with headersOf_, getRange), the rows (getLastRow + getRange)
+  assert.deepEqual({ ...present.calls }, { getSheetByName: 2, getRange: 4, getLastRow: 2, getLastColumn: 4, getValues: 4 });
+  const missing = sheetsVm({}, "Asia/Tokyo");
+  const none = missing.ctx.stampBook_();
+  assert.deepEqual([none.defs.length, none.stamps.length], [0, 0]);
+  assert.deepEqual({ ...missing.calls }, { getSheetByName: 1, getRange: 0, getLastRow: 0, getLastColumn: 0, getValues: 0 });
+  // a StampDefs tab whose header lacks a column the app needs counts as not migrated
+  const old = sheetsVm({ StampDefs: [["id", "date"]], Stamps: [STAMP_HEAD] }, "Asia/Tokyo");
+  assert.deepEqual([old.ctx.stampBook_().defs.length, old.calls.getSheetByName], [0, 1]);
+});
+
+test("through the fake: one read of each stamp tab per load, no tab or column probes for the stamp tabs; an old Sheet makes one probe", async () => {
+  const call = book();
+  call.fake.sheetCalls.hasTab = call.fake.sheetCalls.hasColumn = call.fake.sheetCalls.orNull = 0;
+  const before = { ...call.fake.tableReads };
+  await call("load");
+  assert.deepEqual({ ...call.fake.sheetCalls }, { hasTab: 1, hasColumn: 0, orNull: 2 }, "the one hasTab is the Before list's own");
+  assert.equal(call.fake.tableReads.StampDefs - (before.StampDefs || 0), 1);
+  assert.equal(call.fake.tableReads.Stamps - (before.Stamps || 0), 1);
+  const old = book({ over: { missingTabs: ["StampDefs", "Stamps"] }, defs: [] });
+  old.fake.sheetCalls.orNull = 0;
+  await old("load");
+  assert.deepEqual({ ...old.fake.sheetCalls }, { hasTab: 1, hasColumn: 0, orNull: 1 }, "the one hasTab is the Before list's own");
+  assert.equal(old.fake.tableReads.StampDefs || 0, 0);
 });

@@ -54,6 +54,7 @@ var MSG_ = {
   stampLate: "That press took too long to arrive.",
   stampFuture: "This phone’s clock is ahead of the trip’s. Check its date and time.",
   stampLifted: "That stamp was lifted in History.",
+  notYourStamp: "You can only change your own stamp.",
 };
 var STAMP_REFUSALS_ = { not_open: "stampNotOpen", closed: "stampClosed", late: "stampLate", future: "stampFuture" };
 
@@ -1413,10 +1414,14 @@ function stampDefs_() {
 // not lifted. Both empty until migrate has made the tabs; the tabs are checked
 // and read once each.
 function stampBook_() {
-  if (!stampsReady_()) return { defs: [], stamps: [] };
+  // Each tab is found and read once, and is ready when that read's header has the columns: no separate checks.
+  // A Sheet where migrate has not been run costs one lookup.
+  var defs = readTableOrNull_("StampDefs", ["id", "date", "shape"]);
+  if (defs === null) return { defs: [], stamps: [] };
+  var stamps = readTableOrNull_("Stamps", ["def", "who", "at", "seed", "gone"]);
   return {
-    defs: readTable_("StampDefs").filter(function (r) { return cellText_(r.id) !== ""; }).map(stampDefFromRow),
-    stamps: readTable_("Stamps")
+    defs: defs.filter(function (r) { return cellText_(r.id) !== ""; }).map(stampDefFromRow),
+    stamps: (stamps || [])
       .filter(function (r) { return cellText_(r.def) !== "" && cellText_(r.who) !== "" && cellText_(r.gone) !== "yes"; })
       .map(stampFromRow),
   };
@@ -1477,6 +1482,8 @@ function pressStamp_(args, ctx) {
 // is a press, so it needs the stamp's window to be open now, and never comes
 // through Claude. Lifting is always allowed.
 function undoStamp_(entry, rows, ctx) {
+  // Nobody acts on someone else's stamp (as for a picture): the Log keeps whose it is, for a press and for a lift.
+  if (!entry.after || entry.after.who !== ctx.actor) return err_("bad_input", MSG_.notYourStamp);
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
   if (!canUndo(entry, rows.map(logShape_))) return err_("stale", MSG_.newer);
   if (!entry.after) return err_("stale", MSG_.cantUndo);

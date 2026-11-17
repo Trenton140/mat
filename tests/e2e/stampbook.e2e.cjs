@@ -412,6 +412,61 @@ module.exports = [
       assert.equal(await who(page, 1), "You|05:00");
     },
   },
+  {
+    name: "History: nobody acts on someone else's stamp: Ajen's line has no Undo for Mo, Mo's own has",
+    async run({ page }) {
+      const be = await backendWith();
+      const at = new Date(NOON12 - 60000).toISOString();
+      assert.equal((await be.fake({ key: KEY, actor: "Ajen", action: "pressStamp", args: { def: TODAY, at } })).ok, true);
+      await ready(page, { backend: be });
+      await openBook(page);
+      await page.click(cell(TODAY));
+      await until(() => stampsDrawn(page).then((n) => n === 1), "pressed");
+      await idle(page);
+      await page.click("#bookDone");
+      await until(async () => !(await isOpen(page)), "closed");
+      await page.click("#youBtn");
+      await page.click("#setHist");
+      await until(() => page.locator("#tape .tp-row").count().then((n) => n >= 2), "the tape shows both");
+      const rows = await page.$$eval("#tape .tp-row", (rs) => rs.map((r) => [r.querySelector(".tp-s").textContent, r.querySelector("button.tp-undo") !== null]));
+      assert.deepEqual(rows.filter((r) => /stamped/.test(r[0])).sort(), [["Ajen stamped Dec 12", false], ["Mo stamped Dec 12", true]]);
+    },
+  },
+  {
+    name: "a small phone (320 x 568) with stamps: the Days bar fits, the button is a 44 px target, every square shows, today's ticket top is in view",
+    viewport: { width: 320, height: 568 },
+    async run({ page }) {
+      await ready(page);
+      await until(() => visible(page, "#stampBtn"), "the button shows");
+      await page.evaluate(() => { document.getElementById("vDays").scrollTop = 0; });
+      const m = await page.evaluate(() => {
+        const days = document.getElementById("vDays");
+        const btn = document.getElementById("stampBtn").getBoundingClientRect();
+        const sq = [...document.querySelectorAll("#pager .sq")].map((e) => e.getBoundingClientRect());
+        const tk = document.querySelector('#rail .pg[data-date="2026-12-12"] .tk').getBoundingClientRect();
+        const count = document.getElementById("dayCount").getBoundingClientRect();
+        return {
+          docScroll: document.documentElement.scrollWidth > innerWidth,
+          daysScroll: days.scrollWidth > days.clientWidth,
+          btn: [Math.round(btn.width), Math.round(btn.height)],
+          btnIn: btn.left >= 0 && btn.right <= innerWidth,
+          squares: sq.length,
+          squaresIn: sq.every((r) => r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight),
+          countIn: count.left >= 0 && count.right <= innerWidth,
+          ticketTop: Math.round(tk.top),
+          ticketIn: tk.top >= 0 && tk.top < innerHeight - 150,
+        };
+      });
+      assert.equal(m.docScroll, false, JSON.stringify(m));
+      assert.equal(m.daysScroll, false, JSON.stringify(m));
+      assert.ok(m.btn[0] >= 43.5 && m.btn[1] >= 43.5, "button size " + JSON.stringify(m));
+      assert.equal(m.btnIn && m.countIn, true, JSON.stringify(m));
+      assert.equal(m.squares, 11);
+      assert.equal(m.squaresIn, true, JSON.stringify(m));
+      assert.equal(m.ticketIn, true, JSON.stringify(m));
+      await page.screenshot({ path: "/private/tmp/claude-501/mat-shots/stamp-book/7-narrow-320-days.png" });
+    },
+  },
   ...[
     { name: "390 x 844", viewport: { width: 390, height: 844 } },
     { name: "844 x 390 held sideways", viewport: { width: 844, height: 390 } },

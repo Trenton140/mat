@@ -61,7 +61,8 @@ export function mountHistory(root, store) {
     if (viaText(en.via)) said.append(el("i", "", viaText(en.via)));
     row.append(when, said);
     // A picture is only ever changed by its owner, Undo included (Task 16).
-    const notMine = en.kind === "picture" && en.ref !== store.state.me;
+    // A stamp likewise: its line names whose it is after the last bar (def|who).
+    const notMine = (en.kind === "picture" && en.ref !== store.state.me) || (en.kind === "stamp" && en.ref.slice(en.ref.lastIndexOf("|") + 1) !== store.state.me);
     if (en.canUndo && !en.undoneBy && !notMine) {
       const undo = el("button", "tp-undo", "Undo");
       undo.type = "button";
