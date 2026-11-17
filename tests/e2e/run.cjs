@@ -121,6 +121,7 @@ async function runCase(browser, fileBase, c) {
     const context = await browser.newContext({
       ...CONTEXT,
       viewport: c.viewport || CONTEXT.viewport,
+      ...(c.screen ? { screen: c.screen } : {}),
       timezoneId: c.timezoneId || CONTEXT.timezoneId,
       serviceWorkers: c.serviceWorkers || CONTEXT.serviceWorkers,
     });
