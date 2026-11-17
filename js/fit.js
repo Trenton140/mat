@@ -22,7 +22,8 @@
 //   --full-h right as the phone turns.
 
 export const FITS = [["", "Now"], ["a", "A"], ["b", "B"], ["c", "C"], ["d", "D"]];
-const KEY = "mat.fit";
+// "mat.fit" was the trial before the default was fixed (version 18): not read any more.
+const KEY = "mat.fit2";
 const known = (mode) => FITS.some(([m]) => m === mode);
 
 export function fullSide(win) {

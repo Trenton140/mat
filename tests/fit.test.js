@@ -23,8 +23,12 @@ test("loadFit and saveFit: only a known way is kept; storage that throws is the 
   assert.equal(loadFit(s), "b");
   saveFit(s, "zz");
   assert.equal(loadFit(s), "");
-  assert.equal(loadFit(mem({ "mat.fit": "<script>" })), "");
+  assert.equal(loadFit(mem({ "mat.fit2": "<script>" })), "");
   const bad = { getItem() { throw new Error("no"); }, setItem() { throw new Error("no"); } };
   assert.equal(loadFit(bad), "");
   saveFit(bad, "a");
+});
+
+test("a way picked during the trial (kept under the old name) is not read", () => {
+  assert.equal(loadFit(mem({ "mat.fit": "d" })), "");
 });

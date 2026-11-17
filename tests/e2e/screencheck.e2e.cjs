@@ -18,7 +18,7 @@ const openCheck = async (page) => {
 const look = (page) => page.evaluate(() => {
   const root = document.documentElement;
   const r = (sel) => Math.round(document.querySelector(sel).getBoundingClientRect().bottom);
-  return { cls: root.className.trim(), full: root.style.getPropertyValue("--full-h"), phone: r("#phone"), nav: r(".nav"), fixed: getComputedStyle(document.body).position, kept: localStorage.getItem("mat.fit") };
+  return { cls: root.className.trim(), full: root.style.getPropertyValue("--full-h"), phone: r("#phone"), nav: r(".nav"), fixed: getComputedStyle(document.body).position, kept: localStorage.getItem("mat.fit2") };
 });
 const tap = (page, fit) => page.click('#screenCheck button[data-fit="' + fit + '"]');
 
@@ -77,13 +77,33 @@ module.exports = [
     screen: SCREEN,
     async run({ page, context }) {
       await context.grantPermissions(["clipboard-read", "clipboard-write"]);
-      await open(page, { seed: SEED, nowMs: NOON12, storage: { "mat.fit": "a" } });
+      await open(page, { seed: SEED, nowMs: NOON12, storage: { "mat.fit2": "a" } });
       await drawn(page);
       await page.click("#youBtn");
       await until(() => page.evaluate(() => document.getElementById("phone").classList.contains("you-open")), "You is open");
       await page.evaluate(() => document.getElementById("setReport").scrollIntoView({ block: "center" }));
       await page.click("#setReport");
       await until(async () => /fit a/.test(await page.evaluate(() => navigator.clipboard.readText()).catch(() => "")), "the note says fit a");
+    },
+  },
+  {
+    // This browser cannot be put in Home Screen mode, so the rule is read from the stylesheet;
+    // that it works on an iPhone was seen on Mo's (2026-11-17).
+    name: "the stylesheet gives a Home Screen app the large viewport height, a browser tab is unchanged, and the old trial pick is not used",
+    viewport: SHORT,
+    screen: SCREEN,
+    async run({ page }) {
+      await open(page, { seed: SEED, nowMs: NOON12, storage: { "mat.fit": "d" } });
+      await drawn(page);
+      const seen = await page.evaluate(async () => {
+        const css = await (await fetch("css/base.css")).text();
+        const at = css.indexOf("@media (display-mode: standalone)");
+        return { rule: at < 0 ? "" : css.slice(at, css.indexOf("}", css.indexOf("}", at) + 1) + 1).replace(/\s+/g, " "), html: getComputedStyle(document.documentElement).height, cls: document.documentElement.className.trim(), nav: Math.round(document.querySelector(".nav").getBoundingClientRect().bottom) };
+      });
+      assert.equal(seen.rule, "@media (display-mode: standalone){ html{height:100%;height:max(100%, 100lvh)} }");
+      assert.equal(seen.html, "878px");
+      assert.equal(seen.nav, 878);
+      assert.equal(seen.cls, "", "the trial kept under the old name is not used");
     },
   },
 ];
