@@ -10,6 +10,8 @@
 .say .say-warn{margin-top:9px;padding-left:10px;border-left:3px solid var(--shu);color:var(--text);font-weight:700;font-size:13.5px;line-height:1.35}
 /* The arrival of the register's paper slips (#un, the undo bar). */
 @keyframes roll{from{transform:translateY(.55em);opacity:0}}
+/* A count that changed while the app was open (js/fx.js rollIn): the new number rolls in. */
+.rolls{animation:roll .22s ease-out}
 
 .hist-btn{margin-top:12px;height:38px;padding:0 15px;border:1.5px solid var(--key-hi);border-radius:19px;background:none;color:var(--text);
   font-weight:700;font-size:14px;display:inline-flex;align-items:center;gap:8px;transition:transform .15s ease-out}
@@ -18,7 +20,7 @@
   font-weight:900;font-size:12px;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
 
 /* ---------- the settlement slip ---------- */
-.slip{position:relative;margin:0 var(--gr) 0 var(--gl);padding:15px 14px 11px;background:var(--paper);color:var(--print);border-radius:3px}
+.slip{position:relative;margin:0 var(--gr) 0 var(--gl);padding:15px 14px 11px;background:var(--grain), var(--paper);color:var(--print);border-radius:3px;box-shadow:var(--lift)}
 .slip.shake{animation:shake .2s ease-out}
 @keyframes shake{0%{transform:translate(0,4px) rotate(.4deg)}45%{transform:translate(-2px,-1px)}75%{transform:translate(1px,1px)}}
 .slip-t{text-align:center;padding-bottom:9px;border-bottom:3px double var(--print)}
@@ -36,7 +38,10 @@
   font-family:var(--seal);font-size:32px;color:rgba(214,60,30,.32);transition:transform .15s ease-out,border-color .2s,color .2s}
 .spot:active .ghost{transform:scale(.97)}
 .spot.is-armed .ghost{border-style:solid;border-color:var(--shu);color:rgba(214,60,30,.6)}
-.stamp{position:absolute;inset:0;transform:rotate(var(--rot));mix-blend-mode:multiply}
+.stamp{position:absolute;inset:0;transform:rotate(var(--rot));mix-blend-mode:multiply;transition:filter 1.8s ease-out}
+/* Wet ink: a stamp that has just landed (js/fx.js adds .wet, then takes it off after 500 ms) is brighter and glows a little,
+   and the ink dries back over the 1.8 s above. Never on a stamp drawn on load. */
+.stamp.wet{filter:saturate(1.35) brightness(1.1) drop-shadow(0 0 2.5px rgba(214,60,30,.55));transition:none}
 .stamp.hit{animation:hit .22s backwards}
 @keyframes hit{
   0%{transform:rotate(var(--rot)) scale(2.5);opacity:0;animation-timing-function:cubic-bezier(.7,0,1,.7)}
@@ -95,7 +100,7 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 .simp-b .simp-keep{background:var(--print);color:var(--paper)}
 
 /* ---------- the till receipt ---------- */
-.rc{position:relative;margin:26px var(--gr) 10px var(--gl);padding:16px 14px 14px;background:var(--paper);color:var(--print);
+.rc{position:relative;margin:26px var(--gr) 10px var(--gl);padding:16px 14px 14px;background:var(--grain), var(--paper);color:var(--print);box-shadow:var(--lift);
   font-weight:700;font-size:15.5px;line-height:1.3}
 .rc:empty{display:none}
 .rc::before,.rc::after{content:"";position:absolute;left:0;right:0;height:8px}

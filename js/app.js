@@ -21,6 +21,7 @@ import { mountUndoBar } from "./views/ubar.js";
 import { mountNet } from "./views/net.js";
 import { mountTodos } from "./views/todos.js";
 import { tabName } from "./todos.js";
+import { rollingCount } from "./fx.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -295,6 +296,7 @@ function start() {
   // showing, the person lands on Days.
   const beforeBtn = document.getElementById("beforeBtn");
   const beforeN = document.getElementById("beforeN");
+  const pillRoll = rollingCount(beforeN); // a change after the count has settled rolls in
   const todos = mountTodos(document.getElementById("vBefore"), store, {
     clock,
     onState: ({ show, open }) => {
@@ -313,6 +315,9 @@ function start() {
       }
       beforeN.hidden = !show || open < 1;
       beforeN.textContent = open > 0 ? String(open) : "";
+      // A change while the app is open rolls the new number in; the first count shown, and loading, do not.
+      if (show && open > 0) pillRoll.set(open);
+      else pillRoll.reset();
       beforeBtn.setAttribute("aria-label", tabName(open));
       if (!show && tabs.tab() === "before") tabs.showTab("days", false);
       if (hadFocus) {

@@ -17,6 +17,16 @@
   /* The insets, read once here (the sideways block and the sheets' cap use them; a test can stand in for a notch). */
   --inset-l:env(safe-area-inset-left, 0px); --inset-r:env(safe-area-inset-right, 0px);
   --inset-t:env(safe-area-inset-top, 0px);
+  /* Small effects (task 24): paper has weight, the display has a lamp behind it. */
+  --grain:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 .08  0 0 0 0 .07  0 0 0 0 .06  0 0 0 .1 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  --lift:inset 0 1px 0 rgba(255,255,255,.75), inset 0 -1px 0 rgba(0,0,0,.14), 0 1px 1px rgba(0,0,0,.55), 0 9px 14px -7px rgba(0,0,0,.65), 0 34px 44px -24px #000;
+  --lamp:radial-gradient(120% 70% at 30% 0%, rgba(255,214,160,.11), transparent 62%);
+  --glass:inset 0 2px 7px rgba(0,0,0,.42), inset 0 0 24px rgba(255,255,226,.4), 0 0 20px -3px rgba(198,207,182,.38), 0 1px 0 rgba(255,255,255,.07);
+  --key-edge:inset 0 1px 0 rgba(255,255,255,.1), inset 0 -2px 0 rgba(0,0,0,.4), 0 2px 3px rgba(0,0,0,.5);
+  --paper-edge:inset 0 1px 0 #fff, inset 0 -2px 0 rgba(0,0,0,.22), 0 2px 3px rgba(0,0,0,.5);
+  /* The same two edges while pressed: the key is down, its outer shadow is gone (as the bottom bar's keys already do). */
+  --key-down:inset 0 1px 0 rgba(255,255,255,.06), inset 0 -1px 0 rgba(0,0,0,.4);
+  --paper-down:inset 0 1px 0 #fff, inset 0 -1px 0 rgba(0,0,0,.22);
 }
 html,body{height:100%;margin:0}
 *{box-sizing:border-box}
@@ -29,7 +39,8 @@ i{font-style:normal}
 :focus-visible{outline:2px solid var(--text);outline-offset:2px}
 
 /* clip, not hidden: a closed sheet waiting below must never make the phone scrollable. */
-.phone{position:relative;width:min(100%,400px);height:min(100%,860px);background:var(--ground);overflow:hidden;overflow:clip;
+/* The lamp (--lamp) sits on the phone itself, behind every screen: the views scroll over it, a sheet or the nav covers it. */
+.phone{position:relative;width:min(100%,400px);height:min(100%,860px);background:var(--lamp), var(--ground);overflow:hidden;overflow:clip;
   border-radius:38px;box-shadow:0 0 0 1px #2a2421,0 40px 90px -30px #000;isolation:isolate}
 @media (max-width:480px){ .phone{width:100%;height:100%;border-radius:0;box-shadow:none} }
 /* On a phone the app fills the screen, so the page behind it is the app's own
@@ -78,6 +89,9 @@ i{font-style:normal}
    full colour in a vermilion ring. Off: grey and faint in the dim ring, so
    the two can never be mistaken for each other. */
 .seal.has-pic,.mini.has-pic{overflow:hidden;background:none}
+/* A picture is mounted: a thin ring set over its edge, over the photo and under the border. */
+.seal.has-pic{position:relative}
+.seal.has-pic::after{content:"";position:absolute;inset:0;border-radius:50%;pointer-events:none;box-shadow:inset 0 1px 2px rgba(0,0,0,.5), inset 0 0 0 1.5px rgba(21,18,15,.35)}
 .seal img,.mini img{display:block;width:100%;height:100%;border-radius:50%;object-fit:cover;pointer-events:none;-webkit-user-select:none;user-select:none}
 .seal.has-pic{border:2px solid var(--dim)}
 .seal.has-pic img{filter:grayscale(1);opacity:.4;transition:filter .12s,opacity .12s}
@@ -91,8 +105,8 @@ i{font-style:normal}
 .veil .sheet{z-index:auto}
 .who-pick{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:4px 0 2px}
 .who-pick button{height:96px;border:0;border-radius:8px;background:var(--key);display:grid;justify-items:center;align-content:center;gap:8px;
-  font-weight:900;font-size:15.5px;transition:transform .15s ease-out,background .12s}
-.who-pick button:active{transform:scale(.97);background:var(--key-hi)}
+  font-weight:900;font-size:15.5px;box-shadow:var(--key-edge);transition:transform .15s ease-out,background .12s,box-shadow .15s}
+.who-pick button:active{transform:translateY(1.5px);background:var(--key-hi);box-shadow:var(--key-down)}
 .who-pick .seal{display:grid;place-items:center;pointer-events:none;width:44px;height:44px;border-color:var(--shu);color:var(--shu);font-size:13px}
 /* Choosing who you are: every picture is a choice, so all are in colour. */
 .who-pick .seal.has-pic{border:2.5px solid var(--shu)}
@@ -106,8 +120,8 @@ i{font-style:normal}
 .how-l::before{content:counter(how);width:30px;height:30px;border-radius:50%;border:1.7px solid var(--shu);color:var(--shu);
   display:grid;place-items:center;font-weight:900;font-size:13px}
 .go-btn{display:block;width:100%;height:52px;margin-top:10px;border:0;border-radius:8px;background:var(--paper);color:var(--print);
-  font-weight:900;font-size:16px;transition:transform .15s ease-out}
-.go-btn:active{transform:scale(.97)}
+  font-weight:900;font-size:16px;box-shadow:var(--paper-edge);transition:transform .15s ease-out,box-shadow .15s}
+.go-btn:active{transform:translateY(1.5px);box-shadow:var(--paper-down)}
 
 .gate{position:absolute;inset:0;z-index:50;display:grid;place-items:center;padding:24px var(--gr) 24px var(--gl);background:var(--ground)}
 .gate p{margin:0;max-width:300px;padding:18px 16px;background:var(--paper);color:var(--print);border-radius:3px;
@@ -125,8 +139,8 @@ i{font-style:normal}
   font-size:16px;font-weight:700;outline:none}
 .gate-key input::placeholder{color:var(--dim);font-weight:500}
 .gate-key input:focus{border-color:var(--text)}
-.gate-key button{height:48px;padding:0 18px;border:0;border-radius:6px;background:var(--paper);color:var(--print);font-weight:900;font-size:15.5px;transition:transform .15s ease-out}
-.gate-key button:active{transform:scale(.97)}
+.gate-key button{height:48px;padding:0 18px;border:0;border-radius:6px;background:var(--paper);color:var(--print);font-weight:900;font-size:15.5px;box-shadow:var(--paper-edge);transition:transform .15s ease-out,box-shadow .15s}
+.gate-key button:active{transform:translateY(1.5px);box-shadow:var(--paper-down)}
 .gate-key-m{min-height:1.35em;color:var(--text);font-weight:700;font-size:14px}
 .gate-key-m:empty{min-height:0}
 
@@ -142,6 +156,9 @@ i{font-style:normal}
   :root{--rail:104px}
   .phone{width:min(calc(100% - 2 * max(var(--inset-l), var(--inset-r))), calc(560px + var(--rail)));height:100%;
     border-radius:0;box-shadow:none;--gl:16px;--gr:16px}
+  /* The lamp belongs to the whole screen here, not to the column: on the page (a column of its own would show its edge). */
+  html{background:var(--lamp), var(--ground)}
+  body,.phone{background:none}
   .views{right:var(--rail)}
   .view{padding-bottom:calc(24px + env(safe-area-inset-bottom, 0px))}
   .net{right:var(--rail)}

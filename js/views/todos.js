@@ -36,6 +36,7 @@
 import { safeHref, nowIn } from "../plan.js";
 import { fillSeal } from "../picture.js";
 import { paidStampSVG } from "../stamp.js";
+import { wetInk, rollingCount } from "../fx.js";
 import { thud, primeSound } from "../sound.js";
 import { clock as hhmm, localDay, dayHead } from "../format.js";
 import { homeToday, dueLine, byBookBy, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab } from "../todos.js";
@@ -116,6 +117,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
   let openId = null; // the row opened by hand
   let doneOpen = false;
   const landed = new Map(); // id -> { at } : ticked here, still shown stamped in place
+  const openRoll = rollingCount(count); // "N open": a change after it has settled rolls in
   let hitId = null; // the row whose stamp is landing right now (drawn once with .hit)
   let focusLanded = null; // after a tick: where focus goes once the row is redrawn
 
@@ -217,6 +219,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     // Built only from numbers and constants (js/stamp.js), so innerHTML is safe.
     stamp.innerHTML = paidStampSVG(seedOf(t.id));
     box.append(stamp);
+    if (stamp.classList.contains("hit")) wetInk(stamp); // just landed: still wet (js/fx.js)
     spot.append(box);
     ctl.append(pl, spot);
     inner.append(ctl);
@@ -336,6 +339,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     const spot = focusSpot();
     section.hidden = false;
     count.replaceChildren(String(stillOpen), el("small", "", "open"));
+    openRoll.set(stillOpen);
 
     const today = homeToday(now());
     const fresh = shownOpen.map((t) => (landed.has(t.id) ? landedRow(t) : openRow(t, today)));
