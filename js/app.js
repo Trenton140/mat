@@ -23,6 +23,7 @@ import { mountTodos } from "./views/todos.js";
 import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
 import { createUpdater } from "./update.js";
+import { watchViewport } from "./remeasure.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -526,5 +527,6 @@ function registerWorker() {
 }
 
 // fillScreen() is off: on a real iPhone it pushed the bar past the bottom edge (2026-11-17).
+watchViewport();
 registerWorker();
 start();
