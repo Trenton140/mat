@@ -723,17 +723,17 @@ const prow = (o) => PHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
 const PX7 = { payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", booking_ref: "AB12", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" };
 const PLANNER = [PHEAD, prow(PX7), prow({ ...PX7, payment_id: "P5", split_type: "personal" }), prow({ ...PX7, payment_id: "Z1", include_in_split: "no" })];
 
-test("sync_payments brings the planner's payments in, as the person in the link, logged as from the planner", () => {
+test("sync_payments brings the planner's payments in, each credited to who paid, logged as from the planner", () => {
   const fake = createFakeBackend({ planner: PLANNER, plannerId: PLANNER_ID });
   const tool = fake.mcp(rpc("tools/list"), T).result.tools.find((t) => t.name === "sync_payments");
   assert.equal(tool.description, "Use this to bring in what’s been paid from the planner sheet’s Payments tab: new payments are added and changed ones updated. The change shows in the app’s History and can be undone.");
   assert.deepEqual(tool.inputSchema, { type: "object", properties: {}, additionalProperties: false });
   const r = ok(fake, "sync_payments", {}, { ...T, as: " ajen " });
   assert.deepEqual(r, { added: 1, changed: 0, same: 0, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
-  assert.deepEqual(fake.tables.Log.map((l) => [l.who, l.via]), [["Ajen", "planner"]]);
+  assert.deepEqual(fake.tables.Log.map((l) => [l.who, l.via]), [["Mo", "planner"]]); // credited to who paid, not the person in the link
   assert.deepEqual(ok(fake, "sync_payments", {}), { added: 0, changed: 0, same: 1, removed: 0, not_counted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
   const h = ok(fake, "get_history", {});
-  assert.equal(h.entries[0].sentence, "Ajen rang up Rail pass $221.52 (from the planner)");
+  assert.equal(h.entries[0].sentence, "Mo rang up Rail pass $221.52 (from the planner)");
   assert.equal(badArgs(fake, "sync_payments", { id: "x" }), "Invalid params: unknown argument id.");
   // R40: the tie to the planner is the backend's own business.
   const seen = JSON.stringify([call(fake, "get_trip", {}), call(fake, "get_history", { limit: 200 }), call(fake, "add_expense", { title: "Tea", amount: 300, currency: "JPY", paid_by: "Mo" })]);

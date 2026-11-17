@@ -973,6 +973,13 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   // Lines and stamps the backend does not have yet: `unsent` counts every
   // one still to go (sending or waiting, not refused); `waiting` those held
   // on the phone for the next contact.
+  // Something is on its way to the backend, or waiting its turn: an edit, an
+  // undo, a stop, a picture, a line. A reload now could drop it (only lines
+  // and stamps are kept on the phone until they land).
+  function busy() {
+    return chains.size > 0 || flushing !== null || ops.some((o) => o.status === "sending");
+  }
+
   function outbox() {
     const live = ops.filter((o) => isLiveAdd(o) && o.status !== "failed");
     return { unsent: live.length, waiting: live.filter((o) => o.status === "queued").length };
@@ -1098,6 +1105,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       }
       const d = (r && r.data) || {};
       if (d.skipped) return null;
+      // Cut short (ten at a time): carry on at the next look, not in 10 minutes.
+      if (d.more) autoAt = -Infinity;
       if (d.added || d.changed) {
         await refresh();
         // Never over something already being said (a failed save matters more).
@@ -1171,7 +1180,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     const h = state.history;
     if (older && (!h.more || !h.entries.length)) return null;
     const seq = older ? historySeq : ++historySeq;
-    state.history = { ...h, loading: true };
+    // A first-page load starts clean: an error left by an earlier fetch is not shown over it.
+    state.history = { ...h, loading: true, error: older ? h.error : null };
     emit();
     const args = older ? { before: h.entries[h.entries.length - 1].id } : {};
     let got;
@@ -1302,6 +1312,6 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     outcome,
     deleteStop: (id) => change("stop", id, "delete", "deleteStop", { deleted: true }),
     restoreStop: (id) => change("stop", id, "restore", "restoreStop", { deleted: false }),
-    retry, discard, unsaved: (id) => !!unsavedAdd(id), outbox, undo, undoEntry, loadHistory, historyFor,
+    retry, discard, unsaved: (id) => !!unsavedAdd(id), outbox, busy, undo, undoEntry, loadHistory, historyFor,
   };
 }

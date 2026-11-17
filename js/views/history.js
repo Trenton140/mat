@@ -4,7 +4,8 @@
 //
 // mountHistory(root, store) -> { open(), close(restoreFocus), isOpen() }
 // root is the phone. The tape draws from store.state.history and redraws on
-// every store change. It is fetched each time the sheet opens, never at boot.
+// every store change. It is fetched once quietly after the app starts and again
+// each time the sheet opens; what is already held shows while that fetch is out.
 // Undo is store.undoEntry(id): the store handles a refused (stale) undo by
 // showing the notice and loading the first page again. Text from people or
 // the Sheet goes in with textContent only.

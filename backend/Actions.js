@@ -428,9 +428,19 @@ function syncPayments_(args, ctx) {
   var pull = { actor: ctx.actor, via: "planner", names: ctx.names };
   // As for addExpense: fetching the day's rate can take a few seconds.
   if (read.payments.some(function (p) { return p.include; })) pull.rate = getRate_();
-  var done = withLock_(function () { return pullPayments_(read, pull); });
-  if (done && done.ok) setProp_("PAYMENTS_PULLED_AT", started);
-  return done;
+  return withLock_(function () {
+    // A pull that read the planner later has already landed: this read is the
+    // older one and must not put old values back.
+    var landed = Date.parse(getProp_("PAYMENTS_READ_AT") || "");
+    if (isFinite(landed) && landed > Date.parse(started)) return ok_({ added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: [], more: false, capped: false, skipped: true }, rev_());
+    var done = pullPayments_(read, pull);
+    if (done && done.ok) {
+      setProp_("PAYMENTS_READ_AT", started);
+      // A pull cut short (more to bring in) is not done: the next one carries on at once.
+      if (!done.data.more) setProp_("PAYMENTS_PULLED_AT", started);
+    }
+    return done;
+  });
 }
 
 function pullPayments_(read, ctx) {
@@ -478,7 +488,7 @@ function pullPayments_(read, ctx) {
     if (live.length === 1) {
       var patch = plannerPatch_(live[0].e, x.value);
       if (Object.keys(patch).length === 0) out.same++;
-      else edits.push({ id: p.id, line: live[0].e.id, patch: patch });
+      else edits.push({ id: p.id, line: live[0].e.id, patch: patch, who: x.value.paidBy });
       return;
     }
     if (tied.length) {
@@ -504,14 +514,16 @@ function pullPayments_(read, ctx) {
       out.more = true;
       return;
     }
-    tried(job, editExpense_(job.line, job.patch, ctx, true), "changed");
+    // Credited to who paid, not to whichever phone happened to ask.
+    var asPayer = { actor: job.who, via: ctx.via, names: ctx.names, rate: ctx.rate };
+    tried(job, editExpense_(job.line, job.patch, asPayer, true), "changed");
   });
   adds.forEach(function (job) {
     if (writes === PLANNER_MAX_WRITES_) {
       out.more = true;
       return;
     }
-    var withTie = { actor: ctx.actor, via: ctx.via, names: ctx.names, rate: ctx.rate, plannerId: job.id };
+    var withTie = { actor: job.expense.paidBy, via: ctx.via, names: ctx.names, rate: ctx.rate, plannerId: job.id };
     tried(job, addExpense_({ expense: job.expense }, withTie), "added");
   });
   return ok_(out, rev_());

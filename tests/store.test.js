@@ -2680,3 +2680,35 @@ test("autoPayments: never replaces a notice already showing (review, 2026-11-17)
   assert.equal(p.store.state.notice, "No signal. That wasn’t saved.");
   assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass"), "the line still came in");
 });
+
+// ---------- busy(): nothing may be dropped by a reload (review, 2026-11-17) ----------
+
+test("busy: true while an edit is on its way, false once it has landed", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  assert.equal(p.store.busy(), false);
+  const release = p.net.hold("updateExpense");
+  const id = p.store.state.expenses[0].id;
+  const saving = p.store.updateExpense(id, { note: "window seat" });
+  assert.equal(p.store.busy(), true, "an edit is sending: the outbox does not count it, busy does");
+  assert.equal(p.store.outbox().unsent, 0);
+  release();
+  await saving;
+  await new Promise((r) => setImmediate(r)); // the chain lets go a tick after the write settles
+  assert.equal(p.store.busy(), false);
+});
+
+test("loadHistory: a first-page load clears an error left by an earlier fetch", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  p.net.failing.add("history");
+  await p.store.loadHistory();
+  assert.equal(p.store.state.history.error, "network");
+  p.net.failing.delete("history");
+  const release = p.net.hold("history");
+  const loading = p.store.loadHistory();
+  assert.deepEqual([p.store.state.history.loading, p.store.state.history.error], [true, null], "no old error over a fresh load");
+  release();
+  await loading;
+  assert.equal(p.store.state.history.error, null);
+});
