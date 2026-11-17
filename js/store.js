@@ -1100,7 +1100,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       if (d.skipped) return null;
       if (d.added || d.changed) {
         await refresh();
-        state.notice = plannerNotice(d);
+        // Never over something already being said (a failed save matters more).
+        if (!state.notice) state.notice = plannerNotice(d);
         changed();
       }
       return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems, more: !!d.more, capped: !!d.capped };

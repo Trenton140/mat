@@ -2609,7 +2609,7 @@ test("autoPayments: brings new planner payments in, says so, and the lines are o
   assert.equal(p.store.state.paymentsPulledAt, new Date(NOW).toISOString(), "load carries when it last pulled");
 });
 
-test("autoPayments: once every 10 minutes per phone; sooner sends nothing", async () => {
+test("autoPayments: sooner than 10 minutes after a pull sends nothing; at 10 minutes it asks again", async () => {
   const p = autoPhone();
   await p.store.boot();
   await p.store.autoPayments();
@@ -2669,4 +2669,14 @@ test("autoPayments: one at a time", async () => {
   release();
   await first;
   assert.equal(autoCalls(p).length, 1);
+});
+
+test("autoPayments: never replaces a notice already showing (review, 2026-11-17)", async () => {
+  const p = autoPhone();
+  await p.store.boot();
+  p.store.notify("No signal. That wasn’t saved.");
+  const r = await p.store.autoPayments();
+  assert.equal(r.added, 1);
+  assert.equal(p.store.state.notice, "No signal. That wasn’t saved.");
+  assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass"), "the line still came in");
 });

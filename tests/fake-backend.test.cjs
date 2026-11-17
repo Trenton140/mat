@@ -1570,6 +1570,10 @@ test("a pull that fails does not count as a pull: the next auto pull reads again
   const bad = await call("syncPayments", { auto: true });
   assert.equal(bad.ok, false, "the planner is missing columns");
   assert.equal((await call("load")).data.paymentsPulledAt, "");
+  const reads = call.fake.planner.reads;
+  at.now = "2026-12-12T03:01:00.000Z";
+  await call("syncPayments", { auto: true });
+  assert.equal(call.fake.planner.reads, reads + 1, "a minute later it reads the planner again");
 });
 
 test("auto has to be true or false", async () => {
@@ -1579,7 +1583,7 @@ test("auto has to be true or false", async () => {
   assert.equal(r.error, "bad_input");
 });
 
-test("a pull cut short (more: true) is recorded, so the follow-up comes from Fetch or 10 minutes later", async () => {
+test("a pull cut short (more: true) still records when it pulled", async () => {
   const at = { now: "2026-12-12T03:00:00.000Z" };
   const many = [PHEAD];
   for (let i = 1; i <= 20; i++) many.push(prow({ ...PX7, payment_id: "M" + i, description: "Thing " + i }));
