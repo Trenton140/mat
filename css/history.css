@@ -5,8 +5,9 @@
    Every word is the body face: DotGothic16 is not used on the tape. */
 
 .hist{position:absolute;left:0;right:0;top:calc(40px + env(safe-area-inset-top, 0px));bottom:0;z-index:25;display:flex;flex-direction:column;background:var(--ground);border-top:1px solid #000;border-radius:18px 18px 0 0;
-  box-shadow:0 -24px 40px -10px #000;transform:translateY(104%);transition:transform .5s var(--sheet)}
-.hist.is-open{transform:none}
+  transform:translateY(104%);transition:transform .5s var(--sheet),box-shadow .5s var(--sheet)}
+/* The shadow belongs to an open panel only: parked below the screen it leaked a dark fade over the bottom bar. */
+.hist.is-open{transform:none;box-shadow:0 -24px 40px -10px #000}
 .hist-top{display:flex;justify-content:space-between;align-items:center;padding:14px var(--gr) 0 var(--gl);font-weight:900;font-size:19px}
 .hist-top i{color:var(--dim);font-weight:700;font-size:14px;margin-right:6px}
 .hist-top button{border:0;background:none;color:var(--dim);font-weight:900;font-size:15px;height:44px;padding:0 4px}

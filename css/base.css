@@ -61,9 +61,10 @@ i{font-style:normal}
    never covers the sheet's Done, also under a notch. */
 .sheet{position:absolute;left:0;right:0;bottom:0;z-index:24;max-height:min(90%, calc(100% - 76px - var(--inset-t)));overflow-y:auto;overscroll-behavior:contain;
   padding:12px var(--gr) calc(18px + env(safe-area-inset-bottom, 0px)) var(--gl);background:var(--ground);border-top:1px solid #000;
-  border-radius:18px 18px 0 0;box-shadow:0 -24px 40px -10px #000;transform:translateY(104%);transition:transform .5s var(--sheet);scrollbar-width:none}
+  border-radius:18px 18px 0 0;transform:translateY(104%);transition:transform .5s var(--sheet),box-shadow .5s var(--sheet);scrollbar-width:none}
 .sheet::-webkit-scrollbar{display:none}
-.sheet.is-open{transform:none}
+/* The shadow belongs to an open panel only: parked below the screen it leaked a dark fade over the bottom bar. */
+.sheet.is-open{transform:none;box-shadow:0 -24px 40px -10px #000}
 .sheet-top{display:flex;justify-content:space-between;align-items:center;font-weight:900;font-size:19px;margin-bottom:8px}
 .sheet-top i{color:var(--dim);font-weight:700;font-size:14px;margin-left:6px}
 .sheet-top button{border:0;background:none;color:var(--dim);font-weight:900;font-size:15px;height:36px;padding:0 4px}

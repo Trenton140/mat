@@ -5,9 +5,10 @@
 
 /* ---------- register ---------- */
 .reg{position:absolute;left:0;right:0;bottom:0;z-index:20;padding:10px var(--gr) calc(14px + env(safe-area-inset-bottom, 0px)) var(--gl);background:var(--ground);
-  border-top:1px solid #000;box-shadow:0 -24px 40px -10px #000;transform:translateY(106%);transition:transform .5s var(--sheet);
+  border-top:1px solid #000;transform:translateY(106%);transition:transform .5s var(--sheet),box-shadow .5s var(--sheet);
   touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
-.reg.is-open{transform:none}
+/* The shadow belongs to an open panel only: parked below the screen it leaked a dark fade over the bottom bar. */
+.reg.is-open{transform:none;box-shadow:0 -24px 40px -10px #000}
 .reg button{touch-action:manipulation;-webkit-user-select:none;user-select:none}
 .reg input{-webkit-user-select:text;user-select:text}
 .reg-top{display:flex;justify-content:space-between;align-items:center;height:30px;font-weight:900}
