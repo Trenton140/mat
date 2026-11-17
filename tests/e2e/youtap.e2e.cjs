@@ -8,6 +8,8 @@ const { SEED, NOON12, open, advance, until, text, expectText } = require("./help
 const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
 const prow = (o) => PHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
 const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
+// As if a phone pulled a moment ago, so opening the app does not pull on its own and Fetch is what brings payments in.
+const JUST_PULLED = new Date(NOON12).toISOString();
 const PLANNER = [
   PHEAD,
   prow({ payment_id: "X7", date_paid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", amount: 24750, currency: "JPY", amount_cad: 221.52, cad_is_exact: "yes", split_between: "Mo, Ajen, Trenton", split_type: "equal", include_in_split: "yes" }),
@@ -183,7 +185,7 @@ module.exports = [
   {
     name: "Planner payments: Added 2, then Fetch; Nothing new; a failed pull says Not fetched; a second tap while busy does nothing",
     async run({ page }) {
-      const backend = await ready(page, { seed: { ...SEED, planner: PLANNER, plannerId: PLANNER_ID } });
+      const backend = await ready(page, { seed: { ...SEED, planner: PLANNER, plannerId: PLANNER_ID, paymentsPulledAt: JUST_PULLED } });
       assert.equal(await page.getAttribute("#setPlannerV", "aria-live"), "polite");
       const h = hold(backend, "syncPayments");
       await page.click("#setPlanner");
@@ -215,7 +217,7 @@ module.exports = [
   {
     name: "a row that throws never stays busy",
     async run({ page }) {
-      const backend = await ready(page, { seed: { ...SEED, planner: PLANNER, plannerId: PLANNER_ID } });
+      const backend = await ready(page, { seed: { ...SEED, planner: PLANNER, plannerId: PLANNER_ID, paymentsPulledAt: JUST_PULLED } });
       await page.evaluate(() => {
         globalThis.__matTest.store.syncPayments = () => Promise.reject(new Error("test"));
         globalThis.__matTest.store.refresh = () => Promise.reject(new Error("test"));

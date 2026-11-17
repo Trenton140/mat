@@ -1513,3 +1513,82 @@ test("an older picture change cannot be undone over a newer one, and only its ow
   assert.deepEqual([theirs.ok, theirs.message], [false, "You can only change your own picture."]);
   assert.equal((await call("load")).data.people.find((p) => p.name === "Mo").photo, JPEG2);
 });
+
+// ---------- payments pulled on their own (Mo, 2026-11-17: "needs to be updated more often") ----------
+// A phone asks with { auto: true } when it opens and every so often. Within 10
+// minutes of the last pull the planner is not read again; the Fetch button and
+// the connector (no auto) always read it.
+
+test("auto pull: reads the planner, records when, and load says when", async () => {
+  const at = { now: "2026-12-12T03:00:00.000Z" };
+  const call = linked({}, PLANNER, { clock: () => at.now });
+  assert.equal((await call("load")).data.paymentsPulledAt, "", "never pulled");
+  const r = await call("syncPayments", { auto: true });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual(r.data, reply({ added: 2, problems: PROBLEMS }));
+  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:00:00.000Z");
+});
+
+test("auto pull within 10 minutes of the last pull: the planner is not read, nothing is written, and the answer says skipped", async () => {
+  const at = { now: "2026-12-12T03:00:00.000Z" };
+  const call = linked({}, PLANNER, { clock: () => at.now });
+  await call("syncPayments");
+  const rev = (await call("rev")).rev;
+  const reads = call.fake.planner.reads;
+  at.now = "2026-12-12T03:09:59.000Z";
+  // A new payment in the planner is not seen yet.
+  call.fake.planner.rows.push(prow({ ...PX7, payment_id: "N9", description: "Late add" }));
+  const r = await call("syncPayments", { auto: true });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.data, { ...reply(), skipped: true });
+  assert.equal(r.rev, rev, "nothing written");
+  assert.equal(live(call).length, 2);
+  assert.equal(call.fake.planner.reads, reads, "the planner was not read");
+  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:00:00.000Z", "the time is the last real pull");
+  // Ten minutes on, it reads again and brings the new one in.
+  at.now = "2026-12-12T03:10:00.000Z";
+  const again = await call("syncPayments", { auto: true });
+  assert.equal(again.data.added, 1);
+  assert.equal(again.data.skipped, undefined, "a real pull has no skipped field");
+  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:10:00.000Z");
+});
+
+test("Fetch (no auto) always reads the planner, even a minute after a pull", async () => {
+  const at = { now: "2026-12-12T03:00:00.000Z" };
+  const call = linked({}, PLANNER, { clock: () => at.now });
+  await call("syncPayments", { auto: true });
+  at.now = "2026-12-12T03:01:00.000Z";
+  call.fake.planner.rows.push(prow({ ...PX7, payment_id: "N9", description: "Late add" }));
+  const r = await call("syncPayments");
+  assert.equal(r.data.added, 1);
+  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:01:00.000Z");
+});
+
+test("a pull that fails does not count as a pull: the next auto pull reads again", async () => {
+  const at = { now: "2026-12-12T03:00:00.000Z" };
+  const call = linked({}, [["payment_id"]], { clock: () => at.now });
+  const bad = await call("syncPayments", { auto: true });
+  assert.equal(bad.ok, false, "the planner is missing columns");
+  assert.equal((await call("load")).data.paymentsPulledAt, "");
+  const reads = call.fake.planner.reads;
+  at.now = "2026-12-12T03:01:00.000Z";
+  await call("syncPayments", { auto: true });
+  assert.equal(call.fake.planner.reads, reads + 1, "a minute later it reads the planner again");
+});
+
+test("auto has to be true or false", async () => {
+  const call = linked();
+  const r = await call("syncPayments", { auto: "yes" });
+  assert.equal(r.ok, false);
+  assert.equal(r.error, "bad_input");
+});
+
+test("a pull cut short (more: true) still records when it pulled", async () => {
+  const at = { now: "2026-12-12T03:00:00.000Z" };
+  const many = [PHEAD];
+  for (let i = 1; i <= 20; i++) many.push(prow({ ...PX7, payment_id: "M" + i, description: "Thing " + i }));
+  const call = linked({}, many, { clock: () => at.now });
+  const r = await call("syncPayments", { auto: true });
+  assert.equal(r.data.more, true);
+  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:00:00.000Z");
+});

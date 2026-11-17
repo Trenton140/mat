@@ -47,7 +47,9 @@ const NO_SIGNAL = "No signal. Try again.";
 // remain, up to this many calls in a row.
 const TODO_PULLS = 4;
 
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt"];
+// How often an open phone asks for the planner's payments on its own.
+const PAY_AUTO_MS = 10 * 60 * 1000;
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt"];
 // Every kind of item the store keeps, the field it is found by and the flag
 // that marks it gone. Stays and day headers only ever change here through an
 // undo from History (their writes come in later tasks). A todo is an item
@@ -156,7 +158,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "",
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "",
     loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
@@ -1069,6 +1071,45 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems, more: !!d.more, capped: !!d.capped };
   }
 
+  // The planner's payments, asked for on their own while the app is open
+  // (Mo, 2026-11-17: "needs to be updated more often"): at most once every
+  // PAY_AUTO_MS on this phone, and not while the last pull by any phone (load
+  // says when) is that recent; the backend holds to the same gap. Quiet: it
+  // says something only when lines came in or changed. Resolves with the
+  // counts, or null when it did not ask or it did not go through.
+  let autoBusy = false;
+  let autoAt = -Infinity;
+  async function autoPayments() {
+    if (autoBusy || state.status !== "ready" || state.plannerLinked !== true) return null;
+    const t = now();
+    const last = Date.parse(state.paymentsPulledAt || "");
+    if (t - autoAt < PAY_AUTO_MS) return null;
+    if (Number.isFinite(last) && t - last >= 0 && t - last < PAY_AUTO_MS) return null;
+    autoBusy = true;
+    autoAt = t;
+    try {
+      let r;
+      try {
+        r = await call("syncPayments", { auto: true });
+      } catch (err) {
+        // Never sent (no signal): ask again on the next look, not in 10 minutes.
+        if (neverSent(err)) autoAt = -Infinity;
+        return null;
+      }
+      const d = (r && r.data) || {};
+      if (d.skipped) return null;
+      if (d.added || d.changed) {
+        await refresh();
+        // Never over something already being said (a failed save matters more).
+        if (!state.notice) state.notice = plannerNotice(d);
+        changed();
+      }
+      return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems, more: !!d.more, capped: !!d.capped };
+    } finally {
+      autoBusy = false;
+    }
+  }
+
   // ---- "Before we go": the planner's Book Now list ----
 
   // Brings the list in from the planner: a plain call, never queued. While
@@ -1247,7 +1288,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       return () => subs.delete(fn);
     },
     boot, refresh, checkRev, flush, idle,
-    setMe, setPerson, markSeen, notify, clearNotice, claudeToken, syncPayments,
+    setMe, setPerson, markSeen, notify, clearNotice, claudeToken, syncPayments, autoPayments,
     syncTodos, tickTodo, claimTodo,
     addExpense,
     updateExpense: (id, patch) => change("expense", id, "edit", "updateExpense", patch),
