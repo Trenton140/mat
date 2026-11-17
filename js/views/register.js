@@ -13,6 +13,7 @@
 import { defaultRingDay, newId } from "../time.js";
 import { yen, dollars, pt, dayShort } from "../format.js";
 import { mountUneven, splitOf, toUnits, fromUnits } from "./uneven.js";
+import { isWide } from "../shape.js";
 import { fillSeal } from "../picture.js";
 
 // Each quick pick carries a kind, stored with the line and never shown.
@@ -381,11 +382,41 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
   });
   $("regDone").addEventListener("click", close);
   document.addEventListener("keydown", (ev) => {
-    if (ev.key === "Escape" && opened) close();
+    if (ev.key !== "Escape" || !opened) return;
+    // WIDE: Escape is the top-most panel's Done, so the uneven panel's own first.
+    if (isWide() && uneven.isOpen()) $("unDone").click();
+    else close();
+  });
+  // WIDE: a computer's keyboard is the register's keys while it is open and
+  // nothing is being typed into a field: digits, ".", Backspace (⌫) and Enter
+  // (Ring it up). Enter on a button reached with Tab presses that button; on
+  // one last clicked with the mouse (a chip, a key) it is still Ring it up.
+  let tabbed = false; // the focus was last moved by Tab, not by a click
+  document.addEventListener("pointerdown", () => {
+    tabbed = false;
+  }, true);
+  document.addEventListener("keydown", (ev) => {
+    if (ev.key === "Tab") tabbed = true;
+    if (!opened || ev.defaultPrevented || ev.isComposing || ev.ctrlKey || ev.metaKey || ev.altKey || !isWide()) return;
+    const at = ev.target instanceof Element ? ev.target : null;
+    if (at && at.closest("input, textarea, select, [contenteditable]")) return;
+    let k = null;
+    if (/^[0-9]$/.test(ev.key) || ev.key === ".") k = ev.key;
+    else if (ev.key === "Backspace") k = "del";
+    else if (ev.key === "Enter" && !(tabbed && at && at.closest("button, a"))) k = "go";
+    if (!k) return;
+    ev.preventDefault();
+    press(k);
   });
   what.addEventListener("input", render);
   what.addEventListener("keydown", (ev) => {
-    if (ev.key === "Enter") what.blur();
+    if (ev.key !== "Enter") return;
+    what.blur();
+    // WIDE: Enter after the title rings it up, as the keys' Ring it up would.
+    if (isWide() && !ev.isComposing) {
+      ev.preventDefault();
+      press("go");
+    }
   });
   chips.addEventListener("click", (ev) => {
     const b = ev.target.closest(".chip");

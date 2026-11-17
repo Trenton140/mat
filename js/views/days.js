@@ -41,6 +41,7 @@
 import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor } from "../plan.js";
 import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
+import { isPhone } from "../shape.js";
 
 const TICK_MS = 15000;
 // While a demo runs, a trip minute passes every half second.
@@ -222,9 +223,11 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   }
 
   // A deliberate jump to a day.
+  let aim = null; // the day a smooth jump is gliding to, until the strip comes to rest
   function jump(index, smooth = false) {
     if (!dates.length) return;
     goDay(index, smooth);
+    aim = smooth && !calm() ? cur : null;
     settle();
   }
 
@@ -289,6 +292,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   // A swipe has come to rest on another day.
   let restTimer = null;
   const atRest = () => {
+    aim = null;
     if (dates.length && cur !== settledOn) settle();
   };
   rail.addEventListener("scrollend", atRest);
@@ -304,8 +308,10 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       toggle(ev.target.closest(".r"));
       return;
     }
-    if (ev.key === "ArrowRight") jump(cur + 1, true);
-    if (ev.key === "ArrowLeft") jump(cur - 1, true);
+    // Not on a phone: from the day the strip is gliding to, so two quick presses move two days.
+    const from = aim === null || isPhone() ? cur : aim;
+    if (ev.key === "ArrowRight") jump(from + 1, true);
+    if (ev.key === "ArrowLeft") jump(from - 1, true);
   });
 
   // Opening a stop closes the one that was open; tapping the open one closes it.

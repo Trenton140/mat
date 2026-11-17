@@ -3,8 +3,8 @@
 // 667x320) the app
 // fills the screen's height as one block, a column with the bar turned into
 // a rail on its right; every sheet's close control is on screen; turning the
-// phone changes the layout only. Tablets, desktop windows and portrait keep
-// the phone exactly as before.
+// phone changes the layout only. Portrait keeps the phone exactly as before;
+// tablets and desktop windows are Task 21's shapes (tests/e2e/desktop.e2e.cjs).
 
 const assert = require("node:assert/strict");
 const P = require("../../backend/Pure.js");
@@ -471,7 +471,8 @@ cases.push({
 });
 
 cases.push({
-  name: "a desktop window and a phone in portrait keep the phone as it was",
+  // A desktop window is no longer a framed phone (Task 21, tests/e2e/desktop.e2e.cjs): it is WIDE, two panes and the rail.
+  name: "a desktop window is the two panes, and a phone in portrait keeps the phone as it was",
   viewport: { width: 1024, height: 768 },
   async run({ page }) {
     await money(page);
@@ -480,7 +481,7 @@ cases.push({
       const r = phone.getBoundingClientRect();
       return { width: r.width, height: r.height, radius: getComputedStyle(phone).borderTopLeftRadius };
     });
-    assert.deepEqual(await box(), { width: 400, height: 768, radius: "38px" });
+    assert.deepEqual(await box(), { width: 1024, height: 768, radius: "0px" });
     await page.setViewportSize(PORTRAIT);
     await until(async () => (await box()).width === 390, "the phone fills the width");
     assert.deepEqual(await box(), { width: 390, height: 844, radius: "0px" });
