@@ -24,6 +24,7 @@ import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
 import { createUpdater } from "./update.js";
 import { watchViewport } from "./remeasure.js";
+import { watchFit } from "./fit.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -244,6 +245,7 @@ function start() {
     }
   });
   const you = mountYou(phone, store, {
+    fitStorage: fitStore,
     demo: clock,
     getKey: () => storage.getItem("mat.key"),
     screen: () => (tabs.tab() === "days" ? "Days" : tabs.tab() === "before" ? "Before we go" : "Money"),
@@ -527,6 +529,9 @@ function registerWorker() {
 }
 
 // fillScreen() is off: on a real iPhone it pushed the bar past the bottom edge (2026-11-17).
+// The way this phone reaches the bottom of its screen (js/fit.js), from the Screen check under You.
+const fitStore = phoneStorage();
+watchFit(document, window, fitStore);
 watchViewport();
 registerWorker();
 start();
