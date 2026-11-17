@@ -415,8 +415,13 @@ function start() {
     });
     return inFlight;
   };
+  // Each look also asks for the planner's payments, at most every 10 minutes (store.autoPayments).
+  const look = () => {
+    check();
+    store.autoPayments();
+  };
   const startChecking = () => {
-    if (connected && !checking) checking = setInterval(check, CHECK_MS);
+    if (connected && !checking) checking = setInterval(look, CHECK_MS);
   };
   const stopChecking = () => {
     clearInterval(checking);
@@ -427,7 +432,7 @@ function start() {
       store.markSeen();
       stopChecking();
     } else {
-      check();
+      look();
       startChecking();
     }
   });
@@ -437,7 +442,10 @@ function start() {
   });
 
   // Once started, the list is fetched if it is an hour old.
-  if (connected) store.boot().then(() => todos.wake());
+  if (connected) store.boot().then(() => {
+    todos.wake();
+    store.autoPayments();
+  });
   if (document.visibilityState !== "hidden") startChecking();
 }
 

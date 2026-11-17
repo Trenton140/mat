@@ -157,7 +157,7 @@ function dispatch_(body) {
   if (typeof body.actor !== "string" || names.indexOf(body.actor) === -1) return err_("bad_input", MSG_.badActor);
   var ctx = { actor: body.actor, via: body.via === "claude" ? "claude" : "app", names: names };
   // Reads the planner first, then takes the lock itself.
-  if (action === "syncPayments") return syncPayments_(ctx);
+  if (action === "syncPayments") return syncPayments_(args, ctx);
   if (action === "syncTodos") return syncTodos_(args, ctx);
   // Fetching the day's rate can take a few seconds; do it before taking the lock.
   if (action === "addExpense") ctx.rate = getRate_();
@@ -291,6 +291,7 @@ function load_() {
     plannerLinked: plannerId_() !== null,
     todos: todosShown_(),
     todosPulledAt: getProp_("TODOS_PULLED_AT") || "",
+    paymentsPulledAt: getProp_("PAYMENTS_PULLED_AT") || "",
   }, rev);
 }
 
@@ -401,8 +402,20 @@ function setExpenseDeleted_(args, ctx, deleted) {
 // planner's id is never in a reply, and neither is a planner cell that is not
 // part of a payment the app can use.
 
-function syncPayments_(ctx) {
+// A phone's own pull ({ auto: true }) within this long of the last pull reads
+// nothing; Fetch and the connector always read the planner.
+var PAYMENT_AUTO_GAP_MS_ = 10 * 60 * 1000;
+
+function syncPayments_(args, ctx) {
+  if (args.auto !== undefined && typeof args.auto !== "boolean") return err_("bad_input", MSG_.badRequest);
   if (!plannerId_()) return err_("no_planner", MSG_.noPlanner);
+  var started = nowIso_();
+  if (args.auto === true) {
+    var since = Date.parse(started) - Date.parse(getProp_("PAYMENTS_PULLED_AT") || "");
+    if (since >= 0 && since < PAYMENT_AUTO_GAP_MS_) {
+      return ok_({ added: 0, changed: 0, same: 0, removed: 0, notCounted: [], problems: [], more: false, capped: false, skipped: true }, rev_());
+    }
+  }
   if (!hasColumn_("Expenses", "planner_id")) return err_("needs_migrate", MSG_.needsMigrate);
   var rows;
   try {
@@ -415,7 +428,9 @@ function syncPayments_(ctx) {
   var pull = { actor: ctx.actor, via: "planner", names: ctx.names };
   // As for addExpense: fetching the day's rate can take a few seconds.
   if (read.payments.some(function (p) { return p.include; })) pull.rate = getRate_();
-  return withLock_(function () { return pullPayments_(read, pull); });
+  var done = withLock_(function () { return pullPayments_(read, pull); });
+  if (done && done.ok) setProp_("PAYMENTS_PULLED_AT", started);
+  return done;
 }
 
 function pullPayments_(read, ctx) {

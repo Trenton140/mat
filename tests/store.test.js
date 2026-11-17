@@ -40,7 +40,7 @@ function memStorage(init = {}) {
 //   net.lose           actions that reach the backend but whose reply is lost
 //   net.garble         actions that reach the backend but get a non-envelope reply
 //   net.knownOffline   the phone itself says it has no network: nothing is sent
-function phone({ seed, fake, storage, me = "Mo", nowMs = NOW } = {}) {
+function phone({ seed, fake, storage, me = "Mo", nowMs = NOW, clock } = {}) {
   fake = fake || createFakeBackend(seed);
   storage = storage || memStorage({ "mat.key": KEY, "mat.me": me });
   const net = { offline: false, knownOffline: false, failing: new Set(), lose: new Set(), garble: new Set(), override: null, holds: [], sent: [] };
@@ -67,7 +67,7 @@ function phone({ seed, fake, storage, me = "Mo", nowMs = NOW } = {}) {
   };
   const api = createApi({ url: URL, getKey: () => storage.getItem("mat.key"), getActor: () => storage.getItem("mat.me"), fetchImpl, isOnline: () => !net.knownOffline });
   const waits = [];
-  const store = createStore({ api, storage, now: () => nowMs, wait: async (ms) => { waits.push(ms); } });
+  const store = createStore({ api, storage, now: clock || (() => nowMs), wait: async (ms) => { waits.push(ms); } });
   return { fake, storage, net, api, store, waits };
 }
 
@@ -2584,4 +2584,89 @@ test("syncTodos: when a later call of a long pull fails, what the earlier one br
   assert.equal(r.ok, false);
   assert.deepEqual(p.store.state.todos.map((t) => t.id), ["9"], "the first answer is kept");
   assert.equal(p.store.state.notice, "Couldn’t confirm that. Checking…");
+});
+
+// ---------- payments pulled on their own (Mo, 2026-11-17) ----------
+// autoPayments(): while the app is open, at most once every 10 minutes per
+// phone, the planner's payments are asked for with { auto: true }. Quiet:
+// it says something only when lines came in or changed.
+
+const autoPhone = (over = {}) => {
+  const at = { ms: NOW };
+  const fake = createFakeBackend({ ...SEED, planner: [PHEAD, prow(PX7)], plannerId: PLANNER_ID, ...over }, { clock: () => new Date(at.ms).toISOString() });
+  return { at, ...phone({ fake, clock: () => at.ms }) };
+};
+const autoCalls = (p) => p.net.sent.filter((b) => b.action === "syncPayments");
+
+test("autoPayments: brings new planner payments in, says so, and the lines are on the receipt", async () => {
+  const p = autoPhone();
+  await p.store.boot();
+  const r = await p.store.autoPayments();
+  assert.equal(r.added, 1);
+  assert.deepEqual(autoCalls(p).map((b) => b.args), [{ auto: true }]);
+  assert.equal(p.store.state.notice, "Added 1 payment from the planner.");
+  assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass"));
+  assert.equal(p.store.state.paymentsPulledAt, new Date(NOW).toISOString(), "load carries when it last pulled");
+});
+
+test("autoPayments: once every 10 minutes per phone; sooner sends nothing", async () => {
+  const p = autoPhone();
+  await p.store.boot();
+  await p.store.autoPayments();
+  p.at.ms += 9 * 60 * 1000;
+  assert.equal(await p.store.autoPayments(), null);
+  assert.equal(autoCalls(p).length, 1);
+  p.at.ms += 60 * 1000;
+  await p.store.autoPayments();
+  assert.equal(autoCalls(p).length, 2);
+});
+
+test("autoPayments: nothing new is said nowhere and does not reload", async () => {
+  const p = autoPhone({ planner: [PHEAD] });
+  await p.store.boot();
+  const loads = p.net.sent.filter((b) => b.action === "load").length;
+  p.store.clearNotice && p.store.clearNotice();
+  const before = p.store.state.notice;
+  await p.store.autoPayments();
+  assert.equal(autoCalls(p).length, 1);
+  assert.equal(p.store.state.notice, before, "no notice");
+  assert.equal(p.net.sent.filter((b) => b.action === "load").length, loads, "no reload");
+});
+
+test("autoPayments: another phone pulled a minute ago (load says so): this one waits", async () => {
+  const p = autoPhone();
+  await backend(p.fake, "syncPayments", {});
+  p.at.ms += 60 * 1000;
+  await p.store.boot();
+  assert.equal(await p.store.autoPayments(), null);
+  assert.equal(autoCalls(p).length, 0);
+});
+
+test("autoPayments: no planner linked, offline, or a refusal: nothing said", async () => {
+  const p = phone({ seed: SEED });
+  await p.store.boot();
+  assert.equal(await p.store.autoPayments(), null);
+  assert.equal(p.net.sent.filter((b) => b.action === "syncPayments").length, 0, "not linked: nothing sent");
+
+  const q = autoPhone();
+  await q.store.boot();
+  const before = q.store.state.notice;
+  q.net.knownOffline = true;
+  assert.equal(await q.store.autoPayments(), null);
+  assert.equal(autoCalls(q).length, 0, "offline: nothing sent");
+  q.net.knownOffline = false;
+  q.net.override = (b) => (b.action === "syncPayments" ? { ok: false, error: "planner_unreadable", message: "Couldn’t read the planner sheet." } : null);
+  assert.equal(await q.store.autoPayments(), null);
+  assert.equal(q.store.state.notice, before, "a refusal is not said");
+});
+
+test("autoPayments: one at a time", async () => {
+  const p = autoPhone();
+  await p.store.boot();
+  const release = p.net.hold("syncPayments");
+  const first = p.store.autoPayments();
+  assert.equal(await p.store.autoPayments(), null, "a second call while one runs sends nothing");
+  release();
+  await first;
+  assert.equal(autoCalls(p).length, 1);
 });

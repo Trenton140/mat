@@ -104,6 +104,8 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   // unset REV would otherwise fall back to the Log's highest id).
   const props = { TRIP_KEY, CLAUDE_TOKEN, REV: "0" };
   if (seed && seed.plannerId) props.PLANNER_ID = seed.plannerId;
+  // paymentsPulledAt: when the planner's payments were last pulled (as if a phone just had).
+  if (seed && seed.paymentsPulledAt) props.PAYMENTS_PULLED_AT = seed.paymentsPulledAt;
   const planner = {
     rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0,
     tabs: copy((seed && seed.plannerTabs) || {}), writes: [], cellFails: false, appendFails: false,
