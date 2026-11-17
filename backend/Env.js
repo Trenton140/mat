@@ -146,14 +146,30 @@ function plannerSetCell_(tab, cell, value) {
   Sheets.Spreadsheets.Values.update({ values: [[value]] }, plannerId_(), plannerA1_(tab) + cell, { valueInputOption: "RAW" });
 }
 
-// The formula in one cell (row is the sheet's row number, col a 0-based
-// column) as text starting with "=", or "" for a plain cell. The planner is
-// read as values, so this is the only way to see a formula. Throws when it
-// cannot read.
-function plannerCellFormula_(tab, row, col) {
-  var got = Sheets.Spreadsheets.Values.get(plannerId_(), plannerA1_(tab) + colLetter(col) + row, { valueRenderOption: "FORMULA" });
-  var v = got && got.values && got.values[0] ? got.values[0][0] : "";
-  return typeof v === "string" && v.charAt(0) === "=" ? v : "";
+// Whether the planner computes one cell (row is the sheet's row number, col a
+// 0-based column), so the app must never write it: a formula entered in the
+// cell, or a value with nothing entered (spilled there by an array formula
+// placed elsewhere). An empty cell is not computed. A read that fails, or
+// comes back in a shape not expected, counts as computed: write nothing.
+function plannerCellComputed_(tab, row, col) {
+  try {
+    var got = Sheets.Spreadsheets.get(plannerId_(), { ranges: [plannerA1_(tab) + colLetter(col) + row], fields: "sheets.data.rowData.values(userEnteredValue,effectiveValue)" });
+    var sheet = got && Array.isArray(got.sheets) ? got.sheets[0] : null;
+    var data = sheet && Array.isArray(sheet.data) ? sheet.data[0] : null;
+    if (!data || typeof data !== "object") return true;
+    if (data.rowData === undefined) return false;
+    if (!Array.isArray(data.rowData)) return true;
+    var first = data.rowData[0];
+    if (first === undefined || (first && first.values === undefined)) return false;
+    if (!first || !Array.isArray(first.values)) return true;
+    var cell = first.values[0];
+    if (cell === undefined) return false;
+    if (!cell || typeof cell !== "object") return true;
+    if (cell.userEnteredValue) return cell.userEnteredValue.formulaValue !== undefined;
+    return cell.effectiveValue !== undefined;
+  } catch (e) {
+    return true;
+  }
 }
 
 // Appends one row (RAW) under the table whose header is on row headerRow,

@@ -95,7 +95,9 @@ test("setup() checks the rate after building the tabs", () => {
 const PLANNER_ID = "fakePlannerSheet_0123456789abcdefXYZ";
 const PHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
 
-function plannerWorld({ props = {}, get, tabs = ["Payments"], noAccess = false, update, append }) {
+// cells(id, opt): what Spreadsheets.get answers for a read of cells (opt.ranges);
+// by default every cell is empty.
+function plannerWorld({ props = {}, get, tabs = ["Payments"], noAccess = false, update, append, cells }) {
   const logged = [];
   const asked = [];
   const ctx = vm.createContext({
@@ -107,7 +109,12 @@ function plannerWorld({ props = {}, get, tabs = ["Payments"], noAccess = false, 
         update: (...a) => { asked.push(["update", ...a]); return update ? update(...a) : {}; },
         append: (...a) => { asked.push(["append", ...a]); return append ? append(...a) : {}; },
       },
-      get: (...a) => { asked.push(a); if (noAccess) throw new Error("no access"); return { sheets: tabs.map((title) => ({ properties: { title } })) }; },
+      get: (...a) => {
+        asked.push(a);
+        if (a[1] && a[1].ranges) return cells ? cells(...a) : { sheets: [{ data: [{}] }] };
+        if (noAccess) throw new Error("no access");
+        return { sheets: tabs.map((title) => ({ properties: { title } })) };
+      },
     } },
     Logger: { log: (x) => logged.push(String(x)) },
   });
@@ -238,26 +245,42 @@ test("withPlannerLock_ takes the document lock, never the script lock withLock_ 
   assert.deepEqual(seen, ["user.tryLock:5000", "user.release"]);
 });
 
-test("plannerCellFormula_ reads one cell as a formula: its text, or an empty string for a plain cell", () => {
-  const seen = [];
-  const w = plannerWorld({ props: { PLANNER_ID }, get: (id, range, opt) => { seen.push([range, opt]); return range.endsWith("E4") ? { values: [["=A1&B1"]] } : range.endsWith("E5") ? { values: [["Booked"]] } : {}; } });
-  assert.equal(w.ctx.plannerCellFormula_("Book Now", 4, 4), "=A1&B1");
-  assert.equal(w.ctx.plannerCellFormula_("Book Now", 5, 4), "");
-  assert.equal(w.ctx.plannerCellFormula_("Book Now", 6, 4), "");
-  assert.deepEqual(JSON.parse(JSON.stringify(seen[0])), ["'Book Now'!E4", { valueRenderOption: "FORMULA" }]);
+// What Spreadsheets.get answers for one cell, by what the cell holds.
+const oneCell = (v) => ({ sheets: [{ data: [v === undefined ? {} : { rowData: [{ values: [v] }] }] }] });
+const CELLS = {
+  E4: oneCell({ userEnteredValue: { formulaValue: "=A1&B1" }, effectiveValue: { stringValue: "ab" } }),
+  E5: oneCell({ effectiveValue: { stringValue: "Booked" } }), // spilled by an array formula placed elsewhere
+  E6: oneCell({ userEnteredValue: { stringValue: "Booked" }, effectiveValue: { stringValue: "Booked" } }),
+  E7: oneCell({}),
+  E8: oneCell(),
+  E9: { sheets: [{ data: [{ rowData: [{}] }] }] },
+};
+
+test("plannerCellComputed_: a formula in the cell or a value spilled into it is computed; a typed value or an empty cell is not", () => {
+  const w = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), cells: (id, opt) => CELLS[opt.ranges[0].replace("'Book Now'!", "")] });
+  const at = (row) => w.ctx.plannerCellComputed_("Book Now", row, 4);
+  assert.deepEqual([4, 5, 6, 7, 8, 9].map(at), [true, true, false, false, false, false]);
+  assert.deepEqual(JSON.parse(JSON.stringify(w.asked[0])), [PLANNER_ID, { ranges: ["'Book Now'!E4"], fields: "sheets.data.rowData.values(userEnteredValue,effectiveValue)" }]);
 });
 
-test("checkPlanner counts the Status cells that are formulas, with no value in the line", () => {
+test("plannerCellComputed_: a read that fails or comes back in an unexpected shape counts as computed", () => {
+  const fails = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), cells: () => { throw new Error("quota"); } });
+  assert.equal(fails.ctx.plannerCellComputed_("Book Now", 4, 4), true);
+  for (const odd of [null, {}, { sheets: [] }, { sheets: [{}] }, { sheets: [{ data: [] }] }, { sheets: [{ data: [{ rowData: "x" }] }] }, { sheets: [{ data: [{ rowData: [{ values: ["x"] }] }] }] }]) {
+    const w = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), cells: () => odd });
+    assert.equal(w.ctx.plannerCellComputed_("Book Now", 4, 4), true, JSON.stringify(odd));
+  }
+});
+
+test("checkPlanner counts the Status cells that are formulas or spilled, with no value in the line", () => {
   const tabs = ["Payments", "Book Now", "Change Log"];
-  const mk = (formulas) => plannerWorld({ props: { PLANNER_ID }, tabs, get: (id, range, opt) => {
-    if (opt && opt.valueRenderOption === "FORMULA") { const v = formulas[range.replace("'Book Now'!", "")]; return v ? { values: [[v]] } : {}; }
-    return byRange([PHEAD])(id, range);
-  } });
+  const mk = (held) => plannerWorld({ props: { PLANNER_ID }, tabs, get: byRange([PHEAD]), cells: (id, opt) => held[opt.ranges[0].replace("'Book Now'!", "")] || oneCell() });
   const none = mk({});
   none.ctx.checkPlanner();
   assert.ok(none.logged.includes("Book Now: 0 Status cells are formulas (the app leaves those alone)."), none.logged.join("|"));
-  const two = mk({ D3: "=1+1", D4: "=\"Booked\"" });
+  const two = mk({ D3: oneCell({ userEnteredValue: { formulaValue: "=1+1" }, effectiveValue: { numberValue: 2 } }), D4: oneCell({ effectiveValue: { stringValue: "Secret spill" } }) });
   two.ctx.checkPlanner();
   assert.ok(two.logged.includes("Book Now: 2 Status cells are formulas (the app leaves those alone)."), two.logged.join("|"));
   assert.equal(two.logged.join("\n").includes("=1+1"), false);
+  assert.equal(two.logged.join("\n").includes("Secret spill"), false);
 });

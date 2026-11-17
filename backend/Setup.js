@@ -98,10 +98,11 @@ function checkPlannerTodos_() {
     var read = todosFromRows(plannerTab_("Book Now"), 2026);
     Logger.log("Book Now: " + (read.missing || read.items.length + " items, columns ok"));
     if (!read.missing) {
-      // The app never writes over a formula: say how many Status cells are one.
+      // The app never writes over a formula: say how many Status cells are one
+      // (or are filled by one placed elsewhere).
       var formulas = 0;
       try {
-        read.items.forEach(function (it) { if (plannerCellFormula_("Book Now", it.row, it.statusCol) !== "") formulas++; });
+        read.items.forEach(function (it) { if (plannerCellComputed_("Book Now", it.row, it.statusCol)) formulas++; });
         Logger.log("Book Now: " + formulas + " Status cells are formulas (the app leaves those alone).");
       } catch (e2) {
         Logger.log("Book Now: couldn’t check its Status cells for formulas.");

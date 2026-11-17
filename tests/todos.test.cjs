@@ -441,17 +441,17 @@ test("undo of a tick that was never written: cleared in the app, nothing written
   assert.deepEqual(writes(call), [], "an undone tick is not retried");
 });
 
-test("undo of a written tick when the planner refuses the write: undone in the app, pending; the next pull shows it done again", async () => {
+test("undo of a written tick when the planner refuses the write: undone in the app, pending and owed; the next pull puts it back", async () => {
   const { call, logId } = await ticked();
   call.fake.planner.cellFails = true;
   const u = await call("undo", { logId });
-  assert.deepEqual([u.ok, u.data.planner, u.data.todo.tickedBy, u.data.todo.status], [true, "pending", "", "Booked"]);
-  assert.equal(stored(call, "1").planner_written, "");
+  assert.deepEqual([u.ok, u.data.planner, u.data.todo.tickedBy, u.data.todo.status], [true, "pending", "", "Not booked"]);
+  assert.equal(stored(call, "1").planner_written, "undo");
   assert.equal(writes(call).length, 2);
   call.fake.planner.cellFails = false;
   const p = await forced(call);
-  assert.equal(p.data.todos.find((t) => t.id === "1").done, true, "the planner says Booked");
-  assert.equal(writes(call).length, 2);
+  assert.equal(p.data.todos.find((t) => t.id === "1").done, false, "the app's own Booked is not taken as done");
+  assert.deepEqual(writes(call).slice(2).map((w) => (w.kind === "cell" ? w.value : w.values[8])), ["Not booked", "Tick undone in the MAT app"]);
 });
 
 test("undo of a written tick when the row's Item changed: nothing written, pending", async () => {
@@ -460,7 +460,10 @@ test("undo of a written tick when the row's Item changed: nothing written, pendi
   const u = await call("undo", { logId });
   assert.deepEqual([u.data.planner, u.data.todo.tickedBy], ["pending", ""]);
   assert.equal(writes(call).length, 2);
-  assert.equal(stored(call, "1").planner_written, "");
+  assert.equal(stored(call, "1").planner_written, "undo");
+  await forced(call);
+  assert.equal(stored(call, "1").planner_written, "", "the next pull sees another item there: nothing owed to it");
+  assert.equal(writes(call).length, 2);
 });
 
 test("undo of a written tick when the planner's status was changed since: nothing written there", async () => {
@@ -475,8 +478,9 @@ test("undo of a written tick when the Change Log append fails: the Status goes b
   const { call, logId } = await ticked();
   call.fake.planner.appendFails = true;
   const u = await call("undo", { logId });
-  assert.deepEqual([u.data.planner, u.data.todo.tickedBy, u.data.todo.status], ["pending", "", "Booked"]);
+  assert.deepEqual([u.data.planner, u.data.todo.tickedBy, u.data.todo.status], ["pending", "", "Not booked"]);
   assert.deepEqual(writes(call).slice(2), [{ kind: "cell", tab: "Book Now", cell: "E4", value: "Not booked" }, { kind: "cell", tab: "Book Now", cell: "E4", value: "Booked" }]);
+  assert.equal(stored(call, "1").planner_written, "undo", "still owed");
 });
 
 test("undoing the undo ticks it again and writes the planner again", async () => {
@@ -716,13 +720,14 @@ test("I5: parsing stops at the first blank row after an item and at a repeated h
   assert.deepEqual(lead.items.map((x) => x.id), ["1"], "blank rows before the first item are skipped");
 });
 
-test("P7 (M1): an undo of a tick made through the Claude connector never reaches the planner", async () => {
+test("P7 (M1): an undo of a tick made through the Claude connector never reaches the planner (the put-back is owed to the next pull)", async () => {
   const call = linked();
   await call("syncTodos");
   const t = await call("tickTodo", { id: "1" });
   const r = call.fake.mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "undo", arguments: { log_id: t.data.logId } } }, { t: "claude-token" });
   const out = JSON.parse(r.result.content[0].text);
-  assert.deepEqual([out.planner, out.todo.tickedBy], ["kept", ""]);
+  assert.deepEqual([out.planner, out.todo.tickedBy, out.todo.done], ["pending", "", false]);
+  assert.equal(stored(call, "1").planner_written, "undo");
   assert.equal(writes(call).length, 2, "only the tick's own two writes");
   assert.equal(call.fake.planner.calls.filter((c) => c.op !== "read" && c.op !== "formula").length, 2);
 });
@@ -851,7 +856,7 @@ test("round 2, 1: a Claude undo that would put a tick back is refused; one that 
   // Taking a tick off through Claude is fine.
   const t2 = await call("tickTodo", { id: "2" });
   const off = await asClaude(call, "undo", { logId: t2.data.logId });
-  assert.deepEqual([off.ok, off.data.planner, stored(call, "2").ticked_by], [true, "kept", ""]);
+  assert.deepEqual([off.ok, off.data.planner, stored(call, "2").ticked_by, stored(call, "2").planner_written], [true, "pending", "", "undo"]);
 });
 
 test("round 2, 2: stuck ticks never keep a pull open; the two retries rotate, oldest tick first, so one that always fails starves no other", async () => {
@@ -1084,12 +1089,13 @@ test("final 2: a put-back never writes over a formula either", async () => {
   assert.equal(writes(call).length, 2, "only the tick's own two writes");
 });
 
-test("final 2: a formula that cannot be read leaves the tick pending, nothing written", async () => {
+test("post-deploy 2: a Status cell that cannot be checked counts as computed: kept, formula, nothing written", async () => {
   const call = linked();
   await call("syncTodos");
   call.fake.planner.formulaFails = true;
   const t = await call("tickTodo", { id: "1" });
-  assert.equal(t.data.planner, "pending");
+  assert.equal(t.data.planner, "kept");
+  assert.equal(stored(call, "1").planner_written, "formula");
   assert.deepEqual(writes(call), []);
 });
 
@@ -1165,4 +1171,233 @@ test("round 4: todoFromRow says when the planner computes the Status (planner_wr
   assert.equal(P.todoFromRow({ id: "1", item: "x", ticked_by: "Mo", planner_written: "yes" }).plannerComputes, false);
   assert.equal(P.todoFromRow({ id: "1", item: "x" }).plannerComputes, false);
   assert.equal("nextLogRow" in P, false);
+});
+
+// ---------- post-deploy fixes ----------
+
+const OWED_NOTE = "The planner still says Booked for this one; the app will put it back at the next fetch.";
+const owedNotes = async (call) => (await history(call)).filter((e) => e.summary === OWED_NOTE);
+const owedOf = (call, id = "1") => { const r = stored(call, id); return [r.ticked_by, r.planner_written, r.planner_was, r.status]; };
+
+// A written tick of B1 by Mo, then Ajen's undo of it while the planner refuses the put-back (fail(call) sets that up).
+async function owed(fail = (c) => { c.fake.planner.cellFails = true; }) {
+  const { call, logId } = await ticked();
+  fail(call);
+  later(call, 2);
+  const u = await call("undo", { logId }, "Ajen");
+  return { call, logId, u };
+}
+
+for (const [name, fail, cells] of [
+  ["the planner lock is busy", (c) => { c.fake.planner.lockFails = true; }, ["Booked"]],
+  ["Sheets refuses the cell", (c) => { c.fake.planner.cellFails = true; }, ["Booked"]],
+  ["the Change Log append fails (the cell goes back to Booked)", (c) => { c.fake.planner.appendFails = true; }, ["Booked", "Not booked", "Booked"]],
+]) {
+  test(`post-deploy 1a: an undo whose put-back is pending stays owed when ${name}`, async () => {
+    const { call, u } = await owed(fail);
+    assert.equal(u.ok, true, JSON.stringify(u));
+    assert.equal(u.data.planner, "pending");
+    assert.deepEqual(owedOf(call), ["", "undo", "Not booked", "Not booked"]);
+    assert.deepEqual([u.data.todo.tickedBy, u.data.todo.status, u.data.todo.done, u.data.todo.plannerComputes], ["", "Not booked", false, false]);
+    assert.equal(bookStatus(call), "Booked");
+    assert.deepEqual(writes(call).filter((w) => w.kind === "cell").map((w) => w.value), cells);
+    assert.equal(call.fake.planner.tabs["Change Log"].length, LOG.length + 1, "only the tick's Change Log row");
+    const notes = await owedNotes(call);
+    assert.equal(notes.length, 1);
+    assert.deepEqual([notes[0].kind, notes[0].canUndo], ["planner", false]);
+  });
+}
+
+test("post-deploy 1a: an undo whose put-back is written or kept owes nothing and adds no note", async () => {
+  const w = await owed(() => {});
+  assert.equal(w.u.data.planner, "written");
+  assert.deepEqual(owedOf(w.call), ["", "", "", "Not booked"]);
+  const k = await owed((c) => { c.fake.planner.tabs["Book Now"][3][4] = "Cancelled"; });
+  assert.equal(k.u.data.planner, "kept");
+  assert.deepEqual(owedOf(k.call).slice(0, 3), ["", "", ""]);
+  assert.equal(writes(k.call).length, 2);
+  assert.equal((await owedNotes(w.call)).length + (await owedNotes(k.call)).length, 0);
+});
+
+test("post-deploy 1b: the next pull puts it back: one cell, one Change Log row by the one who undid it; then nothing is owed", async () => {
+  const { call } = await owed();
+  call.fake.planner.cellFails = false;
+  const p = await forced(call);
+  const td = p.data.todos.find((t) => t.id === "1");
+  assert.deepEqual([td.done, td.status, td.tickedBy], [false, "Not booked", ""]);
+  assert.deepEqual(writes(call).slice(2), [
+    { kind: "cell", tab: "Book Now", cell: "E4", value: "Not booked" },
+    { kind: "append", tab: "Change Log", headerRow: 2, values: [9, "2026-11-20 10:03 ET", "MAT app (Ajen)", "Book Now", "E4", "Rail pass reservation", "Booked", "Not booked", "Tick undone in the MAT app", "MAT app History", "By Ajen"] },
+  ]);
+  assert.deepEqual(owedOf(call), ["", "", "", "Not booked"]);
+  await forced(call);
+  assert.equal(writes(call).length, 4, "a later pull writes nothing more");
+  assert.equal((await owedNotes(call)).length, 1);
+});
+
+test("post-deploy 1b/1c: while the put-back keeps failing a pull keeps it owed, shows planner_was, and adds no second note", async () => {
+  const { call } = await owed();
+  const p = await forced(call);
+  const td = p.data.todos.find((t) => t.id === "1");
+  assert.deepEqual([td.done, td.status, td.tickedBy, td.plannerComputes], [false, "Not booked", "", false], "the planner's Booked is not adopted");
+  assert.deepEqual(owedOf(call), ["", "undo", "Not booked", "Not booked"]);
+  assert.deepEqual(cellTries(call).slice(1), ["E4", "E4"], "the undo's own try, then the pull's retry");
+  assert.equal((await owedNotes(call)).length, 1);
+});
+
+test("post-deploy 1b: an owed put-back whose cell someone changed is kept: cleared, nothing written, the planner's word adopted", async () => {
+  const { call } = await owed();
+  call.fake.planner.cellFails = false;
+  call.fake.planner.tabs["Book Now"][3][4] = "Booked by phone";
+  const p = await forced(call);
+  assert.deepEqual(owedOf(call), ["", "", "", "Booked by phone"]);
+  assert.equal(p.data.todos.find((t) => t.id === "1").done, true);
+  assert.equal(writes(call).length, 2);
+});
+
+test("post-deploy 1b: owed put-backs share the two retries a pull and their rotation with stuck ticks", async () => {
+  const call = linked({ book: bookNow(B1, B2, { ...B3, Status: "" }) });
+  await call("syncTodos");
+  const t1 = await call("tickTodo", { id: "1" });
+  later(call, 1);
+  const t2 = await call("tickTodo", { id: "2" });
+  call.fake.planner.cellFails = true;
+  later(call, 1);
+  await call("undo", { logId: t1.data.logId });
+  await call("undo", { logId: t2.data.logId });
+  await call("tickTodo", { id: "3" });
+  assert.deepEqual([owedOf(call, "1")[1], owedOf(call, "2")[1], owedOf(call, "3")[1]], ["undo", "undo", ""]);
+  const start = cellTries(call).length;
+  await forced(call);
+  assert.equal(cellTries(call).length - start, 2, "two retries a pull");
+  await forced(call);
+  assert.deepEqual(new Set(cellTries(call).slice(start)), new Set(["E4", "E5", "E6"]), "every one gets its turn");
+  assert.equal(cellTries(call).length - start, 4);
+  call.fake.planner.cellFails = false;
+  await forced(call);
+  await forced(call);
+  assert.deepEqual([owedOf(call, "1"), owedOf(call, "2"), owedOf(call, "3")], [["", "", "", "Not booked"], ["", "", "", "Pending"], ["Mo", "yes", "", "Booked"]]);
+  assert.deepEqual(writes(call).filter((w) => w.kind === "cell").map((w) => w.cell + "=" + w.value).sort(), ["E4=Booked", "E4=Not booked", "E5=Booked", "E5=Pending", "E6=Booked"]);
+  assert.equal(writes(call).filter((w) => w.kind === "cell").length, 5, "two ticks, two put-backs, one stuck tick: nothing else");
+});
+
+test("post-deploy 1d: ticking an owed row again: ticked, yes, planner_was kept, nothing written to the planner", async () => {
+  const { call } = await owed();
+  call.fake.planner.cellFails = false;
+  const start = call.fake.planner.calls.length;
+  later(call, 1);
+  const t = await call("tickTodo", { id: "1" }, "Mo");
+  assert.equal(t.ok, true, JSON.stringify(t));
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Not booked", "Booked"]);
+  assert.deepEqual([t.data.todo.done, t.data.todo.tickedBy], [true, "Mo"]);
+  assert.deepEqual(call.fake.planner.calls.slice(start), [], "the planner is not even read");
+  assert.equal(writes(call).length, 2);
+  await forced(call);
+  assert.equal(writes(call).length, 2, "nor by the next pull");
+  // That tick undoes as any written tick does.
+  later(call, 1);
+  const u = await call("undo", { logId: t.data.logId }, "Mo");
+  assert.equal(u.data.planner, "written");
+  assert.deepEqual(writes(call).slice(2).map((w) => (w.kind === "cell" ? w.value : w.values[8])), ["Not booked", "Tick undone in the MAT app"]);
+});
+
+test("post-deploy 1d: undoing the undo while the put-back is owed: ticked again, yes, nothing written", async () => {
+  const { call, u } = await owed();
+  call.fake.planner.cellFails = false;
+  const start = call.fake.planner.calls.length;
+  later(call, 1);
+  const uu = await call("undo", { logId: u.data.logId }, "Mo");
+  assert.equal(uu.ok, true, JSON.stringify(uu));
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Not booked", "Booked"]);
+  assert.equal(uu.data.todo.done, true);
+  assert.deepEqual(call.fake.planner.calls.slice(start), []);
+  assert.equal(writes(call).length, 2);
+});
+
+test("post-deploy 1e: a connector undo of a written tick takes it off, owes the put-back without touching the planner; the next pull puts it back", async () => {
+  const call = linked();
+  await call("syncTodos");
+  const t = await call("tickTodo", { id: "1" });
+  const start = call.fake.planner.calls.length;
+  later(call, 1);
+  const off = await asClaude(call, "undo", { logId: t.data.logId });
+  assert.deepEqual([off.ok, off.data.planner, off.data.todo.tickedBy, off.data.todo.done], [true, "pending", "", false]);
+  assert.deepEqual(call.fake.planner.calls.slice(start), [], "the connector never reaches the planner");
+  assert.deepEqual(owedOf(call), ["", "undo", "Not booked", "Not booked"]);
+  assert.equal((await owedNotes(call)).length, 1);
+  // Nor can it put the tick back.
+  const back = await asClaude(call, "undo", { logId: off.data.logId });
+  assert.deepEqual([back.ok, back.error], [false, "bad_input"]);
+  await forced(call);
+  assert.deepEqual(owedOf(call), ["", "", "", "Not booked"]);
+  assert.deepEqual(writes(call).slice(2).map((w) => (w.kind === "cell" ? w.value : w.values[2])), ["Not booked", "MAT app (Mo)"]);
+});
+
+test("post-deploy 1f: load and the actions never show an owed row as done, written or computed", async () => {
+  const { call, u } = await owed();
+  const keys = Object.keys(u.data.todo).sort();
+  const todo = (await call("load")).data.todos.find((t) => t.id === "1");
+  assert.deepEqual(Object.keys(todo).sort(), keys);
+  assert.deepEqual([todo.done, todo.plannerComputes, todo.status, todo.tickedBy], [false, false, "Not booked", ""]);
+  assert.equal(JSON.stringify(todo).includes("undo"), false);
+  assert.equal(JSON.stringify(u.data.todo).includes("undo"), false);
+  assert.equal(P.todoFromRow({ id: "1", item: "x", status: "Not booked", planner_written: "undo", planner_was: "Not booked" }).done, false);
+  assert.equal(P.todoFromRow({ id: "1", item: "x", status: "Not booked", planner_written: "undo" }).plannerComputes, false);
+});
+
+test("post-deploy 1: an owed put-back whose planner row now holds another item is dropped, nothing written", async () => {
+  const { call } = await owed();
+  call.fake.planner.cellFails = false;
+  call.fake.planner.tabs["Book Now"][3][1] = "Something else now";
+  await forced(call);
+  assert.deepEqual(owedOf(call).slice(0, 3), ["", "", ""]);
+  assert.equal(writes(call).length, 2);
+});
+
+// A cell an array formula placed elsewhere fills: a value, nothing entered in it.
+const withSpill = (call, cell = "E4") => { call.fake.planner.spilled["Book Now"] = { ...(call.fake.planner.spilled["Book Now"] || {}), [cell]: true }; };
+
+test("post-deploy 2: a tick on a spilled Status answers kept, saves formula and writes nothing", async () => {
+  const call = linked();
+  await call("syncTodos");
+  withSpill(call);
+  const t = await call("tickTodo", { id: "1" });
+  assert.equal(t.data.planner, "kept");
+  assert.deepEqual([stored(call, "1").planner_written, stored(call, "1").planner_was], ["formula", ""]);
+  assert.deepEqual(writes(call), []);
+  later(call, 1);
+  const u = await call("undo", { logId: t.data.logId });
+  assert.equal(u.data.planner, "kept");
+  assert.deepEqual(writes(call), [], "nor does its undo");
+});
+
+test("post-deploy 2: neither a stuck tick's retry nor an owed put-back writes over a spilled Status", async () => {
+  const s = await ticked((c) => { c.fake.planner.cellFails = true; });
+  withSpill(s.call);
+  await forced(s.call);
+  assert.deepEqual(writes(s.call), []);
+  assert.equal(stored(s.call, "1").planner_written, "formula");
+  const { call } = await owed();
+  call.fake.planner.cellFails = false;
+  withSpill(call);
+  await forced(call);
+  assert.equal(writes(call).length, 2);
+  assert.deepEqual(owedOf(call).slice(0, 3), ["", "", ""], "kept: nothing owed");
+});
+
+test("post-deploy 2: an undo of a written tick whose Status became spilled writes nothing", async () => {
+  const { call, logId } = await ticked();
+  withSpill(call);
+  later(call, 1);
+  const u = await call("undo", { logId });
+  assert.equal(u.data.planner, "kept");
+  assert.equal(writes(call).length, 2);
+});
+
+test("post-deploy 2: the fake's plain cell write clears that cell's formula, as Sheets does", () => {
+  const call = linked();
+  withFormula(call);
+  withFormula(call, "E5");
+  call.fake.world.plannerSetCell_("Book Now", "E4", "Booked");
+  assert.deepEqual(Object.keys(call.fake.planner.formulas["Book Now"]), ["E5"]);
 });

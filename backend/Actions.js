@@ -158,7 +158,7 @@ function dispatch_(body) {
   var ctx = { actor: body.actor, via: body.via === "claude" ? "claude" : "app", names: names };
   // Reads the planner first, then takes the lock itself.
   if (action === "syncPayments") return syncPayments_(ctx);
-  if (action === "syncTodos") return syncTodos_(args);
+  if (action === "syncTodos") return syncTodos_(args, ctx);
   // Fetching the day's rate can take a few seconds; do it before taking the lock.
   if (action === "addExpense") ctx.rate = getRate_();
   // A write's planner part (then_) runs after the app's lock is let go (R49).
@@ -846,7 +846,7 @@ function thenOutsideLock_(env) {
   }
 }
 
-function syncTodos_(args) {
+function syncTodos_(args, ctx) {
   if (args.force !== undefined && typeof args.force !== "boolean") return err_("bad_input", MSG_.badRequest);
   if (!plannerId_()) return err_("no_planner", MSG_.noPlanner);
   if (!todosReady_()) return err_("needs_migrate", MSG_.needsMigrate);
@@ -870,7 +870,7 @@ function syncTodos_(args) {
   }
   var read = todosFromRows(rows, tripYear_());
   if (read.missing) return refuse("planner_columns", read.missing);
-  var pulled = withLock_(function () { return pullTodos_(read); });
+  var pulled = withLock_(function () { return pullTodos_(read, ctx.actor); });
   if (!pulled.ok) return pulled;
 
   // The pull is complete once its row writes are: what the retries do never
@@ -880,10 +880,12 @@ function syncTodos_(args) {
     pulledAt = nowIso_();
     setProp_("TODOS_PULLED_AT", pulledAt);
   }
-  // Ticks the planner has not taken yet: two a pull, oldest tick first, going
-  // on each pull from after the last one tried (TODOS_RETRY_AFTER) and round
-  // to the start, so one that always fails starves no other. Each under the
-  // planner lock against a fresh read, then recorded under the app's lock.
+  // Ticks the planner has not taken yet, and undone ticks whose Booked it
+  // still holds (planner_written "undo"): two a pull, owed put-backs then
+  // the oldest tick first, going on each pull from after the last one tried
+  // (TODOS_RETRY_AFTER) and round to the start, so one that always fails
+  // starves no other. Each under the planner lock against a fresh read, then
+  // recorded under the app's lock.
   var queue = pulled.retry.slice().sort(function (a, b) { return a.key < b.key ? -1 : a.key > b.key ? 1 : 0; });
   var after = getProp_("TODOS_RETRY_AFTER") || "";
   var start = 0;
@@ -892,7 +894,8 @@ function syncTodos_(args) {
   queue.forEach(function (job) {
     setProp_("TODOS_RETRY_AFTER", job.key);
     try {
-      settleTick_(job.id, job.item, job.by, plannerTick_(job.id, job.item, job.by));
+      if (job.was !== undefined) settleUntick_(job.id, plannerUntick_(job.id, job.item, job.was, job.by));
+      else settleTick_(job.id, job.item, job.by, plannerTick_(job.id, job.item, job.by));
     } catch (e) {
       // Best effort (R45): the tick stands and a later pull tries again.
     }
@@ -901,8 +904,10 @@ function syncTodos_(args) {
 }
 
 // The pull's writes to the app's own Sheet, under its lock: read is
-// todosFromRows of the Book Now rows. -> { ok, more, problems, retry }.
-function pullTodos_(read) {
+// todosFromRows of the Book Now rows; by, who pulls (named in the Change Log
+// for a put-back whose undo the Log does not name).
+// -> { ok, more, problems, retry }.
+function pullTodos_(read, by) {
   var byId = {};
   todoRows_().forEach(function (r) { byId[cellText_(r.id)] = r; });
   var inPlanner = {};
@@ -917,6 +922,10 @@ function pullTodos_(read) {
       jobs.push({ add: cols });
       return;
     }
+    // An undone tick whose Booked the planner still holds: that Booked is the
+    // app's own, so the row keeps the status it had before the tick.
+    var owed = cellText_(r.planner_written) === "undo" && sameItem_(it.item, tickedItemOf_(r));
+    if (owed && it.status === "Booked") cols.status = cellText_(r.planner_was);
     var patch = {};
     Object.keys(cols).forEach(function (k) { if (cellDate_(r[k]) !== cols[k]) patch[k] = cols[k]; });
     if (cellText_(r.gone) === "yes") patch.gone = "";
@@ -929,6 +938,9 @@ function pullTodos_(read) {
       ["ticked_by", "ticked_at", "ticked_item", "planner_written", "planner_was", "claimed_by"].forEach(function (k) { patch[k] = ""; });
       takeoff = { old: bound, ticked: ticked, claimer: claimer, row: r };
       problems.push({ id: it.id, message: ticked && claimer !== "" ? MSG_.bothTakenOff : ticked ? MSG_.tickTakenOff : MSG_.claimTakenOff });
+    } else if (cellText_(r.planner_written) === "undo" && !owed) {
+      // Another item under this # now: the put-back was owed to the old one.
+      ["ticked_item", "planner_written", "planner_was"].forEach(function (k) { patch[k] = ""; });
     }
     if (Object.keys(patch).length) jobs.push({ id: it.id, patch: patch, takeoff: takeoff });
   });
@@ -955,13 +967,37 @@ function pullTodos_(read) {
   });
   if (writes) bumpRev_();
 
+  var undoers = null;
   var retry = todoRows_().filter(function (r) {
-    return cellText_(r.ticked_by) !== "" && cellText_(r.planner_written) === "" && cellText_(r.gone) !== "yes" && !isBooked(r.status);
+    if (cellText_(r.gone) === "yes") return false;
+    if (cellText_(r.planner_written) === "undo") return true;
+    return cellText_(r.ticked_by) !== "" && cellText_(r.planner_written) === "" && !isBooked(r.status);
   }).map(function (r) {
+    var id = cellText_(r.id);
+    if (cellText_(r.planner_written) === "undo") {
+      // An owed put-back (no tick time: before every tick), by whoever undid the tick.
+      if (!undoers) undoers = todoUndoers_();
+      return { id: id, item: tickedItemOf_(r), was: cellText_(r.planner_was), by: undoers[id] || by, key: "|" + id };
+    }
     // Oldest tick first; the key orders the retries and marks where they stopped.
-    return { id: cellText_(r.id), item: tickedItemOf_(r), by: cellText_(r.ticked_by), key: cellStamp_(r.ticked_at) + "|" + cellText_(r.id) };
+    return { id: id, item: tickedItemOf_(r), by: cellText_(r.ticked_by), key: cellStamp_(r.ticked_at) + "|" + id };
   });
   return { ok: true, more: more, problems: problems, retry: retry };
+}
+
+// Who last undid something on each item: { id: name }, from the Log.
+function todoUndoers_() {
+  var who = {};
+  var at = {};
+  logRows_().forEach(function (r) {
+    var id = cellText_(r.ref);
+    var n = Number(r.id);
+    if (cellText_(r.kind) === "todo" && cellText_(r.action) === "undo" && !(at[id] >= n)) {
+      at[id] = n;
+      who[id] = cellText_(r.who);
+    }
+  });
+  return who;
 }
 
 // The one History line for a tick or claim a pull took off. Not undoable.
@@ -989,7 +1025,8 @@ function plannerTodo_(bookRows, id, item) {
 // then appends one Change Log row; if the append fails, puts the old Status
 // back (best effort, and only while the cell still says what was just
 // written). Writes nothing when the Change Log has no header, nor when the
-// Status cell holds a formula (the planner computes it).
+// planner computes the Status cell (a formula in it or spilled into it, or
+// the check could not tell: plannerCellComputed_).
 // -> "written" | "pending" | "formula"
 function plannerWriteStatus_(logRows, found, to, why, actor) {
   var cell = colLetter(found.statusCol) + found.row;
@@ -999,7 +1036,7 @@ function plannerWriteStatus_(logRows, found, to, why, actor) {
     Why: why, "Proof / source": "MAT app History", "Verified?": "By " + actor,
   });
   if (!log) return "pending";
-  if (plannerCellFormula_(TODO_BOOK_TAB_, found.row, found.statusCol) !== "") return "formula";
+  if (plannerCellComputed_(TODO_BOOK_TAB_, found.row, found.statusCol)) return "formula";
   try {
     plannerSetCell_(TODO_BOOK_TAB_, cell, to);
   } catch (e) {
@@ -1071,20 +1108,20 @@ function settleTick_(id, item, by, out) {
   var rec;
   try {
     rec = withLock_(function () {
-    var row = findRow_("Todos", id);
-    var still = row && cellText_(row.ticked_by) !== "" && sameItem_(tickedItemOf_(row), item) && cellText_(row.gone) !== "yes";
-    if (!still) return { ok: true, revert: out.result === "written" };
-    if (out.result === "formula") {
-      updateById_("Todos", id, { planner_written: "formula", planner_was: "" });
-      bumpRev_();
-    } else if (out.result === "written") {
-      updateById_("Todos", id, { planner_written: "yes", planner_was: out.was, status: "Booked" });
-      bumpRev_();
-    } else if (cellText_(row.status) !== out.status) {
-      updateById_("Todos", id, { status: out.status });
-      bumpRev_();
-    }
-    return { ok: true, revert: false };
+      var row = findRow_("Todos", id);
+      var still = row && cellText_(row.ticked_by) !== "" && sameItem_(tickedItemOf_(row), item) && cellText_(row.gone) !== "yes";
+      if (!still) return { ok: true, revert: out.result === "written" };
+      if (out.result === "formula") {
+        updateById_("Todos", id, { planner_written: "formula", planner_was: "" });
+        bumpRev_();
+      } else if (out.result === "written") {
+        updateById_("Todos", id, { planner_written: "yes", planner_was: out.was, status: "Booked" });
+        bumpRev_();
+      } else if (cellText_(row.status) !== out.status) {
+        updateById_("Todos", id, { status: out.status });
+        bumpRev_();
+      }
+      return { ok: true, revert: false };
     });
   } catch (e) {
     // The recording threw. If it got as far as saying the planner was
@@ -1161,11 +1198,19 @@ function tickTodo_(args, ctx) {
   if (cur.done) return err_("bad_input", MSG_.todoDone);
   // The connector never makes a tick (R49 M1): a tick is what reaches the planner.
   if (ctx.via === "claude") return err_("bad_input", MSG_.claudeTick);
-  var row = updateById_("Todos", got.id, { ticked_by: ctx.actor, ticked_at: nowIso_(), ticked_item: cur.item });
+  var patch = { ticked_by: ctx.actor, ticked_at: nowIso_(), ticked_item: cur.item };
+  // The planner still holds the app's own Booked from before the undo:
+  // the tick has it already, nothing to write there.
+  var owed = cellText_(got.row.planner_written) === "undo";
+  if (owed) {
+    patch.planner_written = "yes";
+    patch.status = "Booked";
+  }
+  var row = updateById_("Todos", got.id, patch);
   var saved = todoFromRow(row);
   var log = appendLog_(ctx, "tick", "todo", got.id, summarize("tick", "todo", todoSnap_(cur, got.row), todoSnap_(saved, row)), todoSnap_(cur, got.row), todoSnap_(saved, row));
-  var env = ok_({ todo: saved, planner: "pending", logId: log.id }, bumpRev_());
-  env.then_ = function (e) { return afterTick_(e, got.id, cur.item, ctx.actor); };
+  var env = ok_({ todo: saved, planner: owed ? "kept" : "pending", logId: log.id }, bumpRev_());
+  if (!owed) env.then_ = function (e) { return afterTick_(e, got.id, cur.item, ctx.actor); };
   return env;
 }
 
@@ -1193,12 +1238,16 @@ function claimTodo_(args, ctx) {
 }
 
 // Undoing a tick or a claim puts back who was on it and who ticked it, under
-// the app's lock. A tick the planner took is then taken back out of it
-// (outside that lock, under the planner lock, and never through Claude);
-// undoing that undo ticks it again, written the same way. Names come from
-// the Log row: anyone not on the trip refuses the undo. planner: "written"
-// (the planner was changed back or forward), "kept" (nothing to do there, or
-// left alone on purpose), "pending" (the planner may still say Booked).
+// the app's lock. A tick the planner took is then owed back to it
+// (planner_written "undo", planner_was kept, the row showing planner_was)
+// and taken back out of it (outside that lock, under the planner lock, and
+// never through Claude: Claude's undo leaves it to the next pull); if that
+// does not go through it stays owed and a pull retries it. Undoing that
+// undo ticks it again, written the same way, or, while the put-back is
+// still owed, takes back the planner's Booked as it is. Names come from the
+// Log row: anyone not on the trip refuses the undo. planner: "written" (the
+// planner was changed back or forward), "kept" (nothing to do there, or left
+// alone on purpose), "pending" (the planner may still say Booked).
 function undoTodo_(entry, rows, ctx) {
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
   if (entry.action === "takeoff") return err_("stale", MSG_.cantUndo);
@@ -1209,6 +1258,7 @@ function undoTodo_(entry, rows, ctx) {
   if (!row) return err_("not_found", MSG_.noTodo);
   var cur = todoFromRow(row);
   var written = cellText_(row.planner_written) === "yes";
+  var owed = cellText_(row.planner_written) === "undo";
   var was = cellText_(row.planner_was);
   var boundItem = tickedItemOf_(row);
   var target = undoTarget(entry);
@@ -1222,9 +1272,16 @@ function undoTodo_(entry, rows, ctx) {
   // Nor does it put one back (R49 M1); taking one off is fine.
   if (retick && ctx.via === "claude") return err_("bad_input", MSG_.claudeRetick);
   var patch = { claimed_by: claimedBy, ticked_by: tickedBy, ticked_at: tickedAt, ticked_item: tickedBy === "" ? "" : tickedItem };
-  if (untick) {
+  if (untick && written) {
+    patch.planner_written = "undo";
+    patch.status = was;
+    patch.ticked_item = boundItem;
+  } else if (untick) {
     patch.planner_written = "";
     patch.planner_was = "";
+  } else if (retick && owed) {
+    patch.planner_written = "yes";
+    patch.status = "Booked";
   }
   var savedRow = updateById_("Todos", entry.ref, patch);
   var saved = todoFromRow(savedRow);
@@ -1233,7 +1290,15 @@ function undoTodo_(entry, rows, ctx) {
   var shown = logShape_(log);
   shown.canUndo = true;
   var env = ok_({ entry: shown, logId: log.id, todo: saved, planner: "kept" }, bumpRev_());
-  if (ctx.via === "claude") return env;
+  if (ctx.via === "claude") {
+    if (untick && written) {
+      // Still under the app's lock here: the note is written directly.
+      logOwed_(entry.ref, ctx);
+      env.data.planner = "pending";
+      env.rev = bumpRev_();
+    }
+    return env;
+  }
   if (untick && written) {
     env.data.planner = "pending";
     env.then_ = function (e) { return afterUntick_(e, entry.ref, boundItem, was, ctx.actor); };
@@ -1246,21 +1311,47 @@ function undoTodo_(entry, rows, ctx) {
 
 function afterUntick_(env, id, item, was, by) {
   var said = plannerUntick_(id, item, was, by);
-  if (said === "written") {
-    // The planner holds `was` again: so does the app, unless it was ticked again meanwhile.
-    withLock_(function () {
-      var row = findRow_("Todos", id);
-      if (row && cellText_(row.ticked_by) === "" && cellText_(row.status) !== was) {
-        updateById_("Todos", id, { status: was });
-        bumpRev_();
-      }
-      return { ok: true };
-    });
-  }
+  settleUntick_(id, said, { actor: by, via: "app" });
   env.data.planner = said;
   env.data.todo = todoFromRow(findRow_("Todos", id));
   env.rev = rev_();
   return env;
+}
+
+// Records what came of a put-back (plannerUntick_'s answer), under the app's
+// lock. Written or kept: nothing is owed any more. Pending: it stays owed. A
+// row ticked again while the put-back was on its way, which the put-back
+// reached: the planner no longer says Booked, so the tick is owed to it
+// instead (a stuck tick, retried by a pull). noteBy (the undo's ctx; not
+// for a retry): when it stays owed, History's one note says so.
+// -> "owed" | "settled" | "busy"
+function settleUntick_(id, said, noteBy) {
+  var out = withLock_(function () {
+    var row = findRow_("Todos", id);
+    var pw = row ? cellText_(row.planner_written) : "";
+    if (pw === "undo" && said !== "pending") {
+      updateById_("Todos", id, { ticked_item: "", planner_written: "", planner_was: "" });
+      bumpRev_();
+    } else if (pw === "yes" && said === "written") {
+      updateById_("Todos", id, { planner_written: "", planner_was: "", status: cellText_(row.planner_was) });
+      bumpRev_();
+    }
+    var owed = pw === "undo" && said === "pending";
+    if (owed && noteBy) {
+      logOwed_(id, noteBy);
+      bumpRev_();
+    }
+    return { ok: true, owed: owed };
+  });
+  if (!out || !out.ok) return "busy";
+  return out.owed ? "owed" : "settled";
+}
+
+// History's one note that an undone tick's Booked is still in the planner
+// and a pull will put it back. Not undoable. Under the app's lock (the
+// caller's).
+function logOwed_(id, ctx) {
+  appendLog_({ actor: ctx.actor, via: ctx.via }, "note", "planner", id, "The planner still says Booked for this one; the app will put it back at the next fetch.", null, null);
 }
 
 // ---- undo ----
