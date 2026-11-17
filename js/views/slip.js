@@ -15,6 +15,7 @@
 import { owedList, direct, routedVia, balances } from "../money.js";
 import { dollars, pt, dayHead, localDay } from "../format.js";
 import { paidStampSVG } from "../stamp.js";
+import { wetInk } from "../fx.js";
 import { thud } from "../sound.js";
 import { drawWorking, routeSentence } from "./working.js";
 import { copyText } from "../clip.js";
@@ -190,6 +191,7 @@ export function mountSlip(slip, store) {
     // Built only from numbers and constants (js/stamp.js), so innerHTML is safe.
     stamp.innerHTML = paidStampSVG(p.seed);
     spot.append(stamp);
+    if (hit) wetInk(stamp); // just landed: still wet (js/fx.js)
     row.append(left, spot);
     if (ui.rm === p.id) {
       const rm = el("div", "s-rm");
