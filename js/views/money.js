@@ -49,8 +49,8 @@ function isNewStamp(p, me, seenAt) {
   return !p.removed && !!p.stampedBy && p.stampedBy !== me && after(p.stampedAt, seenAt);
 }
 
-// "pre", then each trip day up to today (all of them after the trip), and any
-// later day that already has a line; oldest first.
+// Each trip day up to today (all of them after the trip) and any later day
+// that already has a line, newest first; then "pre", the oldest, at the bottom.
 function receiptDays(s, live, nowMs) {
   const today = tripDay(s.trip, nowMs);
   const dates = new Set();
@@ -58,7 +58,7 @@ function receiptDays(s, live, nowMs) {
     if (d.date && (today === "post" || (today !== "pre" && d.date <= today))) dates.add(d.date);
   }
   for (const e of live) if (e.day !== "pre") dates.add(e.day);
-  return ["pre", ...[...dates].sort()];
+  return [...[...dates].sort().reverse(), "pre"];
 }
 
 function drawLine(e, ctx) {
@@ -127,9 +127,10 @@ function drawReceipt(rc, s, live, ctx) {
     head.append(fresh);
   }
 
-  // Lines in the order they were added (the sort is stable).
-  const byAdded = live.slice().sort((a, b) => ((a.addedAt || "") < (b.addedAt || "") ? -1 : (a.addedAt || "") > (b.addedAt || "") ? 1 : 0));
-  const days = receiptDays(s, live, ctx.nowMs).map((day) => drawDay(day, byAdded.filter((e) => e.day === day), ctx));
+  // Newest line first. Sorted oldest first (the sort is stable) and then turned
+  // over, so lines with the same time also flip: a later Sheet row sits higher.
+  const newestFirst = live.slice().sort((a, b) => ((a.addedAt || "") < (b.addedAt || "") ? -1 : (a.addedAt || "") > (b.addedAt || "") ? 1 : 0)).reverse();
+  const days = receiptDays(s, live, ctx.nowMs).map((day) => drawDay(day, newestFirst.filter((e) => e.day === day), ctx));
 
   const totalYen = sum(live, jpyOf);
   const tot = el("div", "rc-tot");
