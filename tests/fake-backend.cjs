@@ -37,8 +37,11 @@
 // function (cell, value) => boolean), lockFails (the planner lock
 // can't be had), calls (every planner read or write, in order: { op, tab,
 // appLock, plannerLock }: whether the app's lock and the planner lock were
-// held at that moment), and between (test-only: a function run once, just
-// before the planner lock is taken: another hand editing the planner)),
+// held at that moment), between (test-only: a function run once, just
+// before the planner lock is taken: another hand editing the planner),
+// formulas and spilled ({ tab: { cell: ... } }: cells the planner computes,
+// by a formula in the cell or one spilled into it) and formulaFails (the
+// computed check's read fails)),
 // fake.tableReads
 // (readTable_ calls per tab).
 
@@ -104,7 +107,7 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   const planner = {
     rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0,
     tabs: copy((seed && seed.plannerTabs) || {}), writes: [], cellFails: false, appendFails: false,
-    lockFails: false, calls: [], between: null, formulas: {}, formulaFails: false,
+    lockFails: false, calls: [], between: null, formulas: {}, spilled: {}, formulaFails: false,
   };
   const held = { app: false, planner: false };
   const plannerCall = (op, tab, cell) => planner.calls.push({ op, tab, ...(cell ? { cell } : {}), appLock: held.app, plannerLock: held.planner });
@@ -261,27 +264,39 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       while (rows.length <= r) rows.push([]);
       while (rows[r].length <= col) rows[r].push("");
       rows[r][col] = value;
+      // A plain value entered in the cell replaces any formula it held, as Sheets does.
+      if (planner.formulas[tab]) delete planner.formulas[tab][cell];
       planner.writes.push({ kind: "cell", tab, cell, value: copy(value) });
     },
-    // Same as Env.js: the formula in a cell (row: the sheet's row number, col:
-    // 0-based) or "". A test makes one with planner.formulas[tab][cell] = "=...".
-    plannerCellFormula_(tab, row, col) {
-      plannerCall("formula", tab, P.colLetter(col) + row);
-      if (planner.fails || planner.formulaFails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
-      return ((planner.formulas[tab] || {})[P.colLetter(col) + row]) || "";
+    // Same as Env.js: whether the planner computes a cell (row: the sheet's
+    // row number, col: 0-based): a formula in it (planner.formulas[tab][cell]
+    // = "=..."), or a value spilled into it by an array formula placed
+    // elsewhere (planner.spilled[tab][cell] = true). A read that fails is
+    // unknown (null), as in Env.js: the app then writes nothing and retries.
+    plannerCellComputed_(tab, row, col) {
+      const cell = P.colLetter(col) + row;
+      plannerCall("formula", tab, cell);
+      if (planner.fails || planner.formulaFails) return null;
+      return Boolean((planner.formulas[tab] || {})[cell]) || Boolean((planner.spilled[tab] || {})[cell]);
     },
     // Same as Env.js: one row appended under the table whose header is
     // headerRow, as Sheets' own append with INSERT_ROWS does: a new row just
     // after the table's first run of filled rows below the header (so a blank
     // gap inside the sheet attracts it), inserted, never written over a row.
-    plannerAppendRow_(tab, headerRow, values) {
+    // Like Sheets, it writes from the first non-empty cell of the header row
+    // inside the given range, whatever column the range starts at.
+    plannerAppendRow_(tab, headerRow, firstCol, values) {
       plannerCall("append", tab);
       if (planner.appendFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
       const rows = planner.tabs[tab];
       let at = headerRow + 1;
       while (at <= rows.length && rows[at - 1] && rows[at - 1].some((c) => c !== "")) at++;
       while (rows.length < at - 1) rows.push([]);
-      rows.splice(at - 1, 0, copy(values));
+      const head = rows[headerRow - 1] || [];
+      let start = firstCol;
+      while (start <= firstCol + values.length - 1 && (head[start] === undefined || head[start] === "")) start++;
+      if (start > firstCol + values.length - 1) start = firstCol;
+      rows.splice(at - 1, 0, new Array(start).fill("").concat(copy(values)));
       planner.writes.push({ kind: "append", tab, headerRow, values: copy(values) });
     },
     // Same as Env.js: now in Toronto, "YYYY-MM-DD HH:MM ET", by this backend's clock.

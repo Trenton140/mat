@@ -146,20 +146,39 @@ function plannerSetCell_(tab, cell, value) {
   Sheets.Spreadsheets.Values.update({ values: [[value]] }, plannerId_(), plannerA1_(tab) + cell, { valueInputOption: "RAW" });
 }
 
-// The formula in one cell (row is the sheet's row number, col a 0-based
-// column) as text starting with "=", or "" for a plain cell. The planner is
-// read as values, so this is the only way to see a formula. Throws when it
-// cannot read.
-function plannerCellFormula_(tab, row, col) {
-  var got = Sheets.Spreadsheets.Values.get(plannerId_(), plannerA1_(tab) + colLetter(col) + row, { valueRenderOption: "FORMULA" });
-  var v = got && got.values && got.values[0] ? got.values[0][0] : "";
-  return typeof v === "string" && v.charAt(0) === "=" ? v : "";
+// Whether the planner computes one cell (row is the sheet's row number, col a
+// 0-based column), so the app must never write it: a formula entered in the
+// cell, or a value with nothing entered (spilled there by an array formula
+// placed elsewhere). An empty cell is not computed. -> true (computed) |
+// false (plain) | null (unknown: the read failed, or came back in a shape
+// not expected; write nothing and try again later).
+function plannerCellComputed_(tab, row, col) {
+  try {
+    var got = Sheets.Spreadsheets.get(plannerId_(), { ranges: [plannerA1_(tab) + colLetter(col) + row], fields: "sheets.data.rowData.values(userEnteredValue,effectiveValue)" });
+    var sheet = got && Array.isArray(got.sheets) ? got.sheets[0] : null;
+    var data = sheet && Array.isArray(sheet.data) ? sheet.data[0] : null;
+    if (!data || typeof data !== "object") return null;
+    if (data.rowData === undefined) return false;
+    if (!Array.isArray(data.rowData)) return null;
+    var first = data.rowData[0];
+    if (first === undefined || (first && first.values === undefined)) return false;
+    if (!first || !Array.isArray(first.values)) return null;
+    var cell = first.values[0];
+    if (cell === undefined) return false;
+    if (!cell || typeof cell !== "object") return null;
+    if (cell.userEnteredValue) return cell.userEnteredValue.formulaValue !== undefined;
+    return cell.effectiveValue !== undefined;
+  } catch (e) {
+    return null;
+  }
 }
 
 // Appends one row (RAW) under the table whose header is on row headerRow,
 // inserting a row for it. Throws when it cannot.
-function plannerAppendRow_(tab, headerRow, values) {
-  var range = plannerA1_(tab) + "A" + headerRow + ":" + colLetter(values.length - 1) + headerRow;
+// firstCol (0-based) is the table's first column: Sheets writes an append from
+// there, whatever the range starts at, so values must start at that column.
+function plannerAppendRow_(tab, headerRow, firstCol, values) {
+  var range = plannerA1_(tab) + colLetter(firstCol) + headerRow + ":" + colLetter(firstCol + values.length - 1) + headerRow;
   Sheets.Spreadsheets.Values.append({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" });
 }
 
