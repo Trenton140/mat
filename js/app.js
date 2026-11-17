@@ -22,7 +22,6 @@ import { mountNet } from "./views/net.js";
 import { mountTodos } from "./views/todos.js";
 import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
-import { fillScreen } from "./fill.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -477,6 +476,6 @@ function registerWorker() {
   }
 }
 
-fillScreen();
+// fillScreen() is off: on a real iPhone it pushed the bar past the bottom edge (2026-11-17).
 registerWorker();
 start();
