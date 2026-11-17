@@ -77,6 +77,7 @@ const MARKUP = `
   <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b id="setInviteV" aria-live="polite" data-w="Not copied">Copy</b></button>
   <button type="button" class="set-r" id="setClaude"><span>Claude link<small>Lets your Claude add stops and expenses. Keep it to yourself.</small></span><b id="setClaudeV" aria-live="polite" data-w="Not copied">Copy</b></button>
   <button type="button" class="set-r" id="setPlanner" hidden><span>Planner payments<small>Brings in what’s been paid from the planner sheet</small></span><b id="setPlannerV" aria-live="polite" data-w="Needs a look">Fetch</b></button>
+  <div class="set-pp" id="setPlannerP" hidden></div>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
   <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b id="setReportV" aria-live="polite" data-w="Not copied">Copy</b></button>
 </div>`;
@@ -112,6 +113,16 @@ export function plannerWord(r) {
   if (r.changed) return "Changed " + r.changed;
   if (Array.isArray(r.problems) && r.problems.length) return "Needs a look";
   return "Nothing new";
+}
+
+// The first line of a payment that was not brought in: "P011 · row 14 · Ryokan
+// deposit". Each part is left out when the backend had none.
+export function problemHead({ id, row, what } = {}) {
+  const parts = [];
+  if (typeof id === "string" && id !== "") parts.push(id);
+  if (typeof row === "number" && Number.isFinite(row)) parts.push("row " + row);
+  if (typeof what === "string" && what !== "") parts.push(what);
+  return parts.length ? parts.join(" · ") : "A payment row";
 }
 
 // "Sat Dec 12, 13:20", in the phone's own clock.
@@ -154,6 +165,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const demoDays = $("setDemoDays");
   const sheetLink = $("setSheet");
   const planner = $("setPlanner");
+  const plannerP = $("setPlannerP");
   const report = $("setReport");
   const install = $("setInstall");
   const installHow = $("setInstallHow");
@@ -255,6 +267,33 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     picRow.classList.toggle("has-pic", has);
   }
 
+  // The payments the last pull could not bring in, under the Planner payments
+  // row. Planner text is untrusted: textContent only. Redrawn only when the
+  // list changes, so a screen reader is not read it again on every store change.
+  let shownProblems = null;
+  function drawProblems(s) {
+    const pp = s.paymentProblems && typeof s.paymentProblems === "object" ? s.paymentProblems : {};
+    const list = Array.isArray(pp.list) ? pp.list : [];
+    const more = Number.isFinite(pp.more) && pp.more > 0 ? pp.more : 0;
+    const show = s.plannerLinked === true && list.length > 0;
+    const key = show ? JSON.stringify([pp.at, list, more]) : "";
+    plannerP.hidden = !show;
+    if (key === shownProblems) return;
+    shownProblems = key;
+    plannerP.replaceChildren();
+    if (!show) return;
+    const head = el("div", "set-pp-h", "Not brought in from the planner");
+    const at = Date.parse(pp.at || "");
+    if (Number.isFinite(at)) head.append(el("small", "", whenText(at)));
+    plannerP.append(head);
+    for (const p of list) {
+      const one = el("div", "set-pp-i");
+      one.append(el("div", "set-pp-w", problemHead(p)), el("div", "set-pp-m", typeof p.message === "string" ? p.message : ""));
+      plannerP.append(one);
+    }
+    if (more) plannerP.append(el("div", "set-pp-more", "and " + more + " more"));
+  }
+
   const freshWord = (s) => (s.loadedAt === null ? NOT_YET : freshText(s.loadedAt));
 
   function render(s) {
@@ -266,6 +305,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     setDemo(!demoDays.hidden);
     if (!fetching && !saying.has(fresh)) fresh.textContent = freshWord(s);
     planner.hidden = s.plannerLinked !== true;
+    drawProblems(s);
     const url = typeof s.sheetUrl === "string" && /^https?:\/\//i.test(s.sheetUrl) ? s.sheetUrl : "";
     sheetLink.hidden = !url;
     if (url) sheetLink.href = url;

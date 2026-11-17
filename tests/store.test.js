@@ -2379,8 +2379,9 @@ test("syncPayments pulls, reloads so the lines are there, says what came in, and
   assert.equal(p.store.state.plannerLinked, true);
   const before = p.store.state.expenses.length;
   const r = await p.store.syncPayments();
-  assert.deepEqual(r, { added: 2, changed: 0, same: 0, removed: 0, notCounted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in." }], more: false, capped: false });
-  assert.equal(p.store.state.notice, "Added 2 payments from the planner. 1 payment needs a look in the planner.");
+  assert.deepEqual(r, { added: 2, changed: 0, same: 0, removed: 0, notCounted: [], problems: [{ id: "P5", message: "Only payments split equally can be brought in.", row: 4, what: "Rail pass" }], more: false, capped: false });
+  assert.equal(p.store.state.notice, "Added 2 payments from the planner. 1 payment needs a look in the planner. See You for which.");
+  assert.deepEqual(p.store.state.paymentProblems.list, [{ id: "P5", message: "Only payments split equally can be brought in.", row: 4, what: "Rail pass" }], "the list comes in with the reload");
   assert.equal(p.store.state.expenses.length, before + 2);
   assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass" && e.amount === 221.52 && !e.pending));
   assert.equal(p.net.sent.filter((b) => b.action === "syncPayments").length, 1);
@@ -2388,7 +2389,7 @@ test("syncPayments pulls, reloads so the lines are there, says what came in, and
   assert.equal(JSON.stringify(p.storage.map.get("mat.cache")).includes(PLANNER_ID), false);
 
   await p.store.syncPayments();
-  assert.equal(p.store.state.notice, "Nothing new in the planner. 1 payment needs a look in the planner.");
+  assert.equal(p.store.state.notice, "Nothing new in the planner. 1 payment needs a look in the planner. See You for which.");
 });
 
 test("syncPayments: each sentence it says", async () => {
@@ -2399,11 +2400,11 @@ test("syncPayments: each sentence it says", async () => {
     [{ added: 0, changed: 1 }, "Changed 1 payment to match the planner."],
     [{ added: 0, changed: 4 }, "Changed 4 payments to match the planner."],
     [{ added: 2, changed: 1 }, "Added 2 and changed 1 to match the planner."],
-    [{ added: 1, changed: 0, problems: [{ id: "", message: "x" }] }, "Added 1 payment from the planner. 1 payment needs a look in the planner."],
-    [{ added: 0, changed: 0, problems: [{ id: "a", message: "x" }, { id: "b", message: "y" }] }, "Nothing new in the planner. 2 payments need a look in the planner."],
+    [{ added: 1, changed: 0, problems: [{ id: "", message: "x" }] }, "Added 1 payment from the planner. 1 payment needs a look in the planner. See You for which."],
+    [{ added: 0, changed: 0, problems: [{ id: "a", message: "x" }, { id: "b", message: "y" }] }, "Nothing new in the planner. 2 payments need a look in the planner. See You for which."],
     [{ added: 10, changed: 0, more: true }, "Added 10 payments from the planner. More to bring in: tap Fetch again."],
     [{ added: 0, changed: 0, capped: true }, "Nothing new in the planner. Only the first 300 payments were read."],
-    [{ added: 7, changed: 3, problems: [{ id: "a", message: "x" }], capped: true, more: true }, "Added 7 and changed 3 to match the planner. 1 payment needs a look in the planner. Only the first 300 payments were read. More to bring in: tap Fetch again."],
+    [{ added: 7, changed: 3, problems: [{ id: "a", message: "x" }], capped: true, more: true }, "Added 7 and changed 3 to match the planner. 1 payment needs a look in the planner. See You for which. Only the first 300 payments were read. More to bring in: tap Fetch again."],
   ];
   for (const [counts, said] of cases) {
     const p = phone({ seed: SEED });
@@ -2607,6 +2608,35 @@ test("autoPayments: brings new planner payments in, says so, and the lines are o
   assert.equal(p.store.state.notice, "Added 1 payment from the planner.");
   assert.ok(p.store.state.expenses.some((e) => e.title === "Rail pass"));
   assert.equal(p.store.state.paymentsPulledAt, new Date(NOW).toISOString(), "load carries when it last pulled");
+});
+
+test("paymentProblems arrives in state from load, and is empty when the backend has none", async () => {
+  const none = phone({ seed: SEED });
+  await none.store.boot();
+  assert.deepEqual(none.store.state.paymentProblems, { at: "", list: [], more: 0 });
+  const seeded = { at: "2026-12-12T01:00:00.000Z", list: [{ id: "Q1", message: "Why.", row: 9, what: "Thing" }], more: 2 };
+  const p = phone({ seed: { ...SEED, paymentProblems: seeded } });
+  await p.store.boot();
+  assert.deepEqual(p.store.state.paymentProblems, seeded);
+});
+
+test("autoPayments: a pull with only problems raises no notice, but the list is brought up to date", async () => {
+  const p = autoPhone({ planner: [PHEAD, prow({ ...PX7, split_type: "personal" })] });
+  await p.store.boot();
+  assert.deepEqual(p.store.state.paymentProblems.list, []);
+  const loads = p.net.sent.filter((b) => b.action === "load").length;
+  const r = await p.store.autoPayments();
+  assert.equal(r.added, 0);
+  assert.equal(r.problems.length, 1);
+  assert.equal(p.store.state.notice, null, "no notice");
+  assert.equal(p.net.sent.filter((b) => b.action === "load").length, loads + 1, "it reloads to get the list");
+  assert.deepEqual(p.store.state.paymentProblems.list.map((x) => [x.id, x.row, x.what]), [["X7", 2, "Rail pass"]]);
+  // The same problem on the next pull is not news: no reload.
+  p.at.ms += 10 * 60 * 1000;
+  const again = p.net.sent.filter((b) => b.action === "load").length;
+  await p.store.autoPayments();
+  assert.equal(p.net.sent.filter((b) => b.action === "load").length, again);
+  assert.equal(p.store.state.notice, null);
 });
 
 test("autoPayments: sooner than 10 minutes after a pull sends nothing; at 10 minutes it asks again", async () => {

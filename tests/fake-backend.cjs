@@ -8,7 +8,7 @@
 // seed = { expenses?, payments?, people?, days?, stops?, stays?, planner?,
 // plannerId? } (see constraints R6). planner: the planner sheet's Payments tab
 // as rows (row 1 its column names; null: the planner has no Payments tab);
-// plannerId: PLANNER_ID in Script Properties; missingColumns: ["Tab.column", ...]
+// plannerId: PLANNER_ID in Script Properties; paymentProblems: { at, list, more }, kept as PAYMENT_PROBLEMS; missingColumns: ["Tab.column", ...]
 // an older Sheet lacks until migrate (ensureColumns_) adds them; missingTabs:
 // ["Tab", ...] an older Sheet lacks altogether until migrate adds them;
 // plannerTabs: { "Book Now": rows, "Change Log": rows } the planner's other
@@ -106,6 +106,8 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
   if (seed && seed.plannerId) props.PLANNER_ID = seed.plannerId;
   // paymentsPulledAt: when the planner's payments were last pulled (as if a phone just had).
   if (seed && seed.paymentsPulledAt) props.PAYMENTS_PULLED_AT = seed.paymentsPulledAt;
+  // paymentProblems: the last pull's list as load hands it back ({ at, list, more }).
+  if (seed && seed.paymentProblems) props.PAYMENT_PROBLEMS = JSON.stringify(seed.paymentProblems);
   const planner = {
     rows: seed && seed.planner !== undefined ? copy(seed.planner) : [], fails: false, reads: 0,
     tabs: copy((seed && seed.plannerTabs) || {}), writes: [], cellFails: false, appendFails: false,

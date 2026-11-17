@@ -49,7 +49,7 @@ const TODO_PULLS = 4;
 
 // How often an open phone asks for the planner's payments on its own.
 const PAY_AUTO_MS = 10 * 60 * 1000;
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt"];
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt", "paymentProblems"];
 // Every kind of item the store keeps, the field it is found by and the flag
 // that marks it gone. Stays and day headers only ever change here through an
 // undo from History (their writes come in later tasks). A todo is an item
@@ -119,7 +119,7 @@ function plannerNotice(d) {
   else if (d.changed) said = "Changed " + d.changed + plural(d.changed, " payment", " payments") + " to match the planner.";
   else said = "Nothing new in the planner.";
   const bad = Array.isArray(d.problems) ? d.problems.length : 0;
-  if (bad) said += " " + bad + plural(bad, " payment needs a look in the planner.", " payments need a look in the planner.");
+  if (bad) said += " " + bad + plural(bad, " payment needs a look in the planner.", " payments need a look in the planner.") + " See You for which.";
   if (d.capped) said += " Only the first 300 payments were read.";
   if (d.more) said += " More to bring in: tap Fetch again.";
   return said;
@@ -158,7 +158,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "",
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "", paymentProblems: { at: "", list: [], more: 0 },
     loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
@@ -1107,10 +1107,14 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       if (d.skipped) return null;
       // Cut short (ten at a time): carry on at the next look, not in 10 minutes.
       if (d.more) autoAt = -Infinity;
-      if (d.added || d.changed) {
+      // The list under Planner payments on You: brought up to date when it differs, without a word.
+      const shown = (state.paymentProblems && state.paymentProblems.list) || [];
+      const key = (l) => l.slice(0, 20).map((x) => x.id + "|" + x.row + "|" + x.message).join("\n");
+      const stale = Array.isArray(d.problems) && (d.problems.length !== shown.length + ((state.paymentProblems && state.paymentProblems.more) || 0) || key(d.problems) !== key(shown));
+      if (d.added || d.changed || stale) {
         await refresh();
         // Never over something already being said (a failed save matters more).
-        if (!state.notice) state.notice = plannerNotice(d);
+        if (!state.notice && (d.added || d.changed)) state.notice = plannerNotice(d);
         changed();
       }
       return { added: d.added, changed: d.changed, same: d.same, removed: d.removed, notCounted: d.notCounted, problems: d.problems, more: !!d.more, capped: !!d.capped };
