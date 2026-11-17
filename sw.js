@@ -19,7 +19,7 @@
 //   script.googleusercontent.com), and anything else not listed here.
 // - Only OK answers are ever kept.
 
-const SW_VERSION = "3aee35c369";
+const SW_VERSION = "134b754512";
 const SHELL_CACHE = "mat-shell-" + SW_VERSION;
 const FONT_CACHE = "mat-fonts";
 
@@ -53,6 +53,7 @@ const SHELL = [
   "js/store.js",
   "js/time.js",
   "js/todos.js",
+  "js/update.js",
   "js/views/alldays.js",
   "js/views/days.js",
   "js/views/first.js",
@@ -85,14 +86,65 @@ self.addEventListener("install", (event) => {
   );
 });
 
+let wasUpdate = false;
 self.addEventListener("activate", (event) => {
+  const activated = new Promise((resolve) => {
+    const settle = () => (self.registration.active && self.registration.active.state === "activated" ? resolve() : setTimeout(settle, 50));
+    setTimeout(settle, 0);
+  });
   event.waitUntil(
     caches
       .keys()
-      .then((names) => Promise.all(names.filter((n) => n.startsWith("mat-shell-") && n !== SHELL_CACHE).map((n) => caches.delete(n))))
-      .then(() => self.clients.claim()),
+      .then((names) => {
+        const old = names.filter((n) => n.startsWith("mat-shell-") && n !== SHELL_CACHE);
+        return Promise.all(old.map((n) => caches.delete(n))).then(() => old.length > 0);
+      })
+      .then((updated) =>
+        self.clients.claim().then(() => {
+          wasUpdate = updated;
+        }),
+      ),
   );
+  // Only once this worker is fully in charge: a page that reloads sooner
+  // would wait for the worker, and the worker for the page.
+  activated.then(() => {
+    if (wasUpdate) tellPages();
+  });
 });
+
+// This worker replaced an older one: every open page is on the old version.
+// Each is asked to reload itself when nothing would be lost (js/update.js
+// answers). A page that does not answer is from before pages knew how, and
+// is reloaded from here.
+const PAGE_ANSWER_MS = 2500;
+function tellPages() {
+  return self.clients
+    .matchAll({ type: "window" })
+    .then((pages) => Promise.all(pages.map(tellPage)))
+    .catch(() => {});
+}
+function tellPage(page) {
+  return new Promise((resolve) => {
+    let answered = false;
+    try {
+      const channel = new MessageChannel();
+      channel.port1.onmessage = () => {
+        answered = true;
+        resolve();
+      };
+      page.postMessage({ type: "mat-new-version" }, [channel.port2]);
+    } catch (e) {
+      // no answer will come: reloaded below
+    }
+    setTimeout(() => {
+      if (answered) return;
+      Promise.resolve()
+        .then(() => (typeof page.navigate === "function" ? page.navigate(page.url) : null))
+        .catch(() => {})
+        .then(resolve);
+    }, PAGE_ANSWER_MS);
+  });
+}
 
 // An answer for a font that could not be fetched: empty, so the page falls
 // back to the system faces without an error.

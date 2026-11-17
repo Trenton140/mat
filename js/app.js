@@ -22,6 +22,7 @@ import { mountNet } from "./views/net.js";
 import { mountTodos } from "./views/todos.js";
 import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
+import { createUpdater } from "./update.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -444,7 +445,11 @@ function start() {
   if (connected) store.boot().then(() => {
     todos.wake();
     store.autoPayments();
+    // History is fetched quietly, so it opens at once (it then keeps itself up to date).
+    if (store.state.status === "ready") store.loadHistory();
   });
+  // A new release reloads the page only when nothing would be lost (js/update.js).
+  nothingUnsent = () => store.outbox().unsent === 0;
   if (document.visibilityState !== "hidden") startChecking();
 }
 
@@ -454,13 +459,57 @@ function start() {
 // An app on the Home Screen often comes back without loading again, so the
 // worker is also asked to look for a new version whenever the app comes back
 // on screen. Registered before start(), so a broken start still gets fixed.
+// A new release loads on its own (js/update.js). Safe to reload: no sheet,
+// register or History open, nothing being typed, nothing still to send.
+let nothingUnsent = () => true;
+function safeToReload() {
+  const phone = document.getElementById("phone");
+  if (!phone || /(^|\s)[a-z]+-open(\s|$)/.test(phone.className)) return false;
+  const at = document.activeElement;
+  if (at && /^(INPUT|TEXTAREA|SELECT)$/.test(at.tagName)) return false;
+  return nothingUnsent();
+}
+let sessionStore = null;
+try {
+  sessionStore = window.sessionStorage;
+} catch {
+  sessionStore = null;
+}
+const updater = createUpdater({
+  isSafe: safeToReload,
+  reload: () => location.reload(),
+  storage: { getItem: (k) => (sessionStore ? sessionStore.getItem(k) : null), setItem: (k, v) => { if (sessionStore) sessionStore.setItem(k, v); } },
+});
+// How often an open app asks whether a new release is out.
+const UPDATE_LOOK_MS = 10 * 60 * 1000;
+
 function registerWorker() {
   try {
     if (!("serviceWorker" in navigator)) return;
+    // The worker says a new version has taken over: answer (so it leaves the
+    // reloading to this page) and reload when safe.
+    navigator.serviceWorker.addEventListener("message", (ev) => {
+      if (!ev.data || ev.data.type !== "mat-new-version") return;
+      try {
+        if (ev.ports && ev.ports[0]) ev.ports[0].postMessage("ok");
+      } catch {
+        // the worker reloads the page itself
+      }
+      updater.newVersion();
+    });
+    document.addEventListener("visibilitychange", () => updater.check());
     let registration = null;
     Promise.resolve(navigator.serviceWorker.register("sw.js"))
       .then((r) => {
         registration = r || null;
+        setInterval(() => {
+          if (document.visibilityState === "hidden" || !registration || typeof registration.update !== "function") return;
+          try {
+            Promise.resolve(registration.update()).catch(() => {});
+          } catch {
+            // the next look asks again
+          }
+        }, UPDATE_LOOK_MS);
       })
       .catch(() => {});
     document.addEventListener("visibilitychange", () => {
