@@ -175,8 +175,10 @@ function plannerCellComputed_(tab, row, col) {
 
 // Appends one row (RAW) under the table whose header is on row headerRow,
 // inserting a row for it. Throws when it cannot.
-function plannerAppendRow_(tab, headerRow, values) {
-  var range = plannerA1_(tab) + "A" + headerRow + ":" + colLetter(values.length - 1) + headerRow;
+// firstCol (0-based) is the table's first column: Sheets writes an append from
+// there, whatever the range starts at, so values must start at that column.
+function plannerAppendRow_(tab, headerRow, firstCol, values) {
+  var range = plannerA1_(tab) + colLetter(firstCol) + headerRow + ":" + colLetter(firstCol + values.length - 1) + headerRow;
   Sheets.Spreadsheets.Values.append({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" });
 }
 

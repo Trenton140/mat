@@ -122,12 +122,23 @@ test("a todo is done when its status starts with the word booked, or someone tic
 
 test("changeLogRow: the header found below a title, # one above the largest whole number, columns it lacks skipped", () => {
   const fields = { "Date / time": "2026-11-20 10:00 ET", "Agent / session": "MAT app (Mo)", Tab: "Book Now", "Cell(s)": "E4", Item: "x", "Old value": "(empty)", "New value": "Booked", Why: "w", "Proof / source": "MAT app History", "Verified?": "By Mo" };
-  assert.deepEqual(P.changeLogRow(LOG, fields), { headerRow: 2, values: [8, "2026-11-20 10:00 ET", "MAT app (Mo)", "Book Now", "E4", "x", "(empty)", "Booked", "w", "MAT app History", "By Mo"] });
+  assert.deepEqual(P.changeLogRow(LOG, fields), { headerRow: 2, firstCol: 0, values: [8, "2026-11-20 10:00 ET", "MAT app (Mo)", "Book Now", "E4", "x", "(empty)", "Booked", "w", "MAT app History", "By Mo"] });
   const small = P.changeLogRow([["Old value", "#", "New value", " TAB ", "Extra"]], fields);
-  assert.deepEqual(small, { headerRow: 1, values: ["(empty)", "", "Booked", "Book Now", ""] }, "no number in the column: # left blank, never a guessed 1");
+  assert.deepEqual(small, { headerRow: 1, firstCol: 0, values: ["(empty)", "", "Booked", "Book Now", ""] }, "no number in the column: # left blank, never a guessed 1");
   assert.equal(P.changeLogRow([["#", "Tab", "Old value"]], fields), null);
   assert.equal(P.changeLogRow([], fields), null);
   assert.equal(P.changeLogRow(null, fields), null);
+});
+
+test("changeLogRow: firstCol and values run from the table's first to last header cell, with or without a blank margin column", () => {
+  const fields = { "Date / time": "D", Item: "I", "Verified?": "V" };
+  const a = P.changeLogRow(LOG, fields);
+  assert.equal(a.firstCol, 0);
+  assert.equal(a.values.length, CHEAD.length);
+  const margin = P.changeLogRow([["Change log"], ["", ...CHEAD, ""], ["", 44, "x"]], fields);
+  assert.equal(margin.headerRow, 2);
+  assert.equal(margin.firstCol, 1);
+  assert.deepEqual(margin.values, [45, "D", "", "", "", "I", "", "", "", "", "V"], "no leading or trailing padding");
 });
 
 test("colLetter names a column the way A1 addresses do", () => {
@@ -1162,9 +1173,60 @@ test("round 4: a Change Log row someone adds between the app's read and its appe
   assert.deepEqual(call.fake.planner.writes.filter((w) => w.kind === "append").map((w) => [w.tab, w.headerRow]), [["Change Log", 2]]);
 });
 
+// The real Change Log: its table starts in column B, column A is an empty margin.
+const MHEAD = ["", ...CHEAD, ""];
+const MLOG = [["Change log"], MHEAD, ["", 43, "2026-11-01 10:00 ET", "Planner chat", "Book Now", "E5", "Tea", "(empty)", "Pending", "w", "", ""], ["", 44, "2026-11-02 09:00 ET", "Planner chat", "Payments", "C2", "x", "a", "b", "", "", ""]];
+
+function assertAligned(row, n, who, why) {
+  assert.equal(row[0] === undefined || row[0] === "", true, "column A stays empty");
+  assert.equal(row[1], n, "# in column B");
+  assert.match(row[2], /^2026-11-20 \d\d:\d\d ET$/, "date in column C");
+  assert.equal(row[3], "MAT app (" + who + ")");
+  assert.equal(row[4], "Book Now");
+  assert.equal(row[5], "E4");
+  assert.equal(row[6], "Rail pass reservation");
+  assert.equal(row[9], why);
+  assert.equal(row[11], "By " + who, "last value under Verified?");
+  assert.equal(row.length <= 12, true, "nothing in column M or beyond");
+}
+
+test("Change Log aligned: a tick writes the # in column B when the table starts in B; the undo's row aligns too", async () => {
+  const call = linked({ log: MLOG });
+  await call("syncTodos");
+  const t = await call("tickTodo", { id: "1" });
+  const rows = call.fake.planner.tabs["Change Log"];
+  assert.equal(rows.length, MLOG.length + 1);
+  assertAligned(rows[MLOG.length], 45, "Mo", "Ticked off in the MAT app");
+  later(call, 2);
+  const u = await call("undo", { logId: t.data.logId }, "Ajen");
+  assert.equal(u.data.planner, "written");
+  assert.equal(rows.length, MLOG.length + 2);
+  assertAligned(rows[MLOG.length + 1], 46, "Ajen", "Tick undone in the MAT app");
+});
+
+test("Change Log aligned: two ticks in a row get consecutive # numbers (44, 45, 46)", async () => {
+  const call = linked({ log: MLOG });
+  await call("syncTodos");
+  await call("tickTodo", { id: "1" });
+  await call("tickTodo", { id: "2" });
+  const rows = call.fake.planner.tabs["Change Log"];
+  assert.deepEqual(rows.slice(MLOG.length - 1).map((r) => r[1]), [44, 45, 46]);
+});
+
+test("Change Log aligned: a table starting in column A is still aligned", async () => {
+  const call = linked();
+  await call("syncTodos");
+  await call("tickTodo", { id: "1" });
+  const row = call.fake.planner.tabs["Change Log"][LOG.length];
+  assert.equal(row[0], 8);
+  assert.match(row[1], /^2026-11-20/);
+  assert.equal(row[10], "By Mo");
+  assert.equal(row.length, 11);
+});
+
 test("round 4: the fake's append adds a row and never replaces one, as Sheets' own append does", () => {
   const call = linked({ log: [LOG[0], CHEAD, LOG[2], [], LOG[3]] });
-  call.fake.world.plannerAppendRow_("Change Log", 2, ["new"]);
+  call.fake.world.plannerAppendRow_("Change Log", 2, 0, ["new"]);
   const rows = call.fake.planner.tabs["Change Log"];
   assert.equal(rows.length, 6);
   assert.deepEqual([rows[2], rows[3], rows[5]], [LOG[2], ["new"], LOG[3]], "the gap takes it, nothing is overwritten");

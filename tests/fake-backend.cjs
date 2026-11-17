@@ -283,14 +283,20 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     // headerRow, as Sheets' own append with INSERT_ROWS does: a new row just
     // after the table's first run of filled rows below the header (so a blank
     // gap inside the sheet attracts it), inserted, never written over a row.
-    plannerAppendRow_(tab, headerRow, values) {
+    // Like Sheets, it writes from the first non-empty cell of the header row
+    // inside the given range, whatever column the range starts at.
+    plannerAppendRow_(tab, headerRow, firstCol, values) {
       plannerCall("append", tab);
       if (planner.appendFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
       const rows = planner.tabs[tab];
       let at = headerRow + 1;
       while (at <= rows.length && rows[at - 1] && rows[at - 1].some((c) => c !== "")) at++;
       while (rows.length < at - 1) rows.push([]);
-      rows.splice(at - 1, 0, copy(values));
+      const head = rows[headerRow - 1] || [];
+      let start = firstCol;
+      while (start <= firstCol + values.length - 1 && (head[start] === undefined || head[start] === "")) start++;
+      if (start > firstCol + values.length - 1) start = firstCol;
+      rows.splice(at - 1, 0, new Array(start).fill("").concat(copy(values)));
       planner.writes.push({ kind: "append", tab, headerRow, values: copy(values) });
     },
     // Same as Env.js: now in Toronto, "YYYY-MM-DD HH:MM ET", by this backend's clock.

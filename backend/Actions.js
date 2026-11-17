@@ -1045,7 +1045,7 @@ function plannerWriteStatus_(logRows, found, to, why, actor) {
     return "pending";
   }
   try {
-    plannerAppendRow_(TODO_LOG_TAB_, log.headerRow, log.values);
+    plannerAppendRow_(TODO_LOG_TAB_, log.headerRow, log.firstCol, log.values);
   } catch (e) {
     try {
       var again = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), found.id, found.item);

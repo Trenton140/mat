@@ -1104,7 +1104,8 @@ function colLetter(i) {
 // above the largest whole number in that column, or blank when it has none
 // (never a guessed 1); a column the log lacks is
 // skipped, one this does not fill is left blank. -> { headerRow (1-based),
-// values } | null when there is no tab or no row with #, Tab, Old value and
+// firstCol (0-based: the table's first non-empty header cell, which Sheets'
+// append writes from), values (first to last non-empty header cell) } | null when there is no tab or no row with #, Tab, Old value and
 // New value.
 function changeLogRow(rows, fields) {
   var list = Array.isArray(rows) ? rows : [];
@@ -1119,11 +1120,15 @@ function changeLogRow(rows, fields) {
   }
   var named = {};
   Object.keys(fields).forEach(function (k) { named[k.trim().toLowerCase()] = fields[k]; });
-  var values = head.map(function (name, c) {
-    if (c === numCol) return max === null ? "" : max + 1;
-    return Object.prototype.hasOwnProperty.call(named, name) ? named[name] : "";
-  });
-  return { headerRow: h + 1, values: values };
+  var firstCol = -1, lastCol = -1;
+  head.forEach(function (name, c) { if (name !== "") { if (firstCol === -1) firstCol = c; lastCol = c; } });
+  var values = [];
+  for (var c = firstCol; c <= lastCol; c++) {
+    var name = head[c];
+    if (c === numCol) values.push(max === null ? "" : max + 1);
+    else values.push(Object.prototype.hasOwnProperty.call(named, name) ? named[name] : "");
+  }
+  return { headerRow: h + 1, firstCol: firstCol, values: values };
 }
 
 if (typeof module !== "undefined") {
