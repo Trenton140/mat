@@ -107,6 +107,7 @@ function mountTabs(store, storage) {
   const shownHooks = []; // called with the tab's name each time a tab is shown
 
   function showTab(t, remember = true) {
+    const changed = t !== tab;
     tab = t;
     for (const b of nav.querySelectorAll("button[data-tab]")) {
       const on = b.dataset.tab === t;
@@ -118,7 +119,8 @@ function mountTabs(store, storage) {
       view.classList.toggle("is-active", name === t);
       view.inert = name !== t;
     }
-    for (const f of shownHooks) f(t);
+    // The hooks are for arriving: a tap on the tab already showing leaves it as it is.
+    if (changed) for (const f of shownHooks) f(t);
     // The Before tab comes and goes with the list: it is never what the app opens on.
     if (!remember || t === "before") return;
     const trip = store.state.trip;
@@ -296,11 +298,17 @@ function start() {
   const todos = mountTodos(document.getElementById("vBefore"), store, {
     clock,
     onState: ({ show, open }) => {
+      // A hidden button cannot keep focus: if it has it, Days takes it.
+      const hadFocus = !show && document.activeElement === beforeBtn;
       beforeBtn.hidden = !show;
       beforeN.hidden = !show || open < 1;
       beforeN.textContent = open > 0 ? String(open) : "";
       beforeBtn.setAttribute("aria-label", tabName(open));
       if (!show && tabs.tab() === "before") tabs.showTab("days", false);
+      if (hadFocus) {
+        const daysBtn = document.querySelector('#nav button[data-tab="days"]');
+        if (daysBtn) daysBtn.focus({ preventScroll: true });
+      }
     },
   });
   // Showing the tab folds the done group and fetches quietly if the list is an hour old.

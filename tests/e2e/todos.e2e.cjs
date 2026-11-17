@@ -715,3 +715,71 @@ module.exports.push({
     assert.ok(gap >= 0, "the foot ends " + gap + " px above the bar");
   },
 });
+
+// Two-digit counts: about 18 open items is the real list; 99 is the most the pill is asked to hold.
+const manyItems = (n) => Array.from({ length: n }, (_, i) => ({ "#": i + 1, Item: "Made-up booking " + (i + 1), "Book by": "2026-12-0" + ((i % 9) + 1), Status: "Not booked" }));
+
+for (const [n, widths] of [[18, [320, 360, 375, 380, 390, 430]], [99, [320, 390]]]) {
+  for (const width of widths) {
+    module.exports.push({
+      name: "the bar with " + n + " open items at " + width + " px: one line, no overlap, nothing clipped, the pill reads " + n,
+      viewport: { width, height: 760 },
+      async run({ page }) {
+        await ready(page, { items: manyItems(n), go: false });
+        await until(() => tabIsIn(page), "the Before tab is in the bar");
+        // The planner read stops short of 99 rows: put the number on the pill itself (it is the pill's room under test).
+        if (n === 99) await page.evaluate(() => { document.getElementById("beforeN").textContent = "99"; });
+        for (const tab of ["days", "before"]) {
+          await page.click('#nav button[data-tab="' + tab + '"]');
+          if (n === 99) await page.evaluate(() => { document.getElementById("beforeN").textContent = "99"; });
+          const shape = await barShape(page);
+          assert.deepEqual(shape.overlap, [], "overlap on " + tab);
+          assert.equal(shape.oneLine, true, "one line");
+          assert.equal(shape.inside, true, "inside the bar");
+          assert.equal(shape.tall, true, "44 px tall");
+          assert.deepEqual(shape.clipped, [], "clipped text");
+          assert.equal(shape.pageWide, true, "the page is not wider than the screen");
+          assert.equal(shape.names.length, 5);
+          const more = await page.evaluate(() => {
+            const nav = document.getElementById("nav");
+            const bad = [...nav.querySelectorAll("*")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth).map((e) => e.id || e.className || e.tagName);
+            return { bad, navScroll: nav.scrollWidth, navClient: nav.clientWidth, pill: document.getElementById("beforeN").textContent };
+          });
+          assert.deepEqual(more.bad, [], "scrollWidth over clientWidth");
+          assert.equal(more.navScroll, more.navClient, "the bar does not scroll sideways");
+          assert.equal(more.pill, String(n));
+        }
+      },
+    });
+  }
+}
+
+module.exports.push({
+  name: "tapping the Before tab while on it does nothing: the done group stays open and no extra fetch goes out",
+  async run({ page }) {
+    const backend = await ready(page);
+    await page.click("#bwDoneB");
+    await until(() => visible(page, "#bwDone"), "the done group opens");
+    const before = sent(backend, "syncTodos").length;
+    await page.click('#nav button[data-tab="before"]');
+    await page.waitForTimeout(300);
+    assert.equal(await visible(page, "#bwDone"), true, "still open");
+    assert.equal(sent(backend, "syncTodos").length, before, "no extra syncTodos");
+  },
+});
+
+module.exports.push({
+  name: "the Before tab goes while focus is on it: focus moves to the Days tab",
+  async run({ page }) {
+    // During the trip the tab is only there while something is open.
+    const backend = await ready(page, { nowMs: NOON12, items: [ITEMS[1], ITEMS[4]] });
+    await page.focus('#nav button[data-tab="before"]');
+    assert.equal(await page.evaluate(() => document.activeElement.dataset.tab), "before");
+    assert.equal((await backend.call("tickTodo", { id: "2" }, "Ajen")).ok, true, "ticked on another phone");
+    await advance(page, backend, 31 * 1000);
+    await page.evaluate(() => window.__matTest.store.checkRev());
+    await advance(page, backend, 1700);
+    await until(async () => !(await tabIsIn(page)), "the tab goes");
+    assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.tab), "days", "focus is on Days, not the body");
+  },
+});
