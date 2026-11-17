@@ -169,7 +169,7 @@ test("tools/list names the twelve tools in order, each schema listing its own ar
   assert.deepEqual(props.add_expense, ["amount", "currency", "day", "kind", "note", "paid_by", "split", "title"]);
   assert.deepEqual(props.add_stop, ["booked", "date", "detail", "fixed", "getting_there", "link", "note", "photo", "place", "sign_jp", "time", "title", "travel_min"]);
   assert.deepEqual(props.change_stop, [...props.add_stop, "id"].sort());
-  assert.deepEqual(props.save_stay, ["address_jp", "first_night", "id", "last_night", "link", "name", "name_jp", "note", "place"]);
+  assert.deepEqual(props.save_stay, ["address_jp", "first_night", "id", "last_night", "link", "name", "name_jp", "note", "photo", "place"]);
   assert.deepEqual(props.set_day, ["city", "date", "from_en", "from_jp", "line_colour", "line_en", "line_jp", "title", "to_en", "to_jp"]);
   assert.deepEqual(props.undo, ["log_id"]);
   assert.deepEqual(props.sync_payments, []);
@@ -569,6 +569,15 @@ test("save_stay with an id changes only the fields given; an empty string clears
   const cleared = ok(fake, "save_stay", { id: s.id, note: "" }).stay;
   assert.deepEqual([cleared.note, cleared.addressJp, cleared.lastNight], ["", "京都市東山区", "2026-12-16"]);
   assert.equal(fake.tables.Log.at(-1).via, "claude");
+});
+
+test("save_stay takes a photo; a change without it keeps it, an empty string clears it", () => {
+  const fake = createFakeBackend(plan);
+  const s = ok(fake, "save_stay", { name: "Inn", first_night: "2026-12-14", last_night: "2026-12-14", photo: "https://example.org/a.jpg" }).stay;
+  assert.equal(s.photo, "https://example.org/a.jpg");
+  assert.equal(ok(fake, "save_stay", { id: s.id, note: "x" }).stay.photo, "https://example.org/a.jpg");
+  assert.equal(refusal(fake, "save_stay", { id: s.id, photo: "http://example.org/a.jpg" }), "That photo link has to start with https://.");
+  assert.equal(ok(fake, "save_stay", { id: s.id, photo: "" }).stay.photo, "");
 });
 
 test("save_stay: an id that names no stay is refused, a deleted stay is not revived, and without an id the three are needed", () => {

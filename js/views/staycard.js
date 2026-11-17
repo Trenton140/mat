@@ -7,7 +7,8 @@
 // with no signal; nothing is fetched. It redraws on every store change while
 // open, and closes itself when its stay is gone. The name and the address are
 // large, in Japanese when there is Japanese; under them ここまでお願いします
-// (Please take me here.), the note, a map link and the booking link. Text from
+// (Please take me here.), the note, a map link and the booking link. A stay's optional photo comes
+// first, as a stop's does on its ticket. Text from
 // the Sheet goes in with textContent; a link only through safeHref.
 
 import { safeHref, stayMapsUrl } from "../plan.js";
@@ -33,9 +34,26 @@ function link(cls, text, href) {
   return a;
 }
 
+// A photo address that failed to load is not drawn again (this visit).
+const failedPhotos = new Set();
+
 // The card's contents for one stay.
 function card(stay) {
   const nodes = [];
+  const photo = safeHref(stay.photo);
+  if (photo && !failedPhotos.has(photo)) {
+    const img = el("img", "sy-ph");
+    img.alt = "";
+    img.loading = "lazy";
+    img.decoding = "async";
+    img.referrerPolicy = "no-referrer";
+    img.addEventListener("error", () => {
+      failedPhotos.add(photo);
+      img.remove();
+    }, { once: true });
+    img.src = photo;
+    nodes.push(img);
+  }
   const jp = str(stay.nameJp);
   const en = str(stay.name);
   const big = jp || en;

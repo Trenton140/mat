@@ -401,7 +401,7 @@ test("a Date time cell on Apps Script is read in the script's zone, and a second
 
 test("validateStay", () => {
   const stay = { id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12" };
-  assert.deepEqual(P.validateStay(stay).value, { ...stay, nameJp: "", addressJp: "", note: "", place: "", link: "" });
+  assert.deepEqual(P.validateStay(stay).value, { ...stay, nameJp: "", addressJp: "", note: "", place: "", link: "", photo: "" });
   assert.equal(P.validateStay({ ...stay, lastNight: "2026-12-09" }).message, "The last night can’t be before the first.");
   assert.equal(P.validateStay({ ...stay, name: "" }).message, "Say where you’re staying.");
   assert.equal(P.validateStay({ ...stay, link: "javascript:x" }).message, "That link has to start with https://.");
@@ -410,6 +410,28 @@ test("validateStay", () => {
   assert.equal(P.validateStay({ ...stay, name: "x".repeat(81) }).message, "Keep the name under 80 letters.");
   assert.equal(P.validateStay({ ...stay, nameJp: "x".repeat(81) }).message, "Keep the Japanese name under 80 letters.");
   assert.equal(P.validateStay({ ...stay, addressJp: "x".repeat(201) }).message, "Keep the address under 200 letters.");
+});
+test("validateStay: an optional https photo, like a stop's", () => {
+  const stay = { id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12" };
+  assert.equal(P.validateStay({ ...stay, photo: "https://example.org/a.jpg" }).value.photo, "https://example.org/a.jpg");
+  assert.equal(P.validateStay(stay).value.photo, "");
+  const msg = "That photo link has to start with https://.";
+  assert.equal(P.validateStay({ ...stay, photo: "http://example.org/a.jpg" }).message, msg);
+  assert.equal(P.validateStay({ ...stay, photo: "javascript:alert(1)" }).message, msg);
+  assert.equal(P.validateStay({ ...stay, photo: 5 }).message, msg);
+  assert.equal(P.validateStay({ ...stay, photo: 5 }).message, P.validateStay({ ...stay, photo: "x" }).message);
+  assert.equal(P.validateStay({ ...stay, link: 5 }).ok, false, "a non-string link is refused too");
+});
+test("stay photo: column after link, read through safeUrl, written by stayToRow", () => {
+  const t = P.TABS.Stays;
+  assert.equal(t[t.indexOf("link") + 1], "photo");
+  assert.equal(t[t.length - 1], "deleted_at");
+  assert.equal(P.isTextColumn("Stays", "photo"), P.isTextColumn("Stops", "photo"));
+  assert.equal(P.stayFromRow({ id: "s", photo: "https://example.org/a.jpg" }).photo, "https://example.org/a.jpg");
+  for (const bad of ["=HYPERLINK(\"https://example.org/a.jpg\")", "http://example.org/a.jpg", "javascript:x", undefined]) {
+    assert.equal(P.stayFromRow({ id: "s", photo: bad }).photo, "", String(bad));
+  }
+  assert.equal(P.stayToRow({ id: "s", photo: "https://example.org/a.jpg" }).photo, "https://example.org/a.jpg");
 });
 test("stay rows round-trip and read safely", () => {
   const stay = P.validateStay({ id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12", link: "https://x.test" }).value;

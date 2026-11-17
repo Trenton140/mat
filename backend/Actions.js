@@ -77,7 +77,7 @@ function planKind_(kind) {
   if (kind === "stay") {
     return {
       tab: "Stays", key: "id", deletable: true, fromRow: stayFromRow, toRow: stayToRow, missing: MSG_.noStay,
-      fields: ["name", "nameJp", "addressJp", "firstNight", "lastNight", "note", "place", "link"],
+      fields: ["name", "nameJp", "addressJp", "firstNight", "lastNight", "note", "place", "link", "photo"],
     };
   }
   if (kind === "day") return { tab: "Days", key: "date", deletable: false, fromRow: dayFromRow, toRow: dayToRow, missing: MSG_.noDay, fields: DAY_PATCH_KEYS };
@@ -746,6 +746,8 @@ function saveStay_(args, ctx) {
   }
   var v = validateStay(input);
   if (!v.ok) return err_("bad_input", v.message);
+  // An older Sheet has no photo column until migrate: refuse a photo rather than drop it.
+  if (v.value.photo !== "" && !hasColumn_("Stays", "photo")) return err_("needs_migrate", MSG_.needsMigrate);
   var row = findPlanRow_(plan, v.value.id);
   if (!row) return addPlanItem_("stay", v.value, ctx);
   var cur = plan.fromRow(row);

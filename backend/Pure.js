@@ -6,7 +6,7 @@ var TABS = {
   People: ["name", "initials", "order", "etransfer", "simplify", "email", "photo"],
   Days: ["date", "city", "title", "line_jp", "line_en", "line_colour", "from_jp", "from_en", "to_jp", "to_en"],
   Stops: ["id", "date", "time", "title", "detail", "getting_there", "travel_min", "fixed", "place", "sign_jp", "booked", "link", "photo", "note", "deleted_at"],
-  Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "deleted_at"],
+  Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "photo", "deleted_at"],
   Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at", "planner_id"],
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
@@ -204,6 +204,21 @@ function safeUrl(v) {
   return t.length <= 500 && /^https?:\/\/\S+$/i.test(t) ? t : "";
 }
 
+// A picture address has to be https (a stop's photo is only checked as a link;
+// a stay's is held to the https the message promises).
+function safeHttpsUrl(v) {
+  var u = safeUrl(v);
+  return /^https:/i.test(u) ? u : "";
+}
+
+function optPhoto_(v, message) {
+  if (v === undefined || v === null) return { ok: true, value: "" };
+  if (typeof v !== "string") return fail_(message);
+  if (v.trim() === "") return { ok: true, value: "" };
+  var u = safeHttpsUrl(v);
+  return u ? { ok: true, value: u } : fail_(message);
+}
+
 function dayLabel(date) {
   var s = String(date);
   if (!DAY_RE_.test(s) || !realDay_(s)) return s;
@@ -300,9 +315,11 @@ function validateStay(input) {
   if (!place.ok) return place;
   var link = optLink_(input.link, "That link has to start with https://.");
   if (!link.ok) return link;
+  var photo = optPhoto_(input.photo, "That photo link has to start with https://.");
+  if (!photo.ok) return photo;
   return {
     ok: true,
-    value: { id: input.id, name: name, nameJp: nameJp.value, addressJp: addressJp.value, firstNight: input.firstNight, lastNight: input.lastNight, note: note.value, place: place.value, link: link.value },
+    value: { id: input.id, name: name, nameJp: nameJp.value, addressJp: addressJp.value, firstNight: input.firstNight, lastNight: input.lastNight, note: note.value, place: place.value, link: link.value, photo: photo.value },
   };
 }
 
@@ -462,6 +479,7 @@ function stayFromRow(o) {
     note: cellText_(o.note),
     place: cellText_(o.place),
     link: safeUrl(cellText_(o.link)),
+    photo: safeHttpsUrl(cellText_(o.photo)),
     deleted: cellSet_(o.deleted_at),
   };
 }
@@ -549,6 +567,7 @@ function stayToRow(s) {
   put_(o, "note", s.note);
   put_(o, "place", s.place);
   put_(o, "link", s.link);
+  put_(o, "photo", s.photo);
   return o;
 }
 
@@ -1132,5 +1151,5 @@ function changeLogRow(rows, fields) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow };
 }

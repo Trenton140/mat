@@ -894,7 +894,7 @@ test("saveStay without merge replaces the whole stay, as the app sends it", asyn
   const full = { id: "stayAAAA0001", name: "Ryokan", nameJp: "旅館", addressJp: "京都", firstNight: "2026-12-14", lastNight: "2026-12-15", note: "late", place: "Gion", link: "https://example.test/r" };
   await call("saveStay", { stay: full });
   const r = await call("saveStay", { stay: { id: full.id, name: "Ryokan", firstNight: "2026-12-14", lastNight: "2026-12-16" } });
-  assert.deepEqual(r.data.stay, { id: full.id, name: "Ryokan", nameJp: "", addressJp: "", firstNight: "2026-12-14", lastNight: "2026-12-16", note: "", place: "", link: "", deleted: false });
+  assert.deepEqual(r.data.stay, { id: full.id, name: "Ryokan", nameJp: "", addressJp: "", firstNight: "2026-12-14", lastNight: "2026-12-16", note: "", place: "", link: "", photo: "", deleted: false });
   const fresh = await call("saveStay", { stay: { id: "stayAAAA0002", name: "Inn", firstNight: "2026-12-17", lastNight: "2026-12-17" } });
   assert.equal(fresh.data.stay.id, "stayAAAA0002", "an unknown id is a new stay");
   assert.equal((await call("saveStay", { stay: { id: full.id, name: "Ryokan", firstNight: "2026-12-16", lastNight: "2026-12-14" } })).message, "The last night can’t be before the first.");
@@ -907,7 +907,7 @@ test("saveStay with merge: true lays the given fields over the row as it is unde
   await call("saveStay", { stay: { ...full, note: "phone B edit" } }, AS("Ajen")); // just before Claude's call
   const m = await call("saveStay", { stay: { id: full.id, lastNight: "2026-12-16" }, merge: true });
   assert.equal(m.ok, true, JSON.stringify(m));
-  assert.deepEqual(m.data.stay, { ...full, note: "phone B edit", lastNight: "2026-12-16", deleted: false });
+  assert.deepEqual(m.data.stay, { ...full, photo: "", note: "phone B edit", lastNight: "2026-12-16", deleted: false });
   const log = call.fake.tables.Log.at(-1);
   const before = JSON.parse(log.before), after = JSON.parse(log.after);
   assert.deepEqual(Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k])), ["lastNight"]);
@@ -920,6 +920,78 @@ test("saveStay with merge: true lays the given fields over the row as it is unde
   assert.equal((await call("saveStay", { stay: { id: full.id, note: "" }, merge: true })).data.stay.note, "");
   assert.equal((await call("saveStay", { stay: { id: full.id, lastNight: "2026-12-01" }, merge: true })).message, "The last night can’t be before the first.");
   assert.equal((await call("saveStay", { stay: { id: full.id, link: "javascript:1" }, merge: true })).message, "That link has to start with https://.");
+});
+
+const SPIC = "https://example.org/a.jpg";
+const SPIC2 = "https://example.org/b.jpg";
+const stayFull = () => ({ id: "stayAAAA0001", name: "Ryokan", nameJp: "旅館", addressJp: "京都", firstNight: "2026-12-14", lastNight: "2026-12-15", note: "orig", place: "Gion", link: "https://example.test/r" });
+const stayPhoto = async (call) => (await call("load")).data.stays[0].photo;
+
+test("a stay saved with a photo carries it through load", async () => {
+  const call = client({});
+  const r = await call("saveStay", { stay: { ...stayFull(), photo: SPIC } });
+  assert.equal(r.data.stay.photo, SPIC);
+  assert.equal(await stayPhoto(call), SPIC);
+  assert.equal(call.fake.tables.Stays[0].photo, SPIC);
+});
+
+test("saveStay merge keeps, sets and clears the photo", async () => {
+  const call = client({});
+  await call("saveStay", { stay: { ...stayFull(), photo: SPIC } });
+  const keep = await call("saveStay", { stay: { id: "stayAAAA0001", link: "https://example.test/other" }, merge: true });
+  assert.equal(keep.ok, true, JSON.stringify(keep));
+  assert.equal(keep.data.stay.photo, SPIC, "a merge without photo keeps it");
+  const set = await call("saveStay", { stay: { id: "stayAAAA0001", photo: SPIC2 }, merge: true });
+  assert.deepEqual(set.data.stay, { ...stayFull(), link: "https://example.test/other", photo: SPIC2, deleted: false });
+  const clear = await call("saveStay", { stay: { id: "stayAAAA0001", photo: "" }, merge: true });
+  assert.equal(clear.data.stay.photo, "");
+  assert.equal(await stayPhoto(call), "");
+  assert.equal((await call("saveStay", { stay: { id: "stayAAAA0001", photo: "http://example.org/a.jpg" }, merge: true })).message, "That photo link has to start with https://.");
+});
+
+test("a Sheet row whose photo cell is not an https link loads as no photo", async () => {
+  const call = client({});
+  await call("saveStay", { stay: { ...stayFull(), photo: SPIC } });
+  for (const bad of ['=HYPERLINK("https://example.org/a.jpg")', "http://example.org/a.jpg"]) {
+    call.fake.tables.Stays[0].photo = bad;
+    assert.equal(await stayPhoto(call), "", bad);
+  }
+});
+
+test("undo of a photo change puts the old photo back; the History sentence is the usual one", async () => {
+  const call = client({});
+  await call("saveStay", { stay: { ...stayFull(), photo: SPIC } });
+  const c = await call("saveStay", { stay: { id: "stayAAAA0001", photo: SPIC2 }, merge: true });
+  assert.equal(await stayPhoto(call), SPIC2);
+  const entry = (await historyAll(call)).find((e) => e.id === c.data.logId);
+  assert.equal(entry.summary, "changed the stay Ryokan");
+  const u = await call("undo", { logId: c.data.logId });
+  assert.equal(u.ok, true, JSON.stringify(u));
+  assert.equal(await stayPhoto(call), SPIC);
+  const r = await call("saveStay", { stay: { id: "stayAAAA0001", photo: "" }, merge: true });
+  await call("undo", { logId: r.data.logId });
+  assert.equal(await stayPhoto(call), SPIC, "a removed photo comes back too");
+});
+
+test("an older Sheet with no Stays.photo: stays load with no photo, a photo is refused until migrate, other saves still work", async () => {
+  const call = client({ missingColumns: ["Stays.photo"] });
+  const ok = await call("saveStay", { stay: stayFull() });
+  assert.equal(ok.ok, true, JSON.stringify(ok));
+  assert.equal(await stayPhoto(call), "");
+  const logs = call.fake.tables.Log.length;
+  const early = await call("saveStay", { stay: { ...stayFull(), photo: SPIC } });
+  assert.deepEqual([early.ok, early.error, early.message], [false, "needs_migrate", "The trip sheet needs updating first. Ask Mo to run migrate."]);
+  const earlyMerge = await call("saveStay", { stay: { id: "stayAAAA0001", photo: SPIC }, merge: true });
+  assert.equal(earlyMerge.error, "needs_migrate");
+  const earlyNew = await call("saveStay", { stay: { ...stayFull(), id: "stayAAAA0002", photo: SPIC } });
+  assert.equal(earlyNew.error, "needs_migrate");
+  assert.equal(call.fake.tables.Log.length, logs, "nothing logged, nothing half-saved");
+  assert.equal(call.fake.tables.Stays.length, 1);
+  assert.equal((await call("saveStay", { stay: { ...stayFull(), note: "edited" } })).ok, true, "a save without a photo keeps working");
+  assert.equal((await call("saveStay", { stay: { ...stayFull(), photo: "" , note: "again" } })).ok, true, "an empty photo is not a photo");
+  assert.deepEqual((await call.fake({ key: KEY, action: "migrate", args: {} })).data, { added: ["Stays.photo"] });
+  assert.equal((await call("saveStay", { stay: { ...stayFull(), note: "again", photo: SPIC } })).ok, true);
+  assert.equal(await stayPhoto(call), SPIC);
 });
 
 test("saveStay with merge: true never makes or revives a stay, and merge must be true or false", async () => {

@@ -406,7 +406,7 @@ function mcpSaveStay_(args, who) {
   if (args.id === undefined) {
     ["name", "first_night", "last_night"].forEach(function (k) { if (args[k] === undefined) mcpBad_(k + " is missing."); });
   }
-  ["name", "first_night", "last_night", "name_jp", "address_jp", "note", "place", "link"].forEach(function (k) {
+  ["name", "first_night", "last_night", "name_jp", "address_jp", "note", "place", "link", "photo"].forEach(function (k) {
     if (args[k] !== undefined) stay[mcpCamel_(k)] = args[k];
   });
   var request = { stay: stay };
@@ -532,6 +532,7 @@ function mcpTools_() {
         note: arg("string", "A note, under 300 letters."),
         place: arg("string", "A place name or a Google Maps link."),
         link: arg("string", "A https:// link, such as the booking."),
+        photo: arg("string", "A https:// link to a photo."),
       },
       run: mcpSaveStay_,
     },
