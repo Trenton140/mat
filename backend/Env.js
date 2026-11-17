@@ -149,26 +149,27 @@ function plannerSetCell_(tab, cell, value) {
 // Whether the planner computes one cell (row is the sheet's row number, col a
 // 0-based column), so the app must never write it: a formula entered in the
 // cell, or a value with nothing entered (spilled there by an array formula
-// placed elsewhere). An empty cell is not computed. A read that fails, or
-// comes back in a shape not expected, counts as computed: write nothing.
+// placed elsewhere). An empty cell is not computed. -> true (computed) |
+// false (plain) | null (unknown: the read failed, or came back in a shape
+// not expected; write nothing and try again later).
 function plannerCellComputed_(tab, row, col) {
   try {
     var got = Sheets.Spreadsheets.get(plannerId_(), { ranges: [plannerA1_(tab) + colLetter(col) + row], fields: "sheets.data.rowData.values(userEnteredValue,effectiveValue)" });
     var sheet = got && Array.isArray(got.sheets) ? got.sheets[0] : null;
     var data = sheet && Array.isArray(sheet.data) ? sheet.data[0] : null;
-    if (!data || typeof data !== "object") return true;
+    if (!data || typeof data !== "object") return null;
     if (data.rowData === undefined) return false;
-    if (!Array.isArray(data.rowData)) return true;
+    if (!Array.isArray(data.rowData)) return null;
     var first = data.rowData[0];
     if (first === undefined || (first && first.values === undefined)) return false;
-    if (!first || !Array.isArray(first.values)) return true;
+    if (!first || !Array.isArray(first.values)) return null;
     var cell = first.values[0];
     if (cell === undefined) return false;
-    if (!cell || typeof cell !== "object") return true;
+    if (!cell || typeof cell !== "object") return null;
     if (cell.userEnteredValue) return cell.userEnteredValue.formulaValue !== undefined;
     return cell.effectiveValue !== undefined;
   } catch (e) {
-    return true;
+    return null;
   }
 }
 

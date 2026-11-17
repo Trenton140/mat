@@ -1089,14 +1089,46 @@ test("final 2: a put-back never writes over a formula either", async () => {
   assert.equal(writes(call).length, 2, "only the tick's own two writes");
 });
 
-test("post-deploy 2: a Status cell that cannot be checked counts as computed: kept, formula, nothing written", async () => {
+test("correction: a Status cell that cannot be checked leaves the tick pending, nothing written, no formula note; the next pull writes it", async () => {
   const call = linked();
   await call("syncTodos");
   call.fake.planner.formulaFails = true;
   const t = await call("tickTodo", { id: "1" });
-  assert.equal(t.data.planner, "kept");
+  assert.equal(t.data.planner, "pending");
+  assert.equal(stored(call, "1").planner_written, "");
+  assert.deepEqual(writes(call), []);
+  assert.equal((await history(call)).filter((e) => e.summary === FORMULA_LINE).length, 0);
+  await forced(call);
+  assert.deepEqual([stored(call, "1").planner_written, writes(call)], ["", []], "a pull's retry leaves it as it was");
+  call.fake.planner.formulaFails = false;
+  await forced(call);
+  assert.deepEqual([stored(call, "1").planner_written, stored(call, "1").planner_was, bookStatus(call)], ["yes", "Not booked", "Booked"]);
+  assert.equal(writes(call).length, 2);
+});
+
+test("correction: a tick left pending by an unknown check settles as formula once a working read shows a computed cell", async () => {
+  const call = linked();
+  await call("syncTodos");
+  call.fake.planner.formulaFails = true;
+  await call("tickTodo", { id: "1" });
+  call.fake.planner.formulaFails = false;
+  withSpill(call);
+  await forced(call);
   assert.equal(stored(call, "1").planner_written, "formula");
   assert.deepEqual(writes(call), []);
+  assert.equal((await history(call)).filter((e) => e.summary === FORMULA_LINE).length, 1);
+});
+
+test("correction: an undo whose check is unknown stays owed with its note; the next pull puts it back", async () => {
+  const { call, u } = await owed((c) => { c.fake.planner.formulaFails = true; });
+  assert.equal(u.data.planner, "pending");
+  assert.deepEqual(owedOf(call), ["", "undo", "Not booked", "Not booked"]);
+  assert.equal((await owedNotes(call)).length, 1);
+  assert.equal(writes(call).length, 2);
+  call.fake.planner.formulaFails = false;
+  await forced(call);
+  assert.deepEqual(owedOf(call), ["", "", "", "Not booked"]);
+  assert.deepEqual(writes(call).slice(2).map((w) => (w.kind === "cell" ? w.value : w.values[8])), ["Not booked", "Tick undone in the MAT app"]);
 });
 
 test("final 3: a failed Change Log append puts the old Status back only while the cell still says what the app wrote", async () => {

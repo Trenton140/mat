@@ -102,7 +102,11 @@ function checkPlannerTodos_() {
       // (or are filled by one placed elsewhere).
       var formulas = 0;
       try {
-        read.items.forEach(function (it) { if (plannerCellComputed_("Book Now", it.row, it.statusCol)) formulas++; });
+        read.items.forEach(function (it) {
+          var computed = plannerCellComputed_("Book Now", it.row, it.statusCol);
+          if (computed === null) throw new Error("unknown"); // a cell it could not tell: no count
+          if (computed) formulas++;
+        });
         Logger.log("Book Now: " + formulas + " Status cells are formulas (the app leaves those alone).");
       } catch (e2) {
         Logger.log("Book Now: couldn’t check its Status cells for formulas.");

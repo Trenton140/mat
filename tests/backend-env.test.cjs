@@ -263,12 +263,12 @@ test("plannerCellComputed_: a formula in the cell or a value spilled into it is 
   assert.deepEqual(JSON.parse(JSON.stringify(w.asked[0])), [PLANNER_ID, { ranges: ["'Book Now'!E4"], fields: "sheets.data.rowData.values(userEnteredValue,effectiveValue)" }]);
 });
 
-test("plannerCellComputed_: a read that fails or comes back in an unexpected shape counts as computed", () => {
+test("plannerCellComputed_: a read that fails or comes back in an unexpected shape is unknown (null), neither computed nor plain", () => {
   const fails = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), cells: () => { throw new Error("quota"); } });
-  assert.equal(fails.ctx.plannerCellComputed_("Book Now", 4, 4), true);
+  assert.equal(fails.ctx.plannerCellComputed_("Book Now", 4, 4), null);
   for (const odd of [null, {}, { sheets: [] }, { sheets: [{}] }, { sheets: [{ data: [] }] }, { sheets: [{ data: [{ rowData: "x" }] }] }, { sheets: [{ data: [{ rowData: [{ values: ["x"] }] }] }] }]) {
     const w = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), cells: () => odd });
-    assert.equal(w.ctx.plannerCellComputed_("Book Now", 4, 4), true, JSON.stringify(odd));
+    assert.equal(w.ctx.plannerCellComputed_("Book Now", 4, 4), null, JSON.stringify(odd));
   }
 });
 
@@ -283,4 +283,8 @@ test("checkPlanner counts the Status cells that are formulas or spilled, with no
   assert.ok(two.logged.includes("Book Now: 2 Status cells are formulas (the app leaves those alone)."), two.logged.join("|"));
   assert.equal(two.logged.join("\n").includes("=1+1"), false);
   assert.equal(two.logged.join("\n").includes("Secret spill"), false);
+  const unknown = mk({ D4: { sheets: [] } });
+  unknown.ctx.checkPlanner();
+  assert.ok(unknown.logged.includes("Book Now: couldn’t check its Status cells for formulas."), unknown.logged.join("|"));
+  assert.equal(unknown.logged.some((l) => l.includes("Status cells are formulas (")), false);
 });

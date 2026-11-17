@@ -1025,8 +1025,8 @@ function plannerTodo_(bookRows, id, item) {
 // then appends one Change Log row; if the append fails, puts the old Status
 // back (best effort, and only while the cell still says what was just
 // written). Writes nothing when the Change Log has no header, nor when the
-// planner computes the Status cell (a formula in it or spilled into it, or
-// the check could not tell: plannerCellComputed_).
+// planner computes the Status cell (a formula in it or spilled into it:
+// "formula"), nor when the check could not tell ("pending": retried).
 // -> "written" | "pending" | "formula"
 function plannerWriteStatus_(logRows, found, to, why, actor) {
   var cell = colLetter(found.statusCol) + found.row;
@@ -1036,7 +1036,9 @@ function plannerWriteStatus_(logRows, found, to, why, actor) {
     Why: why, "Proof / source": "MAT app History", "Verified?": "By " + actor,
   });
   if (!log) return "pending";
-  if (plannerCellComputed_(TODO_BOOK_TAB_, found.row, found.statusCol)) return "formula";
+  var computed = plannerCellComputed_(TODO_BOOK_TAB_, found.row, found.statusCol);
+  if (computed === null) return "pending"; // could not tell: write nothing, try again later
+  if (computed) return "formula";
   try {
     plannerSetCell_(TODO_BOOK_TAB_, cell, to);
   } catch (e) {

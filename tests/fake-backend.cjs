@@ -271,12 +271,12 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     // Same as Env.js: whether the planner computes a cell (row: the sheet's
     // row number, col: 0-based): a formula in it (planner.formulas[tab][cell]
     // = "=..."), or a value spilled into it by an array formula placed
-    // elsewhere (planner.spilled[tab][cell] = true). A read that fails counts
-    // as computed, as in Env.js: the app then writes nothing.
+    // elsewhere (planner.spilled[tab][cell] = true). A read that fails is
+    // unknown (null), as in Env.js: the app then writes nothing and retries.
     plannerCellComputed_(tab, row, col) {
       const cell = P.colLetter(col) + row;
       plannerCall("formula", tab, cell);
-      if (planner.fails || planner.formulaFails) return true;
+      if (planner.fails || planner.formulaFails) return null;
       return Boolean((planner.formulas[tab] || {})[cell]) || Boolean((planner.spilled[tab] || {})[cell]);
     },
     // Same as Env.js: one row appended under the table whose header is
