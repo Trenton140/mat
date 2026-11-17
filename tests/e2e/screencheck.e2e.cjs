@@ -1,48 +1,89 @@
-// Screen check: holding "Report a problem" for a second shows what the phone
-// reports and six marks; a tap goes to page 2, another closes it and puts the
-// page back. An ordinary tap still copies the note.
+// Screen check (under You): try each way of reaching the bottom of the
+// screen on this phone and keep the one that works (js/fit.js). The phone
+// here is told 878 of a 956-point screen, as Mo's iPhone is.
 
 const assert = require("node:assert/strict");
 const { SEED, NOON12, open, until } = require("./helpers.cjs");
 
+const SHORT = { width: 440, height: 878 };
+const SCREEN = { width: 440, height: 956 };
+const drawn = (page) => until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0), "the receipt draws");
+const openCheck = async (page) => {
+  await page.click("#youBtn");
+  await until(() => page.evaluate(() => document.getElementById("phone").classList.contains("you-open")), "You is open");
+  await page.evaluate(() => document.getElementById("setScreen").scrollIntoView({ block: "center" }));
+  await page.click("#setScreen");
+  await until(() => page.evaluate(() => !!document.getElementById("screenCheck")), "the check opens");
+};
+const look = (page) => page.evaluate(() => {
+  const root = document.documentElement;
+  const r = (sel) => Math.round(document.querySelector(sel).getBoundingClientRect().bottom);
+  return { cls: root.className.trim(), full: root.style.getPropertyValue("--full-h"), phone: r("#phone"), nav: r(".nav"), fixed: getComputedStyle(document.body).position, kept: localStorage.getItem("mat.fit") };
+});
+const tap = (page, fit) => page.click('#screenCheck button[data-fit="' + fit + '"]');
+
 module.exports = [
   {
-    name: "held for a second it opens; two taps close it and the page is as it was",
+    name: "Screen check closes You and shows a panel at the top with the five ways and Done; the app shows under it",
+    viewport: SHORT,
+    screen: SCREEN,
     async run({ page }) {
       await open(page, { seed: SEED, nowMs: NOON12 });
-      await until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0), "the receipt draws");
-      await page.click("#youBtn");
-      await until(() => page.evaluate(() => { const r = document.getElementById("setReport"); return r && r.getBoundingClientRect().height > 0; }), "You is open");
-      const before = await page.evaluate(() => [document.documentElement.getAttribute("style") || "", document.body.getAttribute("style") || ""]);
-      await page.evaluate(() => document.getElementById("setReport").scrollIntoView({ block: "center" }));
-      await page.dispatchEvent("#setReport", "pointerdown");
-      await page.clock.runFor(1000);
-      await until(() => page.evaluate(() => !!document.getElementById("screenCheck")), "the check opens");
-      await page.dispatchEvent("#setReport", "pointerup");
-      const seen = await page.evaluate(() => ({ marks: [...document.querySelectorAll("#screenCheck [data-mark]")].map((m) => m.dataset.mark).join(""), text: document.querySelector("#screenCheck > div").textContent }));
-      assert.equal(seen.marks, "ABCDEF");
-      assert.match(seen.text, /Screen check 1 of 2/);
-      assert.match(seen.text, /inner 390 x 844/);
-      assert.match(seen.text, /inset top 0 · bottom 0/);
-      await page.click("#screenCheck");
-      assert.match(await page.evaluate(() => document.querySelector("#screenCheck > div").textContent), /Screen check 2 of 2/);
-      await page.click("#screenCheck");
-      assert.equal(await page.evaluate(() => !!document.getElementById("screenCheck")), false);
-      assert.deepEqual(await page.evaluate(() => [document.documentElement.getAttribute("style") || "", document.body.getAttribute("style") || ""]), before);
+      await drawn(page);
+      await openCheck(page);
+      assert.equal(await page.evaluate(() => document.getElementById("phone").classList.contains("you-open")), false, "You is closed so the bar can be seen");
+      assert.deepEqual(await page.$$eval("#screenCheck button", (bs) => bs.map((b) => b.textContent)), ["Now", "A", "B", "C", "D", "Done"]);
+      assert.equal(await page.getAttribute('#screenCheck button[data-fit=""]', "aria-pressed"), "true");
+      const box = await page.evaluate(() => { const r = document.getElementById("screenCheck").getBoundingClientRect(); return { top: r.top, bottom: r.bottom, w: r.width }; });
+      assert.ok(box.bottom < 440, "the panel stays in the top half: " + JSON.stringify(box));
+      assert.match(await page.evaluate(() => document.getElementById("screenCheck").textContent), /screen 440 x 956 · inner 440 x 878/);
+      assert.deepEqual(await look(page), { cls: "", full: "", phone: 878, nav: 878, fixed: "static", kept: null });
     },
   },
   {
-    name: "a short press does not open it",
+    name: "each way is applied the moment it is tapped, never pins the page, and is remembered across a reload",
+    viewport: SHORT,
+    screen: SCREEN,
     async run({ page }) {
       await open(page, { seed: SEED, nowMs: NOON12 });
-      await until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0), "the receipt draws");
-      await page.click("#youBtn");
-      await until(() => page.evaluate(() => document.getElementById("setReport").getBoundingClientRect().height > 0), "You is open");
-      await page.dispatchEvent("#setReport", "pointerdown");
-      await page.clock.runFor(300);
-      await page.dispatchEvent("#setReport", "pointerup");
-      await page.clock.runFor(1500);
+      await drawn(page);
+      await openCheck(page);
+      await tap(page, "a");
+      assert.deepEqual(await look(page), { cls: "fit-a", full: "956px", phone: 956, nav: 956, fixed: "static", kept: "a" });
+      assert.equal(await page.getAttribute('#screenCheck button[data-fit="a"]', "aria-pressed"), "true");
+      await tap(page, "c");
+      assert.deepEqual(await look(page), { cls: "fit-c", full: "956px", phone: 956, nav: 956, fixed: "static", kept: "c" });
+      await tap(page, "b");
+      const b = await look(page);
+      assert.equal(b.cls, "fit-b");
+      assert.equal(b.phone, 878, "100lvh is the told height in this browser");
+      await tap(page, "d");
+      assert.equal((await look(page)).cls, "fit-d");
+      await tap(page, "a");
+      await page.click("#screenCheckDone");
       assert.equal(await page.evaluate(() => !!document.getElementById("screenCheck")), false);
+      await page.reload();
+      await drawn(page);
+      assert.deepEqual(await look(page), { cls: "fit-a", full: "956px", phone: 956, nav: 956, fixed: "static", kept: "a" });
+      // Back to as it is.
+      await openCheck(page);
+      await tap(page, "");
+      assert.deepEqual(await look(page), { cls: "", full: "", phone: 878, nav: 878, fixed: "static", kept: "" });
+    },
+  },
+  {
+    name: "the way in use is in the Report a problem note",
+    viewport: SHORT,
+    screen: SCREEN,
+    async run({ page, context }) {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      await open(page, { seed: SEED, nowMs: NOON12, storage: { "mat.fit": "a" } });
+      await drawn(page);
+      await page.click("#youBtn");
+      await until(() => page.evaluate(() => document.getElementById("phone").classList.contains("you-open")), "You is open");
+      await page.evaluate(() => document.getElementById("setReport").scrollIntoView({ block: "center" }));
+      await page.click("#setReport");
+      await until(async () => /fit a/.test(await page.evaluate(() => navigator.clipboard.readText()).catch(() => "")), "the note says fit a");
     },
   },
 ];

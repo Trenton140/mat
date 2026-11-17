@@ -29,9 +29,14 @@
   --paper-down:inset 0 1px 0 #fff, inset 0 -1px 0 rgba(0,0,0,.22);
 }
 html,body{height:100%;margin:0}
-/* A Home Screen app told it is shorter than the screen takes the screen's
-   height (js/fill.js). Fixed, so the taller body never makes the page scroll. */
-html.fill body{position:fixed;top:0;left:0;right:0;height:var(--app-h)}
+/* Reaching the bottom of the screen in a Home Screen app that is told it is
+   shorter than the screen (js/fit.js): four ways, tried from the Screen
+   check under You. None pins the page (position:fixed): a pinned page is cut
+   off at the told height. */
+html.fit-a,html.fit-a body{height:var(--full-h)}
+html.fit-b,html.fit-b body{height:100lvh}
+html.fit-c,html.fit-c body{height:var(--full-h);overflow:visible}
+html.fit-d{height:calc(100% + env(safe-area-inset-top, 0px))}
 *{box-sizing:border-box}
 body{background:var(--stage);color:var(--text);font-family:var(--f);font-size:15px;line-height:1.35;font-weight:500;
   display:grid;place-items:center;overflow:hidden;-webkit-font-smoothing:antialiased}

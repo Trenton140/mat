@@ -79,6 +79,7 @@ const MARKUP = `
   <button type="button" class="set-r" id="setPlanner" hidden><span>Planner payments<small>Brings in what’s been paid from the planner sheet</small></span><b id="setPlannerV" aria-live="polite" data-w="Needs a look">Fetch</b></button>
   <a class="set-r" id="setSheet" target="_blank" rel="noopener" hidden><span>Google Sheet<small>Where all of this is kept</small></span><b>Open ↗</b></a>
   <button type="button" class="set-r" id="setReport"><span>Report a problem<small>Copies a short note to paste to Mo or Claude</small></span><b id="setReportV" aria-live="polite" data-w="Not copied">Copy</b></button>
+  <button type="button" class="set-r" id="setScreen"><span>Screen check<small>If the bottom bar sits too high on your phone</small></span><b>Open</b></button>
 </div>`;
 
 function el(tag, cls, text) {
@@ -87,9 +88,6 @@ function el(tag, cls, text) {
   if (text !== undefined) n.textContent = text;
   return n;
 }
-
-// How long "Report a problem" is held before the screen check opens.
-const SCREEN_CHECK_HOLD_MS = 900;
 
 // The note "Report a problem" copies. Pure: the view gathers the inputs.
 // sentences: the newest history sentences, newest first, or null when the
@@ -122,7 +120,7 @@ function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
 }
 
-export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, demo = null, getKey = () => null, screen = () => "Money" } = {}) {
+export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, demo = null, getKey = () => null, screen = () => "Money", fitStorage = null } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "youScrim";
   scrim.hidden = true;
@@ -631,30 +629,13 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     const sentences = !h || h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
     return reportText({ me: store.state.me, screen: screen(), version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [], sizes: sizesNow() });
   }
-  const reportV = $("setReportV");
-  // Held for a second: the screen check (js/diag.js) instead of the note.
-  let held = null;
-  let checked = false;
-  const letGo = () => {
-    clearTimeout(held);
-    held = null;
-  };
-  report.addEventListener("pointerdown", () => {
-    checked = false;
-    letGo();
-    held = setTimeout(() => {
-      held = null;
-      checked = true;
-      openScreenCheck();
-    }, SCREEN_CHECK_HOLD_MS);
+  // Screen check (js/diag.js): You closes so the bottom bar can be seen.
+  $("setScreen").addEventListener("click", () => {
+    close();
+    openScreenCheck({ storage: fitStorage });
   });
-  for (const type of ["pointerup", "pointercancel", "pointerleave"]) report.addEventListener(type, letGo);
-  report.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  const reportV = $("setReportV");
   report.addEventListener("click", async () => {
-    if (checked) {
-      checked = false;
-      return;
-    }
     if (reporting) return;
     reporting = true;
     report.disabled = true;
