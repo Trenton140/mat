@@ -17,6 +17,7 @@
 // Text from people or the Sheet goes in with textContent / .value only.
 
 import { API_URL, APP_VERSION } from "../config.js";
+import { openScreenCheck } from "../diag.js";
 import { soundOn, setSound } from "../sound.js";
 import { clock, dayHead, dayShort, localDay, freshText, historySentence } from "../format.js";
 import { HOW_LINES, standalone } from "./first.js";
@@ -86,6 +87,9 @@ function el(tag, cls, text) {
   if (text !== undefined) n.textContent = text;
   return n;
 }
+
+// How long "Report a problem" is held before the screen check opens.
+const SCREEN_CHECK_HOLD_MS = 900;
 
 // The note "Report a problem" copies. Pure: the view gathers the inputs.
 // sentences: the newest history sentences, newest first, or null when the
@@ -619,7 +623,29 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     return reportText({ me: store.state.me, screen: screen(), version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [] });
   }
   const reportV = $("setReportV");
+  // Held for a second: the screen check (js/diag.js) instead of the note.
+  let held = null;
+  let checked = false;
+  const letGo = () => {
+    clearTimeout(held);
+    held = null;
+  };
+  report.addEventListener("pointerdown", () => {
+    checked = false;
+    letGo();
+    held = setTimeout(() => {
+      held = null;
+      checked = true;
+      openScreenCheck();
+    }, SCREEN_CHECK_HOLD_MS);
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) report.addEventListener(type, letGo);
+  report.addEventListener("contextmenu", (ev) => ev.preventDefault());
   report.addEventListener("click", async () => {
+    if (checked) {
+      checked = false;
+      return;
+    }
     if (reporting) return;
     reporting = true;
     report.disabled = true;

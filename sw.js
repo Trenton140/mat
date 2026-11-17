@@ -19,7 +19,7 @@
 //   script.googleusercontent.com), and anything else not listed here.
 // - Only OK answers are ever kept.
 
-const SW_VERSION = "175d1dada6";
+const SW_VERSION = "1c25d77ba9";
 const SHELL_CACHE = "mat-shell-" + SW_VERSION;
 const FONT_CACHE = "mat-fonts";
 
@@ -41,6 +41,7 @@ const SHELL = [
   "js/clip.js",
   "js/clock.js",
   "js/config.js",
+  "js/diag.js",
   "js/format.js",
   "js/fill.js",
   "js/fx.js",
