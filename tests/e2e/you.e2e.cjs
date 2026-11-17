@@ -401,6 +401,10 @@ module.exports = [
       assert.equal(newest.length, 5);
       assert.deepEqual(note.split("\n").filter((l) => l.startsWith("- ")), newest.map((x) => "- " + x));
       assert.equal(note.includes("test-key"), false, "no trip key in the note");
+      // What the phone says about its screen, for a layout problem that only shows on one phone.
+      assert.match(note, /^This phone’s screen:$/m);
+      assert.match(note, /^  screen \d+ x \d+ · inner 390 x 844$/m);
+      assert.ok(note.indexOf("This phone’s screen:") < note.indexOf("What went wrong:"));
       assert.equal(await page.isDisabled("#setReport"), false);
     },
   },

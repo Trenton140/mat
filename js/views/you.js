@@ -17,7 +17,7 @@
 // Text from people or the Sheet goes in with textContent / .value only.
 
 import { API_URL, APP_VERSION } from "../config.js";
-import { openScreenCheck } from "../diag.js";
+import { openScreenCheck, screenNumbers } from "../diag.js";
 import { soundOn, setSound } from "../sound.js";
 import { clock, dayHead, dayShort, localDay, freshText, historySentence } from "../format.js";
 import { HOW_LINES, standalone } from "./first.js";
@@ -95,12 +95,13 @@ const SCREEN_CHECK_HOLD_MS = 900;
 // sentences: the newest history sentences, newest first, or null when the
 // history could not be fetched. setAside: the Sheet rows the app left out
 // (store.state.setAside). The trip key is never part of it.
-export function reportText({ me, screen, version, when, sentences, setAside = [] }) {
+export function reportText({ me, screen, version, when, sentences, setAside = [], sizes = [] }) {
   const lines = ["MAT: a problem to look at", "Who: " + (me || "nobody chosen"), "Screen: " + screen, "App version: " + version, "Time: " + when];
   if (setAside.length) lines.push("Lines in the Sheet the app can’t read: " + setAside.map((x) => x.id).join(", "));
   if (sentences === null || sentences === undefined) lines.push("Latest changes: " + HISTORY_UNAVAILABLE);
   else if (!sentences.length) lines.push("Latest changes: none yet");
   else lines.push("Latest changes, newest first:", ...sentences.slice(0, REPORT_LINES).map((x) => "- " + x));
+  if (sizes.length) lines.push("This phone’s screen:", ...sizes.map((x) => "  " + x)); // not "- ": those lines are the changes
   lines.push("What went wrong: ");
   return lines.join("\n");
 }
@@ -617,10 +618,18 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
 
   // The note needs the latest history, so it is built while the copy waits.
   // It uses what its own load fetched: another load may replace the tape.
+  // What the phone says about its screen, for the note. Never stops the note.
+  const sizesNow = () => {
+    try {
+      return screenNumbers(document, window);
+    } catch {
+      return [];
+    }
+  };
   async function reportNote() {
     const h = await store.loadHistory();
     const sentences = !h || h.error ? null : h.entries.slice(0, REPORT_LINES).map(historySentence);
-    return reportText({ me: store.state.me, screen: screen(), version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [] });
+    return reportText({ me: store.state.me, screen: screen(), version: APP_VERSION, when: whenText(Date.now()), sentences, setAside: store.state.setAside || [], sizes: sizesNow() });
   }
   const reportV = $("setReportV");
   // Held for a second: the screen check (js/diag.js) instead of the note.
