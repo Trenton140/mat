@@ -11,15 +11,15 @@
 //   test fails when it no longer matches the files, so a changed shell always
 //   reaches the phones as a new worker.
 // - A new worker takes over at once (skipWaiting, then clients.claim) and
-//   deletes the older shells. The page is not reloaded for it: the next
-//   open gets the new shell.
+//   deletes the older shells. It then tells every open page, which reloads
+//   itself when nothing would be lost (js/update.js); see tellPages below.
 // - Google Fonts: stale-while-revalidate. When a font cannot be fetched and
 //   none is kept, the answer is an empty one, never an error.
 // - Never touched: the trip backend (script.google.com and
 //   script.googleusercontent.com), and anything else not listed here.
 // - Only OK answers are ever kept.
 
-const SW_VERSION = "d2ebdab2f1";
+const SW_VERSION = "d2d4bf376c";
 const SHELL_CACHE = "mat-shell-" + SW_VERSION;
 const FONT_CACHE = "mat-fonts";
 
@@ -43,13 +43,10 @@ const SHELL = [
   "js/config.js",
   "js/diag.js",
   "js/format.js",
-  "js/fill.js",
-  "js/fit.js",
   "js/fx.js",
   "js/money.js",
   "js/picture.js",
   "js/plan.js",
-  "js/remeasure.js",
   "js/sound.js",
   "js/stamp.js",
   "js/store.js",
@@ -141,7 +138,8 @@ function tellPage(page) {
     setTimeout(() => {
       if (answered) return;
       Promise.resolve()
-        .then(() => (typeof page.navigate === "function" ? page.navigate(page.url) : null))
+        // Without the part after #: with it the page would only scroll, not reload.
+        .then(() => (typeof page.navigate === "function" ? page.navigate(String(page.url).split("#")[0]) : null))
         .catch(() => {})
         .then(resolve);
     }, PAGE_ANSWER_MS);

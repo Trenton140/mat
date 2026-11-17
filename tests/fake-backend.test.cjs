@@ -1150,14 +1150,14 @@ test("a first pull adds each included payment as an expense, as addExpense would
   const exps = (await call("load")).data.expenses;
   const x7 = exps.find((e) => e.note === NOTE_X7);
   assert.match(x7.id, /^[A-Za-z0-9]{20}$/);
-  assert.deepEqual({ ...x7, id: "" }, { id: "", day: "2026-12-11", title: "Rail pass", amount: 221.52, currency: "CAD", rate: 111, paidBy: "Mo", split: ALL, splitMode: "equal", splitVals: [], note: NOTE_X7, kind: "transport", addedBy: "Trenton", addedAt: "2026-12-12T03:00:00.000Z", deleted: false });
+  assert.deepEqual({ ...x7, id: "" }, { id: "", day: "2026-12-11", title: "Rail pass", amount: 221.52, currency: "CAD", rate: 111, paidBy: "Mo", split: ALL, splitMode: "equal", splitVals: [], note: NOTE_X7, kind: "transport", addedBy: "Mo", addedAt: "2026-12-12T03:00:00.000Z", deleted: false }); // credited to who paid
   assert.equal(stored(call, x7.id).planner_id, "X7");
   const q3 = exps.find((e) => e.note === "Q3 · Ramen Ya");
   assert.equal(stored(call, q3.id).planner_id, "Q3");
   assert.deepEqual([q3.title, q3.amount, q3.currency, q3.paidBy, q3.split, q3.day, q3.kind], ["Noodle bar", 3600, "JPY", "Ajen", ["Mo", "Ajen"], "2026-12-12", "food"]);
   assert.equal(exps.length, 2, "nothing for the personal, the unknown payer or the not-included rows");
   const log = call.fake.tables.Log;
-  assert.deepEqual(log.map((l) => [l.who, l.via, l.action, l.kind]), [["Trenton", "planner", "add", "expense"], ["Trenton", "planner", "add", "expense"]]);
+  assert.deepEqual(log.map((l) => [l.who, l.via, l.action, l.kind]), [["Mo", "planner", "add", "expense"], ["Ajen", "planner", "add", "expense"]]);
   assert.deepEqual(log.map((l) => l.summary), ["rang up Rail pass $221.52", "rang up Noodle bar ¥3,600"]);
   const hist = await historyAll(call);
   assert.deepEqual(hist.map((e) => e.via), ["planner", "planner"]);
@@ -1214,7 +1214,7 @@ test("a changed amount_cad changes that one expense: one edit, before/after diff
   assert.deepEqual(r.data, reply({ changed: 1, same: 1 }));
   assert.equal(call.fake.tables.Log.length, logs + 1);
   const edit = call.fake.tables.Log.at(-1);
-  assert.deepEqual([edit.who, edit.via, edit.action, edit.ref, edit.summary], ["Ajen", "planner", "edit", id, "changed Rail pass $221.52 → $230.10"]);
+  assert.deepEqual([edit.who, edit.via, edit.action, edit.ref, edit.summary], ["Mo", "planner", "edit", id, "changed Rail pass $221.52 → $230.10"] /* who paid, not the phone that asked */);
   const before = JSON.parse(edit.before);
   const after = JSON.parse(edit.after);
   assert.deepEqual(Object.keys(after).filter((k) => JSON.stringify(after[k]) !== JSON.stringify(before[k])), ["amount"]);
@@ -1655,12 +1655,60 @@ test("auto has to be true or false", async () => {
   assert.equal(r.error, "bad_input");
 });
 
-test("a pull cut short (more: true) still records when it pulled", async () => {
+
+// ---------- planner payments: loose ends from the review (2026-11-17) ----------
+
+test("a planner line is credited to who paid, not to whichever phone asked", async () => {
+  const call = linked();
+  const r = await call("syncPayments", { auto: true }, { actor: "Trenton" });
+  assert.equal(r.data.added, 2);
+  const exps = (await call("load")).data.expenses;
+  assert.equal(exps.find((e) => e.title === "Rail pass").addedBy, "Mo", "X7 was paid by Mo");
+  assert.equal(exps.find((e) => e.title === "Noodle bar").addedBy, "Ajen", "Q3 was paid by Ajen");
+  assert.deepEqual(call.fake.tables.Log.map((l) => [l.who, l.via]), [["Mo", "planner"], ["Ajen", "planner"]]);
+});
+
+test("a planner change is credited to who paid", async () => {
+  const call = linked();
+  await call("syncPayments", {}, { actor: "Trenton" });
+  call.fake.planner.rows[1] = prow({ ...PX7, amount_cad: 230 });
+  const r = await call("syncPayments", {}, { actor: "Ajen" });
+  assert.equal(r.data.changed, 1);
+  const last = call.fake.tables.Log[call.fake.tables.Log.length - 1];
+  assert.deepEqual([last.who, last.via, last.action], ["Mo", "planner", "edit"]);
+});
+
+test("a pull cut short does not count as done: the next auto pull carries on at once", async () => {
   const at = { now: "2026-12-12T03:00:00.000Z" };
   const many = [PHEAD];
-  for (let i = 1; i <= 20; i++) many.push(prow({ ...PX7, payment_id: "M" + i, description: "Thing " + i }));
+  for (let i = 1; i <= 14; i++) many.push(prow({ ...PX7, payment_id: "M" + i, description: "Thing " + i }));
   const call = linked({}, many, { clock: () => at.now });
-  const r = await call("syncPayments", { auto: true });
-  assert.equal(r.data.more, true);
-  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:00:00.000Z");
+  const first = await call("syncPayments", { auto: true });
+  assert.deepEqual([first.data.added, first.data.more], [10, true]);
+  assert.equal((await call("load")).data.paymentsPulledAt, "", "not recorded while more remain");
+  at.now = "2026-12-12T03:00:20.000Z";
+  const second = await call("syncPayments", { auto: true });
+  assert.deepEqual([second.data.added, second.data.more, second.data.skipped], [4, false, undefined]);
+  assert.equal((await call("load")).data.paymentsPulledAt, "2026-12-12T03:00:20.000Z");
+});
+
+test("a pull whose read is older than one that already landed writes nothing", async () => {
+  // Pull A read the planner at 03:00:04; before A got the lock, pull B (read at 03:00:05) landed.
+  const at = { now: "2026-12-12T03:00:00.000Z" };
+  const call = linked({}, PLANNER, { clock: () => at.now });
+  await call("syncPayments");
+  const logged = call.fake.tables.Log.length;
+  call.fake.planner.rows[1] = prow({ ...PX7, amount_cad: 199 }); // what A read: the old value
+  call.fake.props.PAYMENTS_READ_AT = "2026-12-12T03:00:05.000Z"; // B has landed
+  at.now = "2026-12-12T03:00:04.000Z";
+  const a = await call("syncPayments", {}, { actor: "Trenton" });
+  assert.equal(a.ok, true);
+  assert.equal(a.data.skipped, true, "A's older read is dropped");
+  assert.equal(call.fake.tables.Log.length, logged, "nothing written");
+  assert.equal(call.fake.props.PAYMENTS_READ_AT, "2026-12-12T03:00:05.000Z");
+  // A read made after B's goes through.
+  at.now = "2026-12-12T03:00:06.000Z";
+  const c = await call("syncPayments", {}, { actor: "Trenton" });
+  assert.equal(c.data.changed, 1);
+  assert.equal(call.fake.props.PAYMENTS_READ_AT, "2026-12-12T03:00:06.000Z");
 });

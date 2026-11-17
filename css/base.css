@@ -38,13 +38,6 @@ html,body{height:100%;margin:0}
 @media (display-mode: standalone){
   html{height:100%;height:max(100%, 100lvh)}
 }
-/* Other ways of reaching the bottom of the screen (js/fit.js), tried from the
-   Screen check under You, in case a phone needs one. None pins the page
-   (position:fixed): a pinned page is cut off at the told height. */
-html.fit-a,html.fit-a body{height:var(--full-h)}
-html.fit-b,html.fit-b body{height:100lvh}
-html.fit-c,html.fit-c body{height:var(--full-h);overflow:visible}
-html.fit-d{height:calc(100% + env(safe-area-inset-top, 0px))}
 *{box-sizing:border-box}
 body{background:var(--stage);color:var(--text);font-family:var(--f);font-size:15px;line-height:1.35;font-weight:500;
   display:grid;place-items:center;overflow:hidden;-webkit-font-smoothing:antialiased}
