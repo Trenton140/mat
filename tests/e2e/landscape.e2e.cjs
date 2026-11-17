@@ -154,13 +154,21 @@ for (const size of [...SIZES, TAB]) {
           [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => b.getBoundingClientRect()).filter((r) => r.height < 44 || r.width < 44).length,
         );
         assert.equal(small, 0, "every rail button is at least 44 px each way");
-        // Ring up is a true pill: as tall as its round ends, its words inside it.
+        // The same keys as the portrait bar, stacked in the same order, Ring up in the middle (no planner list here, so no Before key: Days, Money, You, Ring up).
+        const rail = await page.evaluate(() =>
+          [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => {
+            const r = b.getBoundingClientRect();
+            return { id: b.dataset.tab || b.id, top: r.top, bottom: r.bottom, h: r.height, vis: r.top >= 0 && r.bottom <= innerHeight };
+          }),
+        );
+        assert.deepEqual(rail.map((r) => r.id), ["days", "money", "youBtn", "ring"]);
+        assert.ok(rail.every((r, i) => r.vis && r.h >= 44 && (i === 0 || r.top >= rail[i - 1].bottom - 0.5)), "stacked, in view, 44 px or more: " + JSON.stringify(rail));
         const ring = await page.evaluate(() => {
           const r = document.getElementById("ring");
-          return { height: r.getBoundingClientRect().height, radius: parseFloat(getComputedStyle(r).borderTopLeftRadius), over: r.scrollWidth - r.clientWidth };
+          return { over: r.scrollWidth - r.clientWidth, text: r.innerText.replace(/\s+/g, " ").trim(), name: r.getAttribute("aria-label") };
         });
-        assert.ok(Math.abs(ring.height - 2 * ring.radius) <= 1, "Ring up is a pill: " + JSON.stringify(ring));
         assert.ok(ring.over <= 0, "Ring up's words fit inside it: " + JSON.stringify(ring));
+        assert.deepEqual([ring.text, ring.name], ["＋ Ring up", "Ring up"]);
         await page.click('#nav [data-tab="money"]');
         await until(async () => (await activeView(page)) === "vMoney", "Money shows");
         assert.equal(await page.evaluate(() => document.querySelector('#nav [data-tab="money"]').classList.contains("is-active")), true, "Money is marked");

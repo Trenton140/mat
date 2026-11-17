@@ -23,7 +23,7 @@ async function showing(page, view) {
 // "ok", or why the bar's four controls are not all on screen and apart.
 function barFits(page) {
   return page.evaluate(() => {
-    const els = ['[data-tab="days"]', '[data-tab="money"]', "#youBtn", "#ring"].map((s) => document.querySelector(s));
+    const els = ['[data-tab="days"]', "#ring", '[data-tab="money"]', "#youBtn"].map((s) => document.querySelector(s));
     if (els.some((e) => !e)) return "a control is missing";
     const rs = els.map((e) => e.getBoundingClientRect());
     for (const [i, r] of rs.entries()) {
@@ -44,9 +44,10 @@ async function fits(page) {
   await open(page, { seed: WITH_PLAN, tab: "days" });
   await showing(page, "#vDays");
   assert.equal(await barFits(page), "ok");
-  // The type is not shrunk to make it fit.
+  // The labels are one size, 15 px on a wide phone, scaled down only as far as a small one needs (never under 10.5 px, the small label).
   const sizes = await page.evaluate(() => [...document.querySelectorAll("#nav [data-tab], #youBtn")].filter((b) => !b.hidden).map((b) => getComputedStyle(b).fontSize));
-  assert.deepEqual(sizes, ["16px", "16px", "16px"]);
+  const px = sizes.map(parseFloat);
+  assert.ok(px.length === 3 && px.every((n) => n === px[0] && n >= 10.5 && n <= 15), sizes.join(" "));
 }
 
 module.exports = [

@@ -301,6 +301,16 @@ function start() {
       // A hidden button cannot keep focus: if it has it, Days takes it.
       const hadFocus = !show && document.activeElement === beforeBtn;
       beforeBtn.hidden = !show;
+      // Five keys: Ring up is the middle one (before Money). Four: it is last. The DOM order is the visual and focus order.
+      const ringBtn = document.getElementById("ring");
+      const navEl = document.getElementById("nav");
+      const moneyBtn = navEl.querySelector('button[data-tab="money"]');
+      const wantBefore = show ? moneyBtn : null;
+      if (ringBtn && moneyBtn && (show ? ringBtn.nextElementSibling !== moneyBtn : ringBtn.nextElementSibling !== null)) {
+        const had = document.activeElement === ringBtn;
+        navEl.insertBefore(ringBtn, wantBefore);
+        if (had) ringBtn.focus({ preventScroll: true });
+      }
       beforeN.hidden = !show || open < 1;
       beforeN.textContent = open > 0 ? String(open) : "";
       beforeBtn.setAttribute("aria-label", tabName(open));

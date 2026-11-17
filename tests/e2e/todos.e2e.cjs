@@ -485,12 +485,10 @@ module.exports = [
     async run({ page }) {
       await ready(page, { claims: { 2: "Ajen" } });
       assert.ok(await visible(page, "#todos"));
-      // The rail lists Days, Before, Money, You, then Ring up, each 44 px or more.
-      const rail = await page.evaluate(() =>
-        [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => ({ id: b.dataset.tab || b.id, top: b.getBoundingClientRect().top, h: b.getBoundingClientRect().height })),
-      );
-      assert.deepEqual(rail.map((r) => r.id), ["days", "before", "money", "youBtn", "ring"]);
-      assert.ok(rail.every((r, i) => r.h >= 44 && (i === 0 || r.top > rail[i - 1].top)), JSON.stringify(rail));
+      // The rail lists Days, Before, Ring up, Money, You, stacked, each 44 px or more.
+      const rail = await railKeys(page);
+      assert.deepEqual(rail.map((r) => r.id), FIVE);
+      assert.ok(rail.every((r, i) => r.vis && r.h >= 44 && (i === 0 || r.top >= rail[i - 1].bottom - 0.5)), JSON.stringify(rail));
       await openRow(page, "1");
       const fit = await page.evaluate(() => {
         const view = document.getElementById("vBefore").getBoundingClientRect();
@@ -501,6 +499,32 @@ module.exports = [
         return { inside: card.left >= view.left && card.right <= view.right, tickIn: tick.right <= card.right, all, scroll: document.getElementById("vBefore").scrollWidth <= document.getElementById("vBefore").clientWidth };
       });
       assert.deepEqual(fit, { inside: true, tickIn: true, all: true, scroll: true });
+    },
+  },
+  {
+    name: "sideways (667 × 375): the five rail keys are in order, stacked and in view without scrolling",
+    viewport: { width: 667, height: 375 },
+    async run({ page }) {
+      await ready(page, { claims: { 2: "Ajen" } });
+      const rail = await railKeys(page);
+      assert.deepEqual(rail.map((r) => r.id), FIVE);
+      assert.ok(rail.every((r, i) => r.vis && r.h >= 44 && (i === 0 || r.top >= rail[i - 1].bottom - 0.5)), JSON.stringify(rail));
+    },
+  },
+  {
+    name: "sideways (844 × 390 and 667 × 375): with no Before key the rail is Days, Money, You, Ring up, stacked and in view",
+    viewport: { width: 667, height: 375 },
+    async run({ page }) {
+      await ready(page, { nowMs: NOON12, items: [ITEMS[4]], go: false });
+      await page.evaluate(() => window.__matTest.store.idle());
+      assert.equal(await tabIsIn(page), false);
+      const rail = await railKeys(page);
+      assert.deepEqual(rail.map((r) => r.id), FOUR);
+      assert.ok(rail.every((r, i) => r.vis && r.h >= 44 && (i === 0 || r.top >= rail[i - 1].bottom - 0.5)), JSON.stringify(rail));
+      await page.setViewportSize({ width: 844, height: 390 });
+      const wide = await railKeys(page);
+      assert.deepEqual(wide.map((r) => r.id), FOUR);
+      assert.ok(wide.every((r, i) => r.vis && r.h >= 44 && (i === 0 || r.top >= wide[i - 1].bottom - 0.5)), JSON.stringify(wide));
     },
   },
   {
@@ -617,10 +641,24 @@ module.exports = [
   },
 ];
 
-// The bottom bar's four tabs and the button, measured: on one line, apart, inside the bar, no text clipped, each at least 44 px tall.
+const FIVE = ["days", "before", "ring", "money", "youBtn"];
+const FOUR = ["days", "money", "youBtn", "ring"];
+
+// The rail's keys, top to bottom: id, top, bottom, height and whether the key is wholly on screen.
+function railKeys(page) {
+  return page.evaluate(() =>
+    [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => {
+      const r = b.getBoundingClientRect();
+      return { id: b.dataset.tab || b.id, top: r.top, bottom: r.bottom, h: r.height, vis: r.top >= 0 && r.bottom <= innerHeight };
+    }),
+  );
+}
+
+// The bottom bar's keys, measured: on one line, apart, inside the bar, no text clipped or touching a key's edge, each at least 44 px tall.
 async function barShape(page) {
   return page.evaluate(() => {
-    const nav = document.getElementById("nav").getBoundingClientRect();
+    const navEl = document.getElementById("nav");
+    const nav = navEl.getBoundingClientRect();
     const items = [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden);
     const rects = items.map((b) => b.getBoundingClientRect());
     const overlap = [];
@@ -631,47 +669,108 @@ async function barShape(page) {
         if (a.left < c.right - 0.5 && c.left < a.right - 0.5 && a.top < c.bottom - 0.5 && c.top < a.bottom - 0.5) overlap.push(items[i].textContent + "/" + items[j].textContent);
       }
     const centres = rects.map((r) => r.top + r.height / 2);
-    const clipped = items.filter((b) => {
-      const r = b.getBoundingClientRect();
-      return b.scrollWidth > b.clientWidth + 1 || [...b.children].some((c) => c.getClientRects().length && (c.getBoundingClientRect().right > r.right + 0.5 || c.getBoundingClientRect().left < r.left - 0.5));
-    }).map((b) => b.textContent);
+    // Every text run inside a key is whole, on one line, and keeps 1.5 px from the key's edges.
+    const tight = [];
+    for (const [i, b] of items.entries()) {
+      const r = rects[i];
+      const walker = document.createTreeWalker(b, NodeFilter.SHOW_TEXT);
+      for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+        if (!n.textContent.trim()) continue;
+        const range = document.createRange();
+        range.selectNodeContents(n);
+        const tr = range.getBoundingClientRect();
+        if (range.getClientRects().length > 1 || tr.left < r.left + 1.5 || tr.right > r.right - 1.5 || tr.top < r.top || tr.bottom > r.bottom) tight.push((b.id || b.dataset.tab) + ":" + n.textContent.trim() + " text " + Math.round(tr.width * 10) / 10 + " in key " + Math.round(r.width * 10) / 10 + " (" + Math.round((tr.left - r.left) * 10) / 10 + " / " + Math.round((r.right - tr.right) * 10) / 10 + ")");
+      }
+      const pill = b.querySelector(".pill");
+      if (pill && pill.getClientRects().length) {
+        const p = pill.getBoundingClientRect();
+        if (p.left < r.left || p.right > r.right || p.top < r.top) tight.push("pill out of its key");
+      }
+    }
+    const clipped = items.filter((b) => b.scrollWidth > b.clientWidth + 1).map((b) => b.textContent);
+    // The pill never covers a word.
+    const cover = [];
+    const pill = document.getElementById("beforeN");
+    if (pill && pill.getClientRects().length) {
+      const p = pill.getBoundingClientRect();
+      const walker = document.createTreeWalker(document.getElementById("beforeBtn"), NodeFilter.SHOW_TEXT);
+      for (let q = walker.nextNode(); q; q = walker.nextNode()) {
+        if (!q.textContent.trim() || pill.contains(q)) continue;
+        const range = document.createRange();
+        range.selectNodeContents(q);
+        const w = range.getBoundingClientRect();
+        if (p.left < w.right - 0.5 && w.left < p.right - 0.5 && p.top < w.bottom - 0.5 && w.top < p.bottom - 0.5) cover.push(q.textContent.trim());
+      }
+    }
     const ring = document.getElementById("ring");
+    const rr = ring.getBoundingClientRect();
+    const lamp = (b) => ({ id: b.dataset.tab || b.id, bg: getComputedStyle(b, "::before").backgroundColor, display: getComputedStyle(b, "::before").display });
     return {
-      names: items.map((b) => b.getAttribute("aria-label") || b.dataset.tab || b.id),
+      ids: items.map((b) => b.dataset.tab || b.id),
       overlap,
       oneLine: Math.max(...centres) - Math.min(...centres) <= 3,
-      inside: rects.every((r) => r.left >= nav.left - 0.5 && r.right <= nav.right + 0.5),
+      inside: rects.every((r) => r.left >= nav.left - 0.5 && r.right <= nav.right + 0.5 && r.top >= nav.top && r.bottom <= nav.bottom),
       tall: rects.every((r) => r.height >= 44),
       clipped,
+      tight,
+      cover,
       pageWide: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      navScroll: [navEl.scrollWidth, navEl.clientWidth],
       ringText: ring.innerText.replace(/\s+/g, " ").trim(),
       ringName: ring.getAttribute("aria-label"),
+      ringCentreOff: Math.abs(rr.left + rr.width / 2 - (nav.left + nav.width / 2)),
+      tabWidths: items.filter((b) => b !== ring).map((b) => b.getBoundingClientRect().width),
+      allWidths: rects.map((r) => r.width),
+      gaps: rects.slice(1).map((r, i) => r.left - rects[i].right),
+      edges: [rects[0].left - nav.left, nav.right - rects[rects.length - 1].right],
+      tabHeights: items.filter((b) => b !== ring).map((b) => b.getBoundingClientRect().height),
+      ringHeight: rr.height,
+      lamps: items.map(lamp),
     };
   });
 }
 
-for (const width of [320, 350, 390, 430]) {
+// The measured bar in its five-key or four-key state. Returns the id of the one lit lamp.
+function checkBar(shape, where, five) {
+  assert.deepEqual(shape.ids, five ? FIVE : FOUR, "order " + where);
+  assert.deepEqual(shape.overlap, [], "overlap " + where);
+  assert.equal(shape.oneLine, true, "one line " + where);
+  assert.equal(shape.inside, true, "inside the bar " + where);
+  assert.equal(shape.tall, true, "44 px tall " + where);
+  assert.deepEqual(shape.clipped, [], "clipped " + where);
+  assert.deepEqual(shape.tight, [], "text touching a key's edge or wrapped " + where);
+  assert.deepEqual(shape.cover, [], "the pill covers a word " + where);
+  assert.equal(shape.pageWide, true, "page wider than the screen " + where);
+  assert.equal(shape.navScroll[0], shape.navScroll[1], "the bar scrolls sideways " + where);
+  assert.equal(shape.ringName, "Ring up");
+  assert.equal(shape.ringText, "＋ Ring up", "Ring up reads ＋ over Ring up " + where);
+  assert.ok(shape.gaps.every((g) => Math.abs(g - 6) <= 0.5), "6 px gaps " + where + " " + shape.gaps);
+  assert.ok(shape.edges.every((e) => Math.abs(e - 10) <= 0.5), "10 px side padding " + where + " " + shape.edges);
+  assert.ok(shape.tabHeights.every((h) => h === 56) && shape.ringHeight === 64, "key heights " + where);
+  if (five) {
+    assert.ok(shape.ringCentreOff <= 2, "Ring up is " + shape.ringCentreOff + " px off the bar's centre " + where);
+    assert.ok(Math.max(...shape.tabWidths) - Math.min(...shape.tabWidths) <= 1, "tab keys are of equal width " + where + " " + shape.tabWidths);
+  } else {
+    assert.ok(Math.max(...shape.allWidths) - Math.min(...shape.allWidths) <= 1, "all four keys are of equal width " + where + " " + shape.allWidths);
+  }
+  const lit = shape.lamps.filter((l) => l.display !== "none" && l.bg === "rgb(244, 240, 234)");
+  assert.equal(lit.length, 1, "one lamp lit " + where + " " + JSON.stringify(shape.lamps));
+  assert.equal(shape.lamps.find((l) => l.id === "ring").display, "none", "Ring up has no lamp");
+  assert.ok(shape.lamps.filter((l) => l.id !== "ring" && l.bg !== "rgb(244, 240, 234)").every((l) => l.bg === "rgb(74, 64, 59)"), "off lamps are the lamp-off grey");
+  return lit[0].id;
+}
+
+for (const width of [320, 375, 390, 430]) {
   module.exports.push({
-    name: "the bar at " + width + " px: Days, Before, Money, You and the button on one line, no overlap, nothing clipped, each tab 44 px tall" + (width <= 350 ? "; the button is the plus alone" : ""),
+    name: "the bar at " + width + " px: Days, Before, Ring up, Money, You in that order, Ring up in the centre, equal tab keys, nothing clipped, one lamp lit on the current key",
     viewport: { width, height: 760 },
     async run({ page }) {
       await ready(page, { claims: { 2: "Ajen" }, go: false });
       await until(() => tabIsIn(page), "the Before tab is in the bar");
-      // With a count showing, on Days and on Before.
       for (const tab of ["days", "before"]) {
         await page.click('#nav button[data-tab="' + tab + '"]');
-        const shape = await barShape(page);
-        assert.deepEqual(shape.overlap, [], "overlap on " + tab);
-        assert.equal(shape.oneLine, true, "one line");
-        assert.equal(shape.inside, true, "inside the bar");
-        assert.equal(shape.tall, true, "44 px tall");
-        assert.deepEqual(shape.clipped, [], "clipped text");
-        assert.equal(shape.pageWide, true, "the page is not wider than the screen");
-        assert.equal(shape.names.length, 5);
-        assert.equal(shape.ringName, "Ring up");
-        assert.equal(shape.ringText, width <= 350 ? "＋" : "＋ Ring up");
+        assert.equal(checkBar(await barShape(page), "on " + tab, true), tab, "the lit lamp is the current key's");
       }
-      // The pill sits on its tab, inside the bar.
       const pill = await page.evaluate(() => {
         const p = document.getElementById("beforeN").getBoundingClientRect();
         const n = document.getElementById("nav").getBoundingClientRect();
@@ -680,23 +779,142 @@ for (const width of [320, 350, 390, 430]) {
       assert.deepEqual(pill, { in: true, text: "4" });
     },
   });
+  module.exports.push({
+    name: "the bar at " + width + " px with no Before key: Days, Money, You, Ring up, four equal keys, nothing clipped, then it re-lays to five keys when an item comes back",
+    viewport: { width, height: 760 },
+    async run({ page }) {
+      // The trip is on and nothing is open: no Before key.
+      const backend = await ready(page, { nowMs: NOON12, items: [ITEMS[1], ITEMS[4]], go: false });
+      await until(() => tabIsIn(page), "one open: five keys");
+      checkBar(await barShape(page), "five keys", true);
+      await goBefore(page);
+      await openRow(page, "2");
+      await page.click(row(2) + " .bw-tick");
+      await until(() => stored(backend, "2").ticked_by === "Mo", "ticked");
+      await advance(page, backend, 1700);
+      await until(async () => !(await tabIsIn(page)), "the key goes with the last item, no reload");
+      assert.equal(checkBar(await barShape(page), "four keys after the last tick", false), "days");
+      // The key comes back (the tick is undone elsewhere): the bar re-lays to five.
+      assert.equal((await backend.call("undo", { logId: Number(backend.fake.tables.Log[backend.fake.tables.Log.length - 1].id) }, "Ajen")).ok, true);
+      await page.evaluate(() => window.__matTest.store.checkRev());
+      await until(() => tabIsIn(page), "back to five keys");
+      checkBar(await barShape(page), "five keys again", true);
+    },
+  });
 }
 
 module.exports.push({
-  name: "the bar has a crisp edge: a black top border and a contact shadow, and no gradient drawn above it",
+  name: "Ring up keeps focus when the bar re-lays between four and five keys",
+  async run({ page }) {
+    const backend = await ready(page, { nowMs: NOON12, items: [ITEMS[1], ITEMS[4]], go: false });
+    await until(() => tabIsIn(page), "five keys");
+    await page.focus("#ring");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "ring");
+    assert.equal((await backend.call("tickTodo", { id: "2" }, "Ajen")).ok, true, "ticked on another phone");
+    await advance(page, backend, 31 * 1000);
+    await page.evaluate(() => window.__matTest.store.checkRev());
+    await advance(page, backend, 1700);
+    await until(async () => !(await tabIsIn(page)), "four keys");
+    assert.equal(await page.evaluate(() => document.activeElement.id), "ring", "focus stayed on Ring up");
+  },
+});
+
+module.exports.push({
+  name: "the bar is a strip of keys: a black top border, an inset highlight, no outer shadow, no gradient or pseudo-element painting on it, tokens for the new greys",
   async run({ page }) {
     await ready(page, { go: false });
     const edge = await page.evaluate(() => {
       const nav = document.getElementById("nav");
       const cs = getComputedStyle(nav);
-      const before = getComputedStyle(nav, "::before");
-      return { image: before.backgroundImage, content: before.content, top: cs.borderTopWidth + " " + cs.borderTopStyle + " " + cs.borderTopColor, shadow: cs.boxShadow, height: nav.getBoundingClientRect().height };
+      const root = getComputedStyle(document.documentElement);
+      const pseudo = (w) => ({ content: getComputedStyle(nav, w).content, image: getComputedStyle(nav, w).backgroundImage, shadow: getComputedStyle(nav, w).boxShadow });
+      return {
+        before: pseudo("::before"),
+        after: pseudo("::after"),
+        top: cs.borderTopWidth + " " + cs.borderTopStyle + " " + cs.borderTopColor,
+        shadow: cs.boxShadow,
+        bg: cs.backgroundImage,
+        height: nav.getBoundingClientRect().height,
+        barTop: root.getPropertyValue("--bar-top").trim().toLowerCase(),
+        lampOff: root.getPropertyValue("--lamp-off").trim().toLowerCase(),
+      };
     });
-    assert.equal(edge.image, "none", "no gradient");
-    assert.equal(edge.content, "none", "no ::before at all");
+    for (const w of ["before", "after"]) {
+      assert.equal(edge[w].content, "none", "no ::" + w + " on the bar");
+      assert.equal(edge[w].image, "none");
+      assert.equal(edge[w].shadow, "none");
+    }
     assert.equal(edge.top, "1px solid rgb(0, 0, 0)");
-    assert.equal(edge.shadow, "rgba(0, 0, 0, 0.7) 0px -12px 18px -12px");
-    assert.equal(edge.height, 74);
+    assert.equal(edge.shadow, "rgba(255, 255, 255, 0.06) 0px 1px 0px 0px inset", "an inset highlight and no outer shadow");
+    assert.ok(/linear-gradient\(rgb\(35, 29, 26\), rgb\(26, 22, 20\) 60%\)/.test(edge.bg), edge.bg);
+    assert.equal(edge.height, 82);
+    assert.equal(edge.barTop, "#231d1a");
+    assert.equal(edge.lampOff, "#4a403b");
+  },
+});
+
+module.exports.push({
+  name: "a tab key is a key: 56 px, 10 px radius, 15 px / 900 label, 10.5 px small label, pressed it moves down 1.5 px; Ring up is paper with a ＋ about 22 px over 10.5 px words",
+  viewport: { width: 430, height: 760 },
+  async run({ page }) {
+    await ready(page, { go: false });
+    const k = await page.evaluate(() => {
+      const css = (sel, p) => getComputedStyle(document.querySelector(sel))[p];
+      const small = document.querySelector('#nav [data-tab="days"] small');
+      return {
+        h: css('#nav [data-tab="days"]', "height"),
+        r: css('#nav [data-tab="days"]', "borderTopLeftRadius"),
+        fs: css('#nav [data-tab="days"]', "fontSize"),
+        fw: css('#nav [data-tab="days"]', "fontWeight"),
+        sfs: getComputedStyle(small).fontSize,
+        sfw: getComputedStyle(small).fontWeight,
+        shadow: css('#nav [data-tab="money"]', "boxShadow"),
+        offBg: css('#nav [data-tab="money"]', "backgroundColor"),
+        offFg: css('#nav [data-tab="money"]', "color"),
+        onBg: css('#nav [data-tab="days"]', "backgroundColor"),
+        onFg: css('#nav [data-tab="days"]', "color"),
+        lampSize: getComputedStyle(document.querySelector('#nav [data-tab="money"]'), "::before").width,
+        lampTop: getComputedStyle(document.querySelector('#nav [data-tab="money"]'), "::before").top,
+        onLamp: getComputedStyle(document.querySelector('#nav [data-tab="days"]'), "::before").boxShadow,
+        ringBg: css("#ring", "backgroundColor"),
+        ringFg: css("#ring", "color"),
+        ringShadow: css("#ring", "boxShadow"),
+        ringPlus: getComputedStyle(document.querySelector("#ring .ring-p")).fontSize,
+        ringWords: getComputedStyle(document.querySelector("#ring .ring-w")).fontSize,
+      };
+    });
+    assert.deepEqual([k.h, k.r, k.fs, k.fw, k.sfs, k.sfw], ["56px", "10px", "15px", "900", "10.5px", "700"]);
+    assert.equal(k.shadow, "rgba(255, 255, 255, 0.1) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.4) 0px -2px 0px 0px inset, rgba(0, 0, 0, 0.5) 0px 2px 3px 0px");
+    assert.deepEqual([k.offBg, k.offFg], ["rgb(44, 38, 35)", "rgb(161, 150, 142)"]);
+    assert.deepEqual([k.onBg, k.onFg], ["rgb(59, 51, 47)", "rgb(244, 240, 234)"]);
+    assert.deepEqual([k.lampSize, k.lampTop], ["5px", "6px"]);
+    assert.equal(k.onLamp, "rgba(244, 240, 234, 0.12) 0px 0px 0px 2px, rgba(244, 240, 234, 0.8) 0px 0px 8px 0px");
+    assert.deepEqual([k.ringBg, k.ringFg], ["rgb(242, 243, 239)", "rgb(21, 18, 15)"]);
+    assert.equal(k.ringShadow, "rgb(255, 255, 255) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.22) 0px -2px 0px 0px inset, rgba(0, 0, 0, 0.5) 0px 2px 3px 0px");
+    assert.deepEqual([k.ringPlus, k.ringWords], ["22px", "10.5px"]);
+    // Pressed: down 1.5 px, the drop shadow flattened.
+    const box = await page.locator('#nav [data-tab="money"]').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(250);
+    const pressed = await page.evaluate(() => {
+      const b = document.querySelector('#nav [data-tab="money"]');
+      return { y: b.getBoundingClientRect().y, shadow: getComputedStyle(b).boxShadow };
+    });
+    await page.mouse.move(2, 2);
+    await page.mouse.up();
+    assert.ok(Math.abs(pressed.y - box.y - 1.5) < 0.3, "moved down " + (pressed.y - box.y));
+    assert.ok(!pressed.shadow.includes("3px"), "the drop shadow flattens: " + pressed.shadow);
+  },
+});
+
+module.exports.push({
+  name: "reduced motion: the keys have no transition",
+  async run({ page }) {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await ready(page, { go: false });
+    const t = await page.evaluate(() => [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => getComputedStyle(b).transitionDuration));
+    assert.ok(t.length >= 4 && t.every((d) => d === "0s"), t.join(" "));
   },
 });
 
@@ -716,38 +934,24 @@ module.exports.push({
   },
 });
 
-// Two-digit counts: about 18 open items is the real list; 99 is the most the pill is asked to hold.
+// Counts: 7, 18 (about the real list) and 99 (the most the pill is asked to hold).
 const manyItems = (n) => Array.from({ length: n }, (_, i) => ({ "#": i + 1, Item: "Made-up booking " + (i + 1), "Book by": "2026-12-0" + ((i % 9) + 1), Status: "Not booked" }));
 
-for (const [n, widths] of [[18, [320, 360, 375, 380, 390, 430]], [99, [320, 390]]]) {
-  for (const width of widths) {
+for (const n of [7, 18, 99]) {
+  for (const width of [320, 340, 360, 375, 390, 430]) {
     module.exports.push({
-      name: "the bar with " + n + " open items at " + width + " px: one line, no overlap, nothing clipped, the pill reads " + n,
+      name: "the bar with " + n + " open items at " + width + " px: five keys on one line, no overlap, nothing clipped or wrapped, the pill reads " + n,
       viewport: { width, height: 760 },
       async run({ page }) {
         await ready(page, { items: manyItems(n), go: false });
         await until(() => tabIsIn(page), "the Before tab is in the bar");
         // The planner read stops short of 99 rows: put the number on the pill itself (it is the pill's room under test).
-        if (n === 99) await page.evaluate(() => { document.getElementById("beforeN").textContent = "99"; });
+        const put = () => page.evaluate((n) => { document.getElementById("beforeN").textContent = String(n); }, n);
         for (const tab of ["days", "before"]) {
           await page.click('#nav button[data-tab="' + tab + '"]');
-          if (n === 99) await page.evaluate(() => { document.getElementById("beforeN").textContent = "99"; });
-          const shape = await barShape(page);
-          assert.deepEqual(shape.overlap, [], "overlap on " + tab);
-          assert.equal(shape.oneLine, true, "one line");
-          assert.equal(shape.inside, true, "inside the bar");
-          assert.equal(shape.tall, true, "44 px tall");
-          assert.deepEqual(shape.clipped, [], "clipped text");
-          assert.equal(shape.pageWide, true, "the page is not wider than the screen");
-          assert.equal(shape.names.length, 5);
-          const more = await page.evaluate(() => {
-            const nav = document.getElementById("nav");
-            const bad = [...nav.querySelectorAll("*")].filter((e) => e.getClientRects().length && e.scrollWidth > e.clientWidth).map((e) => e.id || e.className || e.tagName);
-            return { bad, navScroll: nav.scrollWidth, navClient: nav.clientWidth, pill: document.getElementById("beforeN").textContent };
-          });
-          assert.deepEqual(more.bad, [], "scrollWidth over clientWidth");
-          assert.equal(more.navScroll, more.navClient, "the bar does not scroll sideways");
-          assert.equal(more.pill, String(n));
+          if (n === 99) await put();
+          assert.equal(checkBar(await barShape(page), "on " + tab, true), tab);
+          assert.equal(await page.evaluate(() => document.getElementById("beforeN").textContent), String(n));
         }
       },
     });
