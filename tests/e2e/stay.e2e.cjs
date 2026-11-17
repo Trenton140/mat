@@ -6,6 +6,16 @@
 const assert = require("node:assert/strict");
 const { WITH_PLAN, open, advance, until, text, expectText } = require("./helpers.cjs");
 
+// A 1x1 PNG in place of a real photo, and a stay seed with a photo address.
+const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==", "base64");
+const PHOTO = "https://example.test/hotel.png";
+const BAD_PHOTO = "https://example.test/gone.png";
+function seedWithPhoto(photo) {
+  const seed = JSON.parse(JSON.stringify(WITH_PLAN));
+  seed.stays.find((s) => s.id === "planstay0001").photo = photo;
+  return seed;
+}
+
 async function ready(page, opts = {}) {
   const backend = await open(page, { seed: WITH_PLAN, tab: "days", ...opts });
   await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
@@ -156,6 +166,85 @@ module.exports = [
       await until(async () => !(await isOpen(page, "stay")), "Done closes it");
       assert.equal(await page.evaluate(() => document.getElementById("stay").inert), true);
       assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.classList.contains("tk-stay")), true, "focus back on the stay row");
+    },
+  },
+  {
+    name: "a stay with a photo shows it first on the card",
+    async run({ page, context }) {
+      await context.route(PHOTO, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+      await ready(page, { seed: seedWithPhoto(PHOTO) });
+      await openCard(page, "2026-12-12");
+      await until(() => page.evaluate(() => { const i = document.querySelector("#stay .sy-ph"); return !!i && i.complete && i.naturalWidth > 0; }), "the photo loads");
+      const got = await page.evaluate(() => {
+        const imgs = [...document.querySelectorAll("#stay .sy-ph")];
+        const body = document.getElementById("stayBody");
+        const i = imgs[0];
+        return { n: imgs.length, first: body.firstElementChild === i, tag: i.tagName, src: i.getAttribute("src"), alt: i.getAttribute("alt"), ref: i.referrerPolicy, w: i.getBoundingClientRect().width, h: i.getBoundingClientRect().height, bw: body.getBoundingClientRect().width };
+      });
+      assert.equal(got.n, 1);
+      assert.equal(got.first, true, "the first thing on the card");
+      assert.deepEqual([got.tag, got.src, got.alt, got.ref], ["IMG", PHOTO, "", "no-referrer"]);
+      assert.ok(Math.abs(got.w - got.bw) < 1.5, "full width of the card: " + got.w + " of " + got.bw);
+      assert.ok(Math.abs(got.h - (got.w * 9) / 16) < 2, "16:9: " + got.w + "x" + got.h);
+      await expectFullCard(page);
+    },
+  },
+  {
+    name: "a stay with no photo has no picture on the card",
+    async run({ page }) {
+      await ready(page);
+      await openCard(page, "2026-12-12");
+      assert.equal(await page.evaluate(() => document.querySelectorAll("#stay .sy-ph, #stay img").length), 0);
+      await expectFullCard(page);
+    },
+  },
+  {
+    name: "a stay photo that fails is dropped, the card stays whole, and it is not drawn again",
+    async run({ page }) {
+      let asked = 0; // nothing serves it: the harness refuses every address it does not know
+      page.on("request", (req) => { if (req.url() === BAD_PHOTO) asked++; });
+      await ready(page, { seed: seedWithPhoto(BAD_PHOTO) });
+      await openCard(page, "2026-12-12");
+      await until(() => page.evaluate(() => !document.querySelector("#stay .sy-ph")), "the broken photo is removed");
+      await expectFullCard(page);
+      assert.equal(asked, 1);
+      await page.click("#stayDone");
+      await until(async () => !(await isOpen(page, "stay")), "the card closed");
+      await openCard(page, "2026-12-12");
+      await new Promise((r) => setTimeout(r, 200));
+      assert.equal(await page.evaluate(() => document.querySelectorAll("#stay .sy-ph").length), 0, "not drawn again");
+      assert.equal(asked, 1, "not asked for again");
+      await expectFullCard(page);
+    },
+  },
+  {
+    name: "a stay photo at 320 wide does not scroll the page sideways",
+    viewport: { width: 320, height: 568 },
+    async run({ page, context }) {
+      await context.route(PHOTO, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+      await ready(page, { seed: seedWithPhoto(PHOTO) });
+      await openCard(page, "2026-12-12");
+      await until(() => page.evaluate(() => { const i = document.querySelector("#stay .sy-ph"); return !!i && i.complete && i.naturalWidth > 0; }), "the photo loads");
+      const o = await page.evaluate(() => {
+        const sheet = document.getElementById("stay");
+        const i = document.querySelector("#stay .sy-ph").getBoundingClientRect();
+        return { doc: document.documentElement.scrollWidth - innerWidth, body: document.body.scrollWidth - innerWidth, sheet: sheet.scrollWidth - sheet.clientWidth, right: i.right, left: i.left, vw: innerWidth };
+      });
+      assert.ok(o.doc <= 0 && o.body <= 0 && o.sheet <= 0, "no sideways scroll: " + JSON.stringify(o));
+      assert.ok(o.left >= 0 && o.right <= o.vw + 0.5, "the photo is inside the screen: " + JSON.stringify(o));
+    },
+  },
+  {
+    name: "held sideways, the photo is capped and the address stays on screen",
+    viewport: { width: 740, height: 360 },
+    async run({ page, context }) {
+      await context.route(PHOTO, (route) => route.fulfill({ status: 200, contentType: "image/png", body: PNG }));
+      await ready(page, { seed: seedWithPhoto(PHOTO) });
+      await openCard(page, "2026-12-12");
+      await until(() => page.evaluate(() => { const i = document.querySelector("#stay .sy-ph"); return !!i && i.complete && i.naturalWidth > 0; }), "the photo loads");
+      const h = await page.evaluate(() => document.querySelector("#stay .sy-ph").getBoundingClientRect().height);
+      assert.ok(h <= 0.38 * 360 + 1, "the photo is capped at 38vh: " + h);
+      await expectReach(page, "#stay .sy-ad");
     },
   },
   {
