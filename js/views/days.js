@@ -13,8 +13,6 @@
 //   onStop(stopId): an open stop's Edit was tapped.
 // - held(): true while a sheet over Days is in use (the stop sheet): coming
 //   back to the screen then does not move the rail (R32).
-// - under: a node placed under the counter, above the rail (the "Before we
-//   go" list, js/views/todos.js), or null.
 // - goDay(index, smooth): bring that day's ticket into view. day(): the date
 //   of the ticket in view.
 // It opens on today (js/plan.js openDayIndex).
@@ -118,7 +116,7 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, held = () => false, under = null } = {}) {
+export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, held = () => false } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
@@ -140,7 +138,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   demo.append(demoText, demoStop);
   demo.hidden = true;
   demoStop.addEventListener("click", () => clock.stop());
-  root.replaceChildren(demo, bar, ...(under ? [under] : []), rail);
+  root.replaceChildren(demo, bar, rail);
 
   let dates = []; // the dates of the drawn tickets, in order
   let states = []; // each one's dayState

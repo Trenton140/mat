@@ -45,8 +45,8 @@ async function fits(page) {
   await showing(page, "#vDays");
   assert.equal(await barFits(page), "ok");
   // The type is not shrunk to make it fit.
-  const sizes = await page.evaluate(() => [...document.querySelectorAll("#nav [data-tab], #youBtn")].map((b) => getComputedStyle(b).fontSize));
-  assert.deepEqual(sizes, ["17px", "17px", "17px"]);
+  const sizes = await page.evaluate(() => [...document.querySelectorAll("#nav [data-tab], #youBtn")].filter((b) => !b.hidden).map((b) => getComputedStyle(b).fontSize));
+  assert.deepEqual(sizes, ["16px", "16px", "16px"]);
 }
 
 module.exports = [

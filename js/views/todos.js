@@ -1,19 +1,25 @@
 /* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // "Before we go" (出発前): the bookings and prep from the planner's Book Now
-// tab, printed on ticket stock on the Days screen, under the day counter.
+// tab, printed on ticket stock on the Before tab (its own screen, between
+// Days and Money).
 //
-// mountTodos(store, { clock, now, screen }) -> { el, wake() }
-// - el: the section to place under the counter (#todos).
+// mountTodos(root, store, { clock, now, onState }) -> { el, shown() }
+// - root: the Before screen (#vBefore); the list is drawn into it.
 // - clock: the Days clock; before the trip's first day by it (in the trip's
-//   zone) the whole list shows; from the first day on, while anything is
-//   open, one folded row (#bwFold) opens the same list; with nothing open,
-//   nothing shows. No planner linked, or no items: nothing shows.
+//   zone) the tab is always there; from the first day on only while
+//   something is open (showBeforeTab, js/todos.js). No planner linked, or no
+//   items: no tab.
+// - onState({ show, open }): told on every redraw whether the tab is in the
+//   bar and how many items are open (a row just ticked, still stamped in
+//   place, is not counted); the app draws the button and, when the tab goes
+//   while it is showing, goes back to Days.
 // - now(): the real time, for the due lines (counted on the Toronto
 //   calendar, js/todos.js) and for when a fetch is due.
-// - screen: the Days view; each time it becomes the screen showing, and on
-//   wake() (the app has started), the list is fetched quietly when it is an
-//   hour old or more and the phone has signal: no spinner, and a notice only
-//   when that fails twice in a row.
+// - shown(): the app calls it each time the Before tab is shown: the done
+//   group a tick opened is folded again, and the list is fetched quietly
+//   when it is an hour old or more and the phone has signal (no spinner; a
+//   notice only when that fails twice in a row). wake() does the fetch alone
+//   (the app has started).
 //
 // A row opens in place (as a ticket's stop does): the whole item, the note
 // and the controls. Ticking is the settle stamp's moment: the same red 済
@@ -32,7 +38,7 @@ import { fillSeal } from "../picture.js";
 import { paidStampSVG } from "../stamp.js";
 import { thud, primeSound } from "../sound.js";
 import { clock as hhmm, localDay, dayHead } from "../format.js";
-import { homeToday, dueLine, byBookBy, doneTodos, isDone, plannerPending, tickedLine, isStale, openCountText } from "../todos.js";
+import { homeToday, dueLine, byBookBy, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab } from "../todos.js";
 
 // How long a just-ticked row stays stamped in place, at the least.
 const HOLD_MS = 1600;
@@ -43,7 +49,7 @@ const FETCHING = "Fetching…";
 const FETCHED = "Up to date ✓";
 const MORE = "More to fetch";
 const NOT_FETCHED = "Not fetched";
-const PENDING = "The planner hasn't been updated yet.";
+const PENDING = "The planner hasn’t been updated yet.";
 const AUTO_FAILED = "Couldn’t fetch the list from the planner.";
 
 function el(tag, cls, text) {
@@ -72,19 +78,11 @@ const rotOf = (id) => (seedOf(id) % 201) / 10 - 13;
 // What a row is drawn from, to tell whether a redraw changed it.
 const drawn = new WeakMap();
 
-export function mountTodos(store, { clock, now = () => Date.now(), screen = null } = {}) {
+export function mountTodos(root, store, { clock, now = () => Date.now(), onState = () => {} } = {}) {
   const section = el("section", "bw");
   section.id = "todos";
   section.hidden = true;
   section.setAttribute("aria-labelledby", "bwTitle");
-
-  const fold = button("bw-fold");
-  fold.id = "bwFold";
-  fold.setAttribute("aria-controls", "bwCard");
-  const foldJp = el("b", "bw-jp", "出発前");
-  const foldText = el("span", "bw-fold-t");
-  fold.append(foldJp, foldText, el("span", "bw-fold-c"));
-  fold.querySelector(".bw-fold-c").setAttribute("aria-hidden", "true");
 
   const card = el("div", "bw-card");
   card.id = "bwCard";
@@ -110,12 +108,12 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
   fetchB.setAttribute("aria-live", "polite");
   foot.append(at, fetchB);
   card.append(band, rows, perf, doneB, doneBox, foot);
-  section.append(fold, card);
+  section.append(card);
+  root.replaceChildren(section);
 
   let me = null;
   let people = [];
   let openId = null; // the row opened by hand
-  let cardOpen = false; // during the trip: the folded row opened
   let doneOpen = false;
   const landed = new Map(); // id -> { at } : ticked here, still shown stamped in place
   let hitId = null; // the row whose stamp is landing right now (drawn once with .hit)
@@ -321,7 +319,11 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     const before = ready && beforeTrip(s);
     const shownOpen = byBookBy(todos.filter((t) => !isDone(t) || landed.has(t.id)));
     const stillOpen = shownOpen.filter((t) => !landed.has(t.id)).length;
-    if (!ready || (!before && shownOpen.length === 0)) {
+    // A row still stamped in place counts as shown, so the tab stays until its stamp has moved on.
+    const show = showBeforeTab({ loaded: ready, beforeTrip: before, openCount: shownOpen.length });
+    // The app puts the person on Days if this was their screen, then focus can follow.
+    onState({ show, open: stillOpen });
+    if (!show) {
       // Focus in the list goes to the day counter before the list goes.
       if (!section.hidden && section.contains(document.activeElement)) {
         const head = document.getElementById("dayCount");
@@ -333,11 +335,6 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     }
     const spot = focusSpot();
     section.hidden = false;
-    section.classList.toggle("is-folded", !before);
-    fold.hidden = before;
-    foldText.textContent = openCountText(stillOpen);
-    fold.setAttribute("aria-expanded", String(cardOpen));
-    card.hidden = !before && !cardOpen;
     count.replaceChildren(String(stillOpen), el("small", "", "open"));
 
     const today = homeToday(now());
@@ -423,11 +420,6 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
 
   section.addEventListener("click", (ev) => {
     const t = ev.target;
-    if (t.closest("#bwFold")) {
-      cardOpen = !cardOpen;
-      render();
-      return;
-    }
     if (t.closest("#bwDoneB")) {
       doneOpen = !doneOpen;
       render();
@@ -505,25 +497,19 @@ export function mountTodos(store, { clock, now = () => Date.now(), screen = null
     });
   }
 
-  if (screen) {
-    let shown = screen.classList.contains("is-active");
-    new MutationObserver(() => {
-      const on = screen.classList.contains("is-active");
-      if (on && !shown) {
-        // The done group a tick opened is folded again on coming back.
-        if (doneOpen) {
-          doneOpen = false;
-          render();
-        }
-        wake();
-      }
-      shown = on;
-    }).observe(screen, { attributes: true, attributeFilter: ["class"] });
+  // Each time the Before tab is shown (js/app.js).
+  function shown() {
+    // The done group a tick opened is folded again on coming back.
+    if (doneOpen) {
+      doneOpen = false;
+      render();
+    }
+    wake();
   }
 
   store.subscribe(draw);
   if (clock && clock.subscribe) clock.subscribe(draw);
   draw();
 
-  return { el: section, wake };
+  return { el: section, wake, shown };
 }

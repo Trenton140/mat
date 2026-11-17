@@ -114,7 +114,16 @@ export function isStale(pulledAt, nowMs) {
   return !isFinite(ms) || nowMs - ms >= STALE_MS;
 }
 
-// The folded row during the trip.
-export function openCountText(n) {
-  return n + (n === 1 ? " thing still open" : " things still open");
+// Whether the Before tab is in the bar. `loaded`: the list has come in (a
+// planner is linked and it has items); `beforeTrip`: the trip's first day has
+// not begun; `openCount`: items still open. Before the trip it shows even with
+// nothing open; from the first day on only while something is.
+export function showBeforeTab({ loaded = false, beforeTrip = false, openCount = 0 } = {}) {
+  if (!loaded) return false;
+  return beforeTrip || openCount > 0;
+}
+
+// The tab button's accessible name.
+export function tabName(openCount) {
+  return openCount > 0 ? "Before we go, " + openCount + " open" : "Before we go";
 }

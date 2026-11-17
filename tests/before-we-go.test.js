@@ -4,7 +4,7 @@
 // here is made up.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { homeToday, dueLine, dueText, openTodos, doneTodos, isDone, plannerPending, tickedLine, isStale, openCountText } from "../js/todos.js";
+import { homeToday, dueLine, dueText, openTodos, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab, tabName } from "../js/todos.js";
 
 const item = (o) => ({ id: "1", item: "x", bookBy: "", status: "", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: false, ...o });
 
@@ -118,9 +118,24 @@ test("stale: never fetched, or fetched 60 minutes ago or more", () => {
   assert.equal(isStale("2026-11-16T14:00:00Z", now), true);
 });
 
-test("the folded row's words", () => {
-  assert.equal(openCountText(1), "1 thing still open");
-  assert.equal(openCountText(3), "3 things still open");
+test("the Before tab shows: always before the trip once the list has loaded, from the first day only while something is open, never before the list has loaded", () => {
+  // Before the trip: even with nothing open.
+  assert.equal(showBeforeTab({ loaded: true, beforeTrip: true, openCount: 4 }), true);
+  assert.equal(showBeforeTab({ loaded: true, beforeTrip: true, openCount: 0 }), true);
+  // From the first day on: only while something is open.
+  assert.equal(showBeforeTab({ loaded: true, beforeTrip: false, openCount: 1 }), true);
+  assert.equal(showBeforeTab({ loaded: true, beforeTrip: false, openCount: 0 }), false);
+  // The list has never loaded: no tab, whatever else is true.
+  assert.equal(showBeforeTab({ loaded: false, beforeTrip: true, openCount: 3 }), false);
+  assert.equal(showBeforeTab({ loaded: false, beforeTrip: false, openCount: 3 }), false);
+  assert.equal(showBeforeTab({ loaded: false, beforeTrip: true, openCount: 0 }), false);
+  assert.equal(showBeforeTab(), false);
+});
+
+test("the Before tab's accessible name carries the open count, and none at 0", () => {
+  assert.equal(tabName(18), "Before we go, 18 open");
+  assert.equal(tabName(1), "Before we go, 1 open");
+  assert.equal(tabName(0), "Before we go");
 });
 
 test("the undo bar's line for each change to an item", async () => {

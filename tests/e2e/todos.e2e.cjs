@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
-// Task 20: "Before we go" (出発前) on the Days tab. The fake backend runs the
+// Tasks 20 and 22: "Before we go" (出発前) on its own Before tab. The fake backend runs the
 // real backend actions over a fake planner (tests/fake-backend.cjs): its Book
 // Now tab is pulled into the Todos tab, a tick writes Booked back to it (or
 // cannot: fake.planner.cellFails), and every write it receives is recorded.
@@ -43,13 +43,24 @@ async function listBackend({ nowMs = BEFORE, items = ITEMS, ago = 5 * MIN, claim
   return backend;
 }
 
+// Opens the app and goes to the Before tab (opts.go = false: stay on Days).
 async function ready(page, opts = {}) {
-  const { nowMs = BEFORE, backend } = opts;
+  const { nowMs = BEFORE, backend, go = true } = opts;
   const be = backend || (await listBackend(opts));
   await open(page, { backend: be, nowMs, tab: "days" });
   await until(() => page.evaluate(() => document.querySelectorAll("#rail .tk").length > 0), "the tickets draw");
+  if (go) await goBefore(page);
   return be;
 }
+
+// Taps the Before tab (once it is in the bar) and waits for the list to show.
+async function goBefore(page) {
+  await until(() => visible(page, "#beforeBtn"), "the Before tab is in the bar");
+  await page.click('#nav button[data-tab="before"]');
+  await until(() => visible(page, "#todos"), "the list shows");
+}
+const tabIsIn = (page) => visible(page, "#beforeBtn");
+const onScreen = (page) => page.evaluate(() => document.querySelector(".view.is-active").id);
 
 const rowIds = (page, box = "#bwOpen") => page.evaluate((b) => [...document.querySelectorAll(b + " > [data-id]")].map((r) => r.dataset.id), box);
 const row = (id) => '#bwOpen .bw-r[data-id="' + id + '"]';
@@ -78,14 +89,16 @@ async function openRow(page, id) {
 
 module.exports = [
   {
-    name: "before the trip the list sits under the countdown: open items by book-by date, the due lines, the seals, done folded, the fetch line",
+    name: "before the trip the list is on the Before tab: open items by book-by date, the due lines, the seals, done folded, the fetch line; Days shows none of it",
     async run({ page }) {
       const backend = await ready(page, { claims: { 2: "Ajen" } });
       assert.ok(await visible(page, "#todos"));
-      assert.equal(await visible(page, "#bwFold"), false, "no folded row before the trip");
-      const order = await page.evaluate(() => [...document.getElementById("vDays").children].map((n) => n.id || n.className));
-      assert.ok(order.indexOf("todos") === order.indexOf("rail") - 1 && order[order.indexOf("todos") - 1] === "bar", "between the counter and the rail: " + order.join(","));
-      await expectText(page, "#dayCount", /in 23 days/);
+      assert.equal(await onScreen(page), "vBefore");
+      assert.equal(await page.evaluate(() => document.getElementById("todos").closest("#vBefore") !== null), true, "the list is in the Before view");
+      assert.equal(await page.$("#bwFold"), null, "no folded row any more");
+      // Days has no list in it.
+      assert.equal(await page.$("#vDays #todos, #vDays .bw"), null, "no list inside Days");
+      await expectText(page, "#vDays #dayCount", /in 23 days/);
       await expectText(page, "#bwTitle", "出発前Before we go");
       await expectText(page, "#bwCard .bw-band .num", "4open");
       assert.deepEqual(await rowIds(page), ["1", "2", "3", "4"]);
@@ -116,6 +129,90 @@ module.exports = [
       await expectText(page, '#bwDone .bw-d[data-id="5"] .bw-n', "Pocket wifi pickup");
       await expectText(page, '#bwDone .bw-d[data-id="5"] .bw-due', "Booked in the planner");
       assert.equal(await page.$$eval("#bwDone button, #bwDone a", (n) => n.length), 0, "no controls in the done group");
+    },
+  },
+  {
+    name: "the Before tab: named with the count, the count matches the open rows and follows a tick, and focus and the screen are Days-like",
+    async run({ page }) {
+      const backend = await ready(page, { claims: { 2: "Ajen" } });
+      const bar = () =>
+        page.evaluate(() => {
+          const b = document.getElementById("beforeBtn");
+          const names = [...document.querySelectorAll("#nav [data-tab]")].filter((n) => !n.hidden).map((n) => n.dataset.tab);
+          return {
+            pill: document.getElementById("beforeN").hidden ? null : document.getElementById("beforeN").textContent,
+            name: b.getAttribute("aria-label"),
+            current: b.getAttribute("aria-current"),
+            active: b.classList.contains("is-active"),
+            order: names.join(","),
+            rows: document.querySelectorAll("#bwOpen .bw-r:not(.is-landed)").length,
+            band: document.querySelector("#bwCard .bw-band .num").textContent,
+            small: b.querySelector("small").textContent,
+          };
+        });
+      let b = await bar();
+      assert.deepEqual({ ...b }, { pill: "4", name: "Before we go, 4 open", current: "page", active: true, order: "days,before,money", rows: 4, band: "4open", small: "出発前" });
+      assert.equal(await page.evaluate(() => document.getElementById("vDays").inert), true, "Days is inert while Before shows");
+      await openRow(page, "3");
+      await page.click(row(3) + " .bw-tick");
+      await until(() => stored(backend, "3").ticked_by === "Mo", "ticked");
+      b = await bar();
+      assert.equal(b.pill, "3");
+      assert.equal(b.name, "Before we go, 3 open");
+      assert.equal(b.rows, 3, "the pill and the open rows agree");
+      assert.equal(b.band, "3open");
+      // Back on Days the tab is still there, and Days has no list.
+      await page.click('#nav button[data-tab="days"]');
+      assert.equal(await onScreen(page), "vDays");
+      assert.ok(await tabIsIn(page));
+      assert.equal(await page.$("#vDays #todos, #vDays .bw"), null);
+    },
+  },
+  {
+    name: "before the trip the tab is there with 0 open; no planner or no items: no tab; during the trip only while something is open, and ticking the last one on the tab lands on Days",
+    async run({ page, newPhone }) {
+      // Before the trip, everything done: still there, count 0 and no pill.
+      await ready(page, { items: [ITEMS[4]] });
+      assert.equal(await page.evaluate(() => document.getElementById("beforeBtn").getAttribute("aria-label")), "Before we go");
+      assert.equal(await visible(page, "#beforeN"), false, "no pill at 0");
+      // Never loaded (no planner): no tab.
+      const other = await newPhone();
+      const none = makeBackend(SEED, { now: BEFORE });
+      await open(other, { backend: none, nowMs: BEFORE, tab: "days" });
+      await until(() => other.evaluate(() => document.querySelectorAll("#rail .tk").length > 0), "the tickets draw");
+      assert.equal(await visible(other, "#beforeBtn"), false, "no list, no tab");
+      assert.equal(await other.evaluate(() => document.getElementById("beforeBtn").hidden), true);
+      // During the trip with nothing open: no tab.
+      const third = await newPhone();
+      await ready(third, { nowMs: NOON12, items: [ITEMS[4]], go: false });
+      await third.evaluate(() => window.__matTest.store.idle());
+      assert.equal(await tabIsIn(third), false, "trip on, 0 open: no tab");
+      assert.equal(await third.$("#vDays #todos, #vDays .bw"), null, "and no list in Days");
+      // During the trip with one open: the tab is there; Days still shows no list.
+      const fourth = await newPhone();
+      const backend = await ready(fourth, { nowMs: NOON12, items: [ITEMS[1], ITEMS[4]], go: false });
+      await until(() => tabIsIn(fourth), "1 open: the tab is in the bar");
+      assert.equal(await fourth.$("#vDays #todos, #vDays .bw"), null, "no list, no folded card, inside Days");
+      assert.equal(await fourth.$("#bwFold"), null);
+      assert.equal(await fourth.evaluate(() => document.getElementById("beforeN").textContent), "1");
+      await goBefore(fourth);
+      await expectText(fourth, row(2) + " .bw-due", /was due Wed Nov 18 · \d+ days late/);
+      await openRow(fourth, "2");
+      await fourth.click(row(2) + " .bw-tick");
+      await until(() => stored(backend, "2").ticked_by === "Mo", "ticked");
+      assert.equal(await onScreen(fourth), "vBefore", "the stamp is seen first");
+      await advance(fourth, backend, 1700);
+      await until(async () => !(await tabIsIn(fourth)), "the tab goes once all is done");
+      assert.equal(await onScreen(fourth), "vDays", "being on it when the last is ticked lands on Days");
+      assert.equal(await fourth.evaluate(() => document.querySelector("#nav [data-tab=days]").classList.contains("is-active")), true);
+      assert.equal(await fourth.evaluate(() => document.activeElement && document.activeElement.id), "dayCount", "focus goes to the day counter, not lost");
+      // A later sync that brings an item back brings the tab back and does not take focus.
+      await fourth.evaluate(() => document.getElementById("dayCount").focus());
+      assert.equal((await backend.call("undo", { logId: Number(backend.fake.tables.Log[backend.fake.tables.Log.length - 1].id) }, "Ajen")).ok, true);
+      await fourth.evaluate(() => window.__matTest.store.checkRev());
+      await until(() => tabIsIn(fourth), "back, open again");
+      assert.equal(await onScreen(fourth), "vDays", "still on Days");
+      assert.equal(await fourth.evaluate(() => document.activeElement && document.activeElement.id), "dayCount", "focus left where it was");
     },
   },
   {
@@ -235,16 +332,16 @@ module.exports = [
       await page.click("#histDone");
       await until(async () => (await rowIds(page)).includes("3"), "back among the open items");
       await expectText(page, "#bwDoneB", "済 Done (1)");
-      assert.ok(await visible(page, "#bwDone"), "still open while Days stays the screen");
-      // It does not stay open: the next time Days is shown it is folded again.
+      assert.ok(await visible(page, "#bwDone"), "still open while the Before tab stays the screen");
+      // It does not stay open: the next time the Before tab is shown it is folded again.
       await page.click('#nav button[data-tab="money"]');
-      await page.click('#nav button[data-tab="days"]');
+      await page.click('#nav button[data-tab="before"]');
       await until(async () => !(await visible(page, "#bwDone")), "folded again");
       assert.equal(await page.getAttribute("#bwDoneB", "aria-expanded"), "false");
     },
   },
   {
-    name: "a tick the planner can't take yet: done in the app, and a line says the planner hasn't been updated yet",
+    name: "a tick the planner can’t take yet: done in the app, and a line says the planner hasn’t been updated yet",
     async run({ page }) {
       const backend = await ready(page);
       backend.fake.planner.cellFails = true;
@@ -254,7 +351,7 @@ module.exports = [
       await until(() => page.evaluate((s) => { const p = document.querySelector(s); return p && !p.hidden; }, row(1) + " .bw-pl"), "the pending line on the stamped row");
       await advance(page, backend, 1700);
       await until(() => page.$('#bwDone .bw-d[data-id="1"]'), "moved to done");
-      await expectText(page, '#bwDone .bw-d[data-id="1"] .bw-pl', "The planner hasn't been updated yet.");
+      await expectText(page, '#bwDone .bw-d[data-id="1"] .bw-pl', "The planner hasn’t been updated yet.");
       assert.equal(stored(backend, "1").planner_written, "");
       // The next fetch writes it, and the line goes.
       backend.fake.planner.cellFails = false;
@@ -287,33 +384,6 @@ module.exports = [
     },
   },
   {
-    name: "during the trip: one folded row while anything is open, which opens the list; nothing once all is done",
-    async run({ page }) {
-      const items = [ITEMS[1], ITEMS[4]];
-      const backend = await ready(page, { nowMs: NOON12, items });
-      assert.ok(await visible(page, "#bwFold"));
-      await expectText(page, "#bwFold", "出発前1 thing still open");
-      assert.equal(await page.getAttribute("#bwFold", "aria-expanded"), "false");
-      assert.equal(await visible(page, "#bwCard"), false);
-      await page.click("#bwFold");
-      assert.ok(await visible(page, "#bwCard"));
-      assert.equal(await page.getAttribute("#bwFold", "aria-expanded"), "true");
-      await expectText(page, row(2) + " .bw-due", /was due Wed Nov 18 · \d+ days late/);
-      await openRow(page, "2");
-      await page.click(row(2) + " .bw-tick");
-      await until(() => stored(backend, "2").ticked_by === "Mo", "ticked");
-      await advance(page, backend, 1700);
-      await until(async () => !(await visible(page, "#todos")), "nothing shows once all is done");
-      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "dayCount", "focus goes to the day counter, not lost");
-      // A later sync that brings an item back does not take focus.
-      await page.evaluate(() => document.getElementById("dayCount").focus());
-      assert.equal((await backend.call("undo", { logId: Number(backend.fake.tables.Log[backend.fake.tables.Log.length - 1].id) }, "Ajen")).ok, true);
-      await page.evaluate(() => window.__matTest.store.checkRev());
-      await until(() => visible(page, "#todos"), "back, open again");
-      assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.id), "dayCount", "focus left where it was");
-    },
-  },
-  {
     name: "before the trip with everything done: all done, and the done group; no planner or no items: nothing",
     async run({ page, newPhone }) {
       await ready(page, { items: [ITEMS[4]] });
@@ -326,11 +396,12 @@ module.exports = [
       await open(other, { backend: be, nowMs: BEFORE, tab: "days" });
       await until(() => other.evaluate(() => document.querySelectorAll("#rail .tk").length > 0), "the tickets draw");
       assert.equal(await visible(other, "#todos"), false);
+      assert.equal(await visible(other, "#beforeBtn"), false, "no planner: no tab");
       assert.equal(be.requests.filter((r) => r.action === "syncTodos").length, 0, "no planner: no fetch");
     },
   },
   {
-    name: "fetched quietly once when an hour old, not when fresh; showing Days again does not fetch a fresh list again",
+    name: "fetched quietly once when an hour old, not when fresh; showing the Before tab again does not fetch a fresh list again",
     async run({ page, newPhone }) {
       const stale = await listBackend({ ago: 61 * MIN });
       await ready(page, { backend: stale });
@@ -338,7 +409,7 @@ module.exports = [
       assert.deepEqual(sent(stale, "syncTodos")[0].args, { force: false });
       await until(() => page.evaluate(() => /fetched/.test(document.getElementById("bwAt").textContent)), "fetched line");
       await page.click('#nav button[data-tab="money"]');
-      await page.click('#nav button[data-tab="days"]');
+      await page.click('#nav button[data-tab="before"]');
       await page.evaluate(() => window.__matTest.store.idle());
       assert.equal(sent(stale, "syncTodos").length, 1, "fresh now: not again");
       assert.equal(await text(page, "#bwFetch"), "Fetch", "quietly: Fetch never said Fetching");
@@ -348,7 +419,7 @@ module.exports = [
       await ready(other, { backend: fresh });
       await other.evaluate(() => window.__matTest.store.idle());
       await other.click('#nav button[data-tab="money"]');
-      await other.click('#nav button[data-tab="days"]');
+      await other.click('#nav button[data-tab="before"]');
       await other.evaluate(() => window.__matTest.store.idle());
       assert.equal(sent(fresh, "syncTodos").length, 0);
     },
@@ -398,30 +469,36 @@ module.exports = [
       await advance(page, backend, 61 * MIN);
       await page.evaluate(() => window.__matTest.store.clearNotice());
       await page.click('#nav button[data-tab="money"]');
-      await page.click('#nav button[data-tab="days"]');
+      await page.click('#nav button[data-tab="before"]');
       await until(() => sent(backend, "syncTodos").length === 3, "a quiet fetch");
       await page.evaluate(() => window.__matTest.store.idle());
       assert.equal(await visible(page, "#ubar"), false, "first failure: nothing said");
       await page.click('#nav button[data-tab="money"]');
-      await page.click('#nav button[data-tab="days"]');
+      await page.click('#nav button[data-tab="before"]');
       await until(() => sent(backend, "syncTodos").length === 4, "another quiet fetch");
       await expectText(page, "#ubarT", /planner/);
     },
   },
   {
-    name: "sideways (844 × 390): the list under the counter, a row opens and its controls fit",
+    name: "sideways (844 × 390): the Before tab in the rail, a row opens and its controls fit",
     viewport: { width: 844, height: 390 },
     async run({ page }) {
       await ready(page, { claims: { 2: "Ajen" } });
       assert.ok(await visible(page, "#todos"));
+      // The rail lists Days, Before, Money, You, then Ring up, each 44 px or more.
+      const rail = await page.evaluate(() =>
+        [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => ({ id: b.dataset.tab || b.id, top: b.getBoundingClientRect().top, h: b.getBoundingClientRect().height })),
+      );
+      assert.deepEqual(rail.map((r) => r.id), ["days", "before", "money", "youBtn", "ring"]);
+      assert.ok(rail.every((r, i) => r.h >= 44 && (i === 0 || r.top > rail[i - 1].top)), JSON.stringify(rail));
       await openRow(page, "1");
       const fit = await page.evaluate(() => {
-        const view = document.getElementById("vDays").getBoundingClientRect();
+        const view = document.getElementById("vBefore").getBoundingClientRect();
         const card = document.getElementById("bwCard").getBoundingClientRect();
         const tick = document.querySelector('#bwOpen .bw-r[data-id="1"] .bw-tick').getBoundingClientRect();
         const ctl = [...document.querySelectorAll('#bwOpen .bw-r[data-id="1"] .bw-ctl > *')].map((n) => n.getBoundingClientRect());
         const all = ctl.length === 3 && ctl.every((b) => b.left >= card.left && b.right <= card.right && b.width > 0);
-        return { inside: card.left >= view.left && card.right <= view.right, tickIn: tick.right <= card.right, all, scroll: document.getElementById("vDays").scrollWidth <= document.getElementById("vDays").clientWidth };
+        return { inside: card.left >= view.left && card.right <= view.right, tickIn: tick.right <= card.right, all, scroll: document.getElementById("vBefore").scrollWidth <= document.getElementById("vBefore").clientWidth };
       });
       assert.deepEqual(fit, { inside: true, tickIn: true, all: true, scroll: true });
     },
@@ -461,7 +538,7 @@ module.exports = [
       await openRow(page, "2");
       assert.equal(await page.$(row(2) + " a"), null, "an http: link is no link on the phone");
       const wide = await page.evaluate(() => {
-        const v = document.getElementById("vDays");
+        const v = document.getElementById("vBefore");
         const t = document.getElementById("todos");
         return { view: v.scrollWidth <= v.clientWidth, list: t.scrollWidth <= t.clientWidth };
       });
@@ -539,3 +616,102 @@ module.exports = [
     },
   },
 ];
+
+// The bottom bar's four tabs and the button, measured: on one line, apart, inside the bar, no text clipped, each at least 44 px tall.
+async function barShape(page) {
+  return page.evaluate(() => {
+    const nav = document.getElementById("nav").getBoundingClientRect();
+    const items = [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden);
+    const rects = items.map((b) => b.getBoundingClientRect());
+    const overlap = [];
+    for (let i = 0; i < rects.length; i++)
+      for (let j = i + 1; j < rects.length; j++) {
+        const a = rects[i];
+        const c = rects[j];
+        if (a.left < c.right - 0.5 && c.left < a.right - 0.5 && a.top < c.bottom - 0.5 && c.top < a.bottom - 0.5) overlap.push(items[i].textContent + "/" + items[j].textContent);
+      }
+    const centres = rects.map((r) => r.top + r.height / 2);
+    const clipped = items.filter((b) => {
+      const r = b.getBoundingClientRect();
+      return b.scrollWidth > b.clientWidth + 1 || [...b.children].some((c) => c.getClientRects().length && (c.getBoundingClientRect().right > r.right + 0.5 || c.getBoundingClientRect().left < r.left - 0.5));
+    }).map((b) => b.textContent);
+    const ring = document.getElementById("ring");
+    return {
+      names: items.map((b) => b.getAttribute("aria-label") || b.dataset.tab || b.id),
+      overlap,
+      oneLine: Math.max(...centres) - Math.min(...centres) <= 3,
+      inside: rects.every((r) => r.left >= nav.left - 0.5 && r.right <= nav.right + 0.5),
+      tall: rects.every((r) => r.height >= 44),
+      clipped,
+      pageWide: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ringText: ring.innerText.replace(/\s+/g, " ").trim(),
+      ringName: ring.getAttribute("aria-label"),
+    };
+  });
+}
+
+for (const width of [320, 350, 390, 430]) {
+  module.exports.push({
+    name: "the bar at " + width + " px: Days, Before, Money, You and the button on one line, no overlap, nothing clipped, each tab 44 px tall" + (width <= 350 ? "; the button is the plus alone" : ""),
+    viewport: { width, height: 760 },
+    async run({ page }) {
+      await ready(page, { claims: { 2: "Ajen" }, go: false });
+      await until(() => tabIsIn(page), "the Before tab is in the bar");
+      // With a count showing, on Days and on Before.
+      for (const tab of ["days", "before"]) {
+        await page.click('#nav button[data-tab="' + tab + '"]');
+        const shape = await barShape(page);
+        assert.deepEqual(shape.overlap, [], "overlap on " + tab);
+        assert.equal(shape.oneLine, true, "one line");
+        assert.equal(shape.inside, true, "inside the bar");
+        assert.equal(shape.tall, true, "44 px tall");
+        assert.deepEqual(shape.clipped, [], "clipped text");
+        assert.equal(shape.pageWide, true, "the page is not wider than the screen");
+        assert.equal(shape.names.length, 5);
+        assert.equal(shape.ringName, "Ring up");
+        assert.equal(shape.ringText, width <= 350 ? "＋" : "＋ Ring up");
+      }
+      // The pill sits on its tab, inside the bar.
+      const pill = await page.evaluate(() => {
+        const p = document.getElementById("beforeN").getBoundingClientRect();
+        const n = document.getElementById("nav").getBoundingClientRect();
+        return { in: p.left >= n.left && p.right <= n.right && p.top >= n.top, text: document.getElementById("beforeN").textContent };
+      });
+      assert.deepEqual(pill, { in: true, text: "4" });
+    },
+  });
+}
+
+module.exports.push({
+  name: "the bar has a crisp edge: a black top border and a contact shadow, and no gradient drawn above it",
+  async run({ page }) {
+    await ready(page, { go: false });
+    const edge = await page.evaluate(() => {
+      const nav = document.getElementById("nav");
+      const cs = getComputedStyle(nav);
+      const before = getComputedStyle(nav, "::before");
+      return { image: before.backgroundImage, content: before.content, top: cs.borderTopWidth + " " + cs.borderTopStyle + " " + cs.borderTopColor, shadow: cs.boxShadow, height: nav.getBoundingClientRect().height };
+    });
+    assert.equal(edge.image, "none", "no gradient");
+    assert.equal(edge.content, "none", "no ::before at all");
+    assert.equal(edge.top, "1px solid rgb(0, 0, 0)");
+    assert.equal(edge.shadow, "rgba(0, 0, 0, 0.7) 0px -12px 18px -12px");
+    assert.equal(edge.height, 74);
+  },
+});
+
+module.exports.push({
+  name: "the list's last row can be scrolled clear above the bar",
+  async run({ page }) {
+    const items = [];
+    for (let i = 1; i <= 14; i++) items.push({ "#": i, Item: "Made-up booking " + i, "Book by": "2026-12-0" + ((i % 9) + 1), Status: "Not booked" });
+    await ready(page, { items });
+    const gap = await page.evaluate(() => {
+      const v = document.getElementById("vBefore");
+      v.scrollTop = v.scrollHeight;
+      const foot = document.querySelector("#bwCard .bw-foot").getBoundingClientRect();
+      return document.getElementById("nav").getBoundingClientRect().top - foot.bottom;
+    });
+    assert.ok(gap >= 0, "the foot ends " + gap + " px above the bar");
+  },
+});

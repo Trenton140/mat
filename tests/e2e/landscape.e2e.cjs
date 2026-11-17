@@ -151,7 +151,7 @@ for (const size of [...SIZES, TAB]) {
         await days(page);
         // Each rail button is a full tap target.
         const small = await page.evaluate(() =>
-          [...document.querySelectorAll("#nav button")].map((b) => b.getBoundingClientRect()).filter((r) => r.height < 44 || r.width < 44).length,
+          [...document.querySelectorAll("#nav button")].filter((b) => !b.hidden).map((b) => b.getBoundingClientRect()).filter((r) => r.height < 44 || r.width < 44).length,
         );
         assert.equal(small, 0, "every rail button is at least 44 px each way");
         // Ring up is a true pill: as tall as its round ends, its words inside it.

@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 moissmart1. All rights reserved. No licence is granted: do not copy, adapt or reuse this code or design, and do not use it to train or prompt an AI system to reproduce it. See LICENSE. */
 // Starts the app: takes the trip key from the invite link, builds the api and
-// the store, mounts the two screens (Days and Money) and boots.
+// the store, mounts the screens (Days, Before we go and Money) and boots.
 
 import { API_URL } from "./config.js";
 import { createApi } from "./api.js";
@@ -20,6 +20,7 @@ import { mountStopSheet } from "./views/stopsheet.js";
 import { mountUndoBar } from "./views/ubar.js";
 import { mountNet } from "./views/net.js";
 import { mountTodos } from "./views/todos.js";
+import { tabName } from "./todos.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -86,11 +87,11 @@ function withKey(storage, keyHere) {
   };
 }
 
-// The two screens. showTab(tab) shows one, marks its button and makes the
-// other inert; with `remember` it keeps the choice (mat.tab) and the trip day
+// The screens. showTab(tab) shows one, marks its button and makes the
+// others inert; with `remember` it keeps the choice (mat.tab) and the trip day
 // it was made on (mat.tabDay, by the real time, never the demo clock).
 function mountTabs(store, storage) {
-  const views = { days: document.getElementById("vDays"), money: document.getElementById("vMoney") };
+  const views = { days: document.getElementById("vDays"), before: document.getElementById("vBefore"), money: document.getElementById("vMoney") };
   const nav = document.getElementById("nav");
   const read = (k) => {
     try {
@@ -103,6 +104,7 @@ function mountTabs(store, storage) {
   const keptDay = read("mat.tabDay");
   let tab = null;
   let settled = false; // the opening screen has been decided with the trip known
+  const shownHooks = []; // called with the tab's name each time a tab is shown
 
   function showTab(t, remember = true) {
     tab = t;
@@ -116,7 +118,9 @@ function mountTabs(store, storage) {
       view.classList.toggle("is-active", name === t);
       view.inert = name !== t;
     }
-    if (!remember) return;
+    for (const f of shownHooks) f(t);
+    // The Before tab comes and goes with the list: it is never what the app opens on.
+    if (!remember || t === "before") return;
     const trip = store.state.trip;
     try {
       storage.setItem("mat.tab", t);
@@ -152,7 +156,7 @@ function mountTabs(store, storage) {
     settled = true;
     showTab(b.dataset.tab);
   });
-  return { showTab, tab: () => tab };
+  return { showTab, tab: () => tab, onShown: (f) => shownHooks.push(f) };
 }
 
 function start() {
@@ -237,7 +241,7 @@ function start() {
   const you = mountYou(phone, store, {
     demo: clock,
     getKey: () => storage.getItem("mat.key"),
-    screen: () => (tabs.tab() === "days" ? "Days" : "Money"),
+    screen: () => (tabs.tab() === "days" ? "Days" : tabs.tab() === "before" ? "Before we go" : "Money"),
     // Try another day: Days follows the demo clock from the picked day's
     // 07:00. Nothing is stored, so a reload ends it.
     onDemo: (date) => {
@@ -284,11 +288,27 @@ function start() {
     you.close(false);
     closeDaySheets();
   };
-  // "Before we go": the bookings and prep from the planner, under the counter.
-  const todos = mountTodos(store, { clock, screen: document.getElementById("vDays") });
+  // "Before we go": the bookings and prep from the planner, on its own tab.
+  // The tab is in the bar only while the list says so; if it goes while it is
+  // showing, the person lands on Days.
+  const beforeBtn = document.getElementById("beforeBtn");
+  const beforeN = document.getElementById("beforeN");
+  const todos = mountTodos(document.getElementById("vBefore"), store, {
+    clock,
+    onState: ({ show, open }) => {
+      beforeBtn.hidden = !show;
+      beforeN.hidden = !show || open < 1;
+      beforeN.textContent = open > 0 ? String(open) : "";
+      beforeBtn.setAttribute("aria-label", tabName(open));
+      if (!show && tabs.tab() === "before") tabs.showTab("days", false);
+    },
+  });
+  // Showing the tab folds the done group and fetches quietly if the list is an hour old.
+  tabs.onShown((t) => {
+    if (t === "before") todos.shown();
+  });
   const days = mountDays(document.getElementById("vDays"), store, {
     clock,
-    under: todos.el,
     onStay: (id) => {
       closeForDays();
       stayCard.open(id);

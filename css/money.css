@@ -141,32 +141,36 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 .bars{width:178px;height:34px;margin:12px auto 2px;background:repeating-linear-gradient(90deg,var(--print) 0 2px,transparent 2px 3px,var(--print) 3px 4px,transparent 4px 7px,var(--print) 7px 10px,transparent 10px 12px,var(--print) 12px 13px,transparent 13px 16px,var(--print) 16px 18px,transparent 18px 19px)}
 
 /* ---------- the bottom bar ---------- */
-.nav{position:absolute;left:0;right:0;bottom:0;z-index:6;height:calc(74px + env(safe-area-inset-bottom, 0px));display:flex;justify-content:flex-start;gap:6px;align-items:center;
-  padding:0 var(--gr) env(safe-area-inset-bottom, 0px) calc(var(--gl) - 6px);
-  background:var(--ground);transition:opacity .16s}
-/* The receipt fades out above the bar; behind the buttons the bar is solid. */
-.nav::before{content:"";position:absolute;left:0;right:0;bottom:100%;height:22px;pointer-events:none;
-  background:linear-gradient(to top,var(--ground),rgba(26,22,20,0))}
-.nav button{flex:none;border:0;background:none;color:var(--dim);display:grid;justify-items:center;font-weight:900;font-size:17px;line-height:1.2;padding:6px 8px;white-space:nowrap}
+.nav{position:absolute;left:0;right:0;bottom:0;z-index:6;height:calc(74px + env(safe-area-inset-bottom, 0px));display:flex;justify-content:flex-start;gap:3px;align-items:center;
+  /* Four tabs and the button on one line, a hair apart (16px type, so the bar holds at 320 to 430). */
+  padding:0 calc(var(--gr) - 6px) env(safe-area-inset-bottom, 0px) calc(var(--gl) - 8px);
+  background:var(--ground);transition:opacity .16s;
+  /* A crisp top edge: paper slides under a solid shelf (a black rule and a short contact shadow, no fade). */
+  border-top:1px solid #000;box-shadow:0 -12px 18px -12px rgba(0,0,0,.7)}
+.nav button{flex:none;border:0;background:none;color:var(--dim);display:grid;justify-items:center;font-weight:900;font-size:16px;line-height:1.2;padding:6px 3px;white-space:nowrap}
 .nav button small{font-size:11px;font-weight:700}
+/* The open count on the Before tab: digits only, on the small line beside 出発前, so the tab is no wider than its word. */
+.nav .sub{display:flex;align-items:center;justify-content:center;gap:3px}
+.nav .pill{min-width:16px;height:16px;padding:0 4px;border-radius:8px;background:var(--paper);color:var(--print);
+  font-size:11px;font-weight:900;line-height:16px;text-align:center;font-variant-numeric:tabular-nums}
 .nav button.is-active{color:var(--text)}
-.nav .ring{margin-left:auto;display:block;height:48px;padding:0 18px;border-radius:24px;background:var(--paper);color:var(--print);font-size:15.5px;transition:transform .15s ease-out}
-/* A small phone (320 wide): the same type, closer together. */
-@media (max-width:359px){
-  .nav{gap:2px;padding-left:calc(var(--gl) - 12px);padding-right:calc(var(--gr) - 8px)}
-  .nav button{padding:6px 4px}
-  .nav .ring{padding:0 11px}
+.nav .ring{margin-left:auto;display:block;height:48px;padding:0 8px;border-radius:24px;background:var(--paper);color:var(--print);font-size:15.5px;transition:transform .15s ease-out}
+/* Under 380 (the brief asks for 350 and under; 360 and 375 phones have the same four tabs and no more room): Ring up is the plus alone, its name stays Ring up (aria-label). */
+@media (max-width:379px){
+  .nav .ring{padding:0;width:48px;font-size:22px}
+  .nav .ring-w{display:none}
 }
 .nav .ring:active{transform:scale(.97)}
 .nav .ring[hidden]{display:none}
 .phone.reg-open .nav{opacity:0;pointer-events:none}
 
 /* Held sideways: the same bar stands as a rail on the right of the column,
-   Days, Money and You stacked at the top, Ring up at its foot. */
+   Days, Before, Money and You stacked at the top, Ring up at its foot. */
 @media (orientation:landscape) and (max-height:520px){
   .nav{left:auto;top:0;width:var(--rail);height:auto;flex-direction:column;align-items:stretch;gap:4px;
     padding:calc(10px + env(safe-area-inset-top, 0px)) 8px calc(12px + env(safe-area-inset-bottom, 0px));border-left:1.5px dashed var(--key-hi)}
-  .nav::before{display:none}
+  /* The rail's edge is its dashed left side, not a shelf. */
+  .nav{border-top:0;box-shadow:none}
   .nav button{min-height:56px;padding:6px 4px;align-content:center}
   /* Ring up is a true pill: its own height, not the tabs' 56 px, and its
      words fit inside it. */
