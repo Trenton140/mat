@@ -3,7 +3,7 @@
 
 const assert = require("node:assert/strict");
 const P = require("../../backend/Pure.js");
-const { SEED, NOON12, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
+const { SEED, NOON12, makeBackend, open, advance, until, text, expectText, visible } = require("./helpers.cjs");
 
 // ---- small tools for this file ----
 
@@ -53,6 +53,10 @@ const waitReceiptHas = (page, title, yes = true) =>
 async function ready(page, opts = {}) {
   const backend = await open(page, { seed: SEED, nowMs: NOON12, ...opts });
   await until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0), "the receipt draws");
+  // The app fetches History once, quietly, after it starts: wait until that has landed.
+  if (opts.bootHistory !== false) {
+    await until(() => page.evaluate(() => { const h = globalThis.__matTest.store.state.history; return h.entries.length > 0 && !h.loading; }), "History is fetched after starting");
+  }
   return backend;
 }
 
@@ -90,12 +94,13 @@ module.exports = [
   {
     name: "History opens from its button, titled 履歴 History, with … until the ten entries arrive, newest first under day headings",
     async run({ page }) {
-      const backend = await ready(page);
-      assert.equal(histRequests(backend), 0, "nothing is fetched at boot");
+      // Held from before the app starts, so nothing is on the phone yet when History opens.
+      const backend = makeBackend(SEED, { now: NOON12 });
+      const release = hold(backend, "history");
+      await ready(page, { backend, bootHistory: false });
       assert.equal(await isOpen(page, "hist"), false);
       assert.equal(await page.evaluate(() => document.getElementById("hist").inert), true);
 
-      const release = hold(backend, "history");
       await page.click("#histBtn");
       await waitHist(page);
       assert.equal(await page.getAttribute("#hist", "role"), "dialog");
@@ -106,7 +111,7 @@ module.exports = [
       release();
 
       const rows = await waitRowsN(page, 10);
-      assert.equal(histRequests(backend), 1);
+      assert.equal(histRequests(backend), 2, "the one after starting and the one for this opening");
       const ids = rows.map((r) => Number(r.id));
       assert.deepEqual(ids, ids.slice().sort((a, b) => b - a), "newest first");
       // Every seeded change was made on 2026-11-20 in Japan: one heading, in English beside the Japanese date.
@@ -299,7 +304,7 @@ module.exports = [
 
       backend.failWith = null;
       await openTape(page, 10);
-      assert.equal(histRequests(backend), 1, "the failed one never reached the backend");
+      assert.equal(histRequests(backend), 2, "the one after starting and this one: the failed one never reached the backend");
     },
   },
   {
@@ -323,7 +328,7 @@ module.exports = [
       await page.click("#histBtn");
       await waitHist(page);
       await waitRowsN(page, 11);
-      assert.equal(histRequests(backend), 2);
+      assert.equal(histRequests(backend), 3, "after starting, and once for each opening");
     },
   },
   {

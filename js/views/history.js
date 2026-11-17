@@ -73,7 +73,9 @@ export function mountHistory(root, store) {
 
   function draw(s) {
     const h = s.history;
-    if (phase === "loading") {
+    // Nothing held yet: wait for the fetch. What is already held shows at once
+    // and is replaced when the fetch lands.
+    if (phase === "loading" && !h.entries.length) {
       tape.replaceChildren(el("p", "tp-msg", LOADING));
       return;
     }
