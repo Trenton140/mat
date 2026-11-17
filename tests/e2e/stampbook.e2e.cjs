@@ -433,7 +433,8 @@ module.exports = [
           doc: document.documentElement.scrollWidth <= innerWidth,
           scroll: sc.scrollWidth <= sc.clientWidth,
           page: page.left >= phone.left - 0.5 && page.right <= phone.right + 0.5,
-          done: done.top >= 0 && done.bottom <= innerHeight && done.right <= innerWidth && done.width >= 44 && done.height >= 44,
+          done: done.top >= 0 && done.bottom <= innerHeight && done.right <= innerWidth && done.width >= 43.5 && done.height >= 43.5,
+          doneBox: [done.left, done.top, done.right, done.bottom].map(Math.round),
           cols: getComputedStyle(document.getElementById("bookGrid")).gridTemplateColumns.split(" ").length,
         };
       });

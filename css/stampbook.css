@@ -11,12 +11,12 @@
   border-top:1px solid #000;border-radius:18px 18px 0 0;transform:translateY(104%);transition:transform .5s var(--sheet),box-shadow .5s var(--sheet)}
 /* The shadow belongs to an open panel only: parked below the screen it leaked a dark fade over the bottom bar. */
 .bk.is-open{transform:none;box-shadow:0 -24px 40px -10px #000}
-.bk-top{display:flex;align-items:center;gap:12px;padding:12px var(--gr) 2px var(--gl);font-weight:900;font-size:17px}
-@media (max-width:380px){ .bk-top{font-size:15px;gap:8px} }
+.bk-top{display:flex;align-items:center;gap:8px;padding:12px var(--gr) 2px var(--gl);font-weight:900;font-size:16px}
+@media (max-width:380px){ .bk-top{font-size:14.5px;gap:6px} }
 .bk-title{min-width:0;white-space:nowrap}
 .bk-title i{font-family:var(--seal);font-weight:400;margin-right:8px}
-.bk-n{margin-left:auto;font-family:var(--dot);font-weight:400;font-size:13px;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
-.bk-top button{border:0;background:none;color:var(--dim);font-weight:900;font-size:15px;height:44px;min-width:44px;padding:0 4px}
+.bk-n{margin-left:auto;padding-left:4px;font-family:var(--dot);font-weight:400;font-size:13px;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}
+.bk-top button{flex:none;border:0;background:none;color:var(--dim);font-weight:900;font-size:15px;height:44px;min-width:44px;padding:0 4px}
 .bk-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:4px var(--gr) calc(28px + env(safe-area-inset-bottom, 0px)) var(--gl);scrollbar-width:none;outline:none}
 .bk-scroll::-webkit-scrollbar{display:none}
 
