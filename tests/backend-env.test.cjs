@@ -198,14 +198,14 @@ test("plannerTab_ reads a tab from A1 by its quoted name; null when the sheet ha
   assert.throws(() => shut.ctx.plannerTab_("Change Log"), /denied/);
 });
 
-test("the two planner writers: one cell, RAW; one row written into the row it is given, RAW; Toronto time", () => {
+test("the two planner writers: one cell, RAW; one row appended under the table, RAW, rows inserted; Toronto time", () => {
   const w = plannerWorld({ props: { PLANNER_ID }, get: () => ({}) });
   w.ctx.plannerSetCell_("Book Now", "E4", "Booked");
-  w.ctx.plannerAppendRow_("Change Log", 2, [8, "x", "", "y"], 9);
+  w.ctx.plannerAppendRow_("Change Log", 2, [8, "x", "", "y"]);
   assert.equal(w.ctx.torontoNow_(), "2026-11-20 10:00 ET");
   assert.deepEqual(JSON.parse(JSON.stringify(w.asked)), [
     ["update", { values: [["Booked"]] }, PLANNER_ID, "'Book Now'!E4", { valueInputOption: "RAW" }],
-    ["update", { values: [[8, "x", "", "y"]] }, PLANNER_ID, "'Change Log'!A9:D9", { valueInputOption: "RAW" }],
+    ["append", { values: [[8, "x", "", "y"]] }, PLANNER_ID, "'Change Log'!A2:D2", { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" }],
     ["formatDate", "America/Toronto", "yyyy-MM-dd HH:mm"],
   ]);
   const refused = plannerWorld({ props: { PLANNER_ID }, get: () => ({}), update: () => { throw new Error("no permission"); } });

@@ -94,6 +94,14 @@ test("done is a tick or the planner saying booked; the planner is pending when a
   assert.equal(plannerPending(item({ status: "Booked" })), false);
 });
 
+test("a tick on a Status the planner computes is done and never pending, and its line says the planner works it out", () => {
+  const t = item({ tickedBy: "Mo", tickedAt: new Date(2026, 11, 3, 9, 30).toISOString(), status: "Not booked", plannerComputes: true });
+  assert.equal(isDone(t), true);
+  assert.equal(plannerPending(t), false);
+  assert.equal(tickedLine(t), "Ticked by Mo. The planner works this one out itself.");
+  assert.equal(tickedLine({ ...t, status: "Booked" }), "Ticked by Mo. The planner works this one out itself.");
+});
+
 test("the done line: who ticked it and the day (the phone's own calendar), or booked in the planner", () => {
   const at = new Date(2026, 11, 3, 9, 30).toISOString(); // Dec 3, 09:30 on this machine's clock
   assert.equal(tickedLine(item({ tickedBy: "Mo", tickedAt: at })), "済 Mo · Dec 3");

@@ -156,12 +156,11 @@ function plannerCellFormula_(tab, row, col) {
   return typeof v === "string" && v.charAt(0) === "=" ? v : "";
 }
 
-// Writes one row (RAW) into row `row` of the tab, which the caller found
-// as the row after the sheet's last used one (never a gap higher up). Throws
-// when it cannot. headerRow is the table's header row (unused here).
-function plannerAppendRow_(tab, headerRow, values, row) {
-  var range = plannerA1_(tab) + "A" + row + ":" + colLetter(values.length - 1) + row;
-  Sheets.Spreadsheets.Values.update({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW" });
+// Appends one row (RAW) under the table whose header is on row headerRow,
+// inserting a row for it. Throws when it cannot.
+function plannerAppendRow_(tab, headerRow, values) {
+  var range = plannerA1_(tab) + "A" + headerRow + ":" + colLetter(values.length - 1) + headerRow;
+  Sheets.Spreadsheets.Values.append({ values: [values] }, plannerId_(), range, { valueInputOption: "RAW", insertDataOption: "INSERT_ROWS" });
 }
 
 // Now in Toronto, as the planner's Change Log writes it: "YYYY-MM-DD HH:MM ET".

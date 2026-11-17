@@ -270,20 +270,18 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
       if (planner.fails || planner.formulaFails) throw new Error("boom: Requested entity was not found: " + props.PLANNER_ID);
       return ((planner.formulas[tab] || {})[P.colLetter(col) + row]) || "";
     },
-    // Same as Env.js: the row written is `row` (1-based). Without one this
-    // acts as Sheets' own append does: just after the table's first run of
-    // filled rows below the header, so a blank row inside the sheet takes it.
-    plannerAppendRow_(tab, headerRow, values, row) {
+    // Same as Env.js: one row appended under the table whose header is
+    // headerRow, as Sheets' own append with INSERT_ROWS does: a new row just
+    // after the table's first run of filled rows below the header (so a blank
+    // gap inside the sheet attracts it), inserted, never written over a row.
+    plannerAppendRow_(tab, headerRow, values) {
       plannerCall("append", tab);
       if (planner.appendFails || !planner.tabs[tab]) throw new Error("boom: The caller does not have permission " + props.PLANNER_ID);
       const rows = planner.tabs[tab];
-      let at = row;
-      if (at === undefined) {
-        at = headerRow + 1;
-        while (at <= rows.length && rows[at - 1] && rows[at - 1].some((c) => c !== "")) at++;
-      }
+      let at = headerRow + 1;
+      while (at <= rows.length && rows[at - 1] && rows[at - 1].some((c) => c !== "")) at++;
       while (rows.length < at - 1) rows.push([]);
-      rows[at - 1] = copy(values);
+      rows.splice(at - 1, 0, copy(values));
       planner.writes.push({ kind: "append", tab, headerRow, values: copy(values) });
     },
     // Same as Env.js: now in Toronto, "YYYY-MM-DD HH:MM ET", by this backend's clock.

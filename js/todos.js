@@ -64,9 +64,10 @@ export function isDone(t) {
   return !!t && (t.done === true || str(t.tickedBy) !== "" || isBooked(t.status));
 }
 
-// A tick the planner has not taken yet (not while the tick is on its way).
+// A tick the planner has not taken yet (not while the tick is on its way;
+// never one whose Status the planner computes itself).
 export function plannerPending(t) {
-  return !!t && !t.pending && str(t.tickedBy) !== "" && !isBooked(t.status);
+  return !!t && !t.pending && t.plannerComputes !== true && str(t.tickedBy) !== "" && !isBooked(t.status);
 }
 
 // The items still open: earliest book-by date first; undated last. Items
@@ -96,10 +97,12 @@ export function doneTodos(todos) {
   return list.map((t, i) => ({ t, i })).sort((a, b) => (at(b.t) === at(a.t) ? a.i - b.i : at(b.t) > at(a.t) ? 1 : -1)).map((x) => x.t);
 }
 
-// "済 Mo · Dec 3" (the day in the phone's own zone), or "Booked in the planner".
+// "済 Mo · Dec 3" (the day in the phone's own zone), or "Booked in the planner",
+// or for a tick whose Status the planner computes, that it works it out.
 export function tickedLine(t) {
   const who = str(t && t.tickedBy);
   if (!who) return "Booked in the planner";
+  if (t.plannerComputes === true) return "Ticked by " + who + ". The planner works this one out itself.";
   const day = localDay(Date.parse(t.tickedAt));
   if (!day) return "済 " + who;
   return "済 " + who + " · " + dayHead(day, []).en.split(" ").slice(1).join(" ");

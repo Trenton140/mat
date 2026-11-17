@@ -1006,8 +1006,7 @@ function plannerWriteStatus_(logRows, found, to, why, actor) {
     return "pending";
   }
   try {
-    // The row after the last used one, never a blank gap higher up.
-    plannerAppendRow_(TODO_LOG_TAB_, log.headerRow, log.values, nextLogRow(logRows));
+    plannerAppendRow_(TODO_LOG_TAB_, log.headerRow, log.values);
   } catch (e) {
     try {
       var again = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), found.id, found.item);
@@ -1064,20 +1063,21 @@ function plannerUntick_(id, item, was, actor, why) {
 // cannot record (its lock busy, or the tick undone while the write was on
 // its way) is taken back out of the planner (outside the lock), so every
 // Booked the app wrote is one it knows of; if even that fails, History says
-// so. -> "written" | "pending"
+// so. A Status the planner computes (a formula) is recorded as
+// planner_written "formula": the tick is settled, never retried, never
+// written. -> "written" | "kept" | "pending"
 function settleTick_(id, item, by, out) {
   if (out.result === "pending") return "pending";
-  if (out.result === "formula") {
-    logFormulaLeft_(id, item, by);
-    return "kept";
-  }
   var rec;
   try {
     rec = withLock_(function () {
     var row = findRow_("Todos", id);
     var still = row && cellText_(row.ticked_by) !== "" && sameItem_(tickedItemOf_(row), item) && cellText_(row.gone) !== "yes";
     if (!still) return { ok: true, revert: out.result === "written" };
-    if (out.result === "written") {
+    if (out.result === "formula") {
+      updateById_("Todos", id, { planner_written: "formula", planner_was: "" });
+      bumpRev_();
+    } else if (out.result === "written") {
       updateById_("Todos", id, { planner_written: "yes", planner_was: out.was, status: "Booked" });
       bumpRev_();
     } else if (cellText_(row.status) !== out.status) {
@@ -1087,8 +1087,26 @@ function settleTick_(id, item, by, out) {
     return { ok: true, revert: false };
     });
   } catch (e) {
-    // The recording threw: the same as not being able to record it.
+    // The recording threw. If it got as far as saying the planner was
+    // written, the app knows of the Booked: the planner is left as it is.
+    var saved;
+    try {
+      var again = findRow_("Todos", id);
+      saved = again ? cellText_(again.planner_written) : "";
+    } catch (e2) {
+      saved = null; // not known: leave the planner alone rather than undo a recorded write
+    }
+    if (out.result === "written" && saved !== null && saved !== "") return "written";
+    if (out.result === "written" && saved === null) {
+      try { logBookedLeft_(id, item, by); } catch (e3) { /* best effort */ }
+      return "pending";
+    }
     rec = { ok: false };
+  }
+  if (out.result === "formula") {
+    // The tick is settled either way: the History line is best effort.
+    if (rec.ok) try { logFormulaLeft_(id, item, by); } catch (e4) { /* best effort */ }
+    return rec.ok ? "kept" : "pending";
   }
   if (out.result === "written" && (!rec.ok || rec.revert)) {
     var back = plannerUntick_(id, item, out.was, by, rec.ok ? TODO_UNTICK_WHY_ : TODO_UNRECORDED_WHY_);

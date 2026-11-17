@@ -155,9 +155,9 @@ test("a first pull adds every item, writes no History, bumps rev and answers the
   assert.ok(r.rev > rev0);
   assert.deepEqual(r.data, {
     todos: [
-      { id: "1", item: "Rail pass reservation", bookBy: "2026-11-25", status: "Not booked", note: "Seats for three", link: "https://rail.example.test/book", claimedBy: "", tickedBy: "", tickedAt: "", done: false },
-      { id: "2", item: "Tea ceremony class", bookBy: "2026-12-01", status: "Pending", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: false },
-      { id: "3", item: "Snow park day trip", bookBy: "2026-12-05", status: "Booked", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: true },
+      { id: "1", item: "Rail pass reservation", bookBy: "2026-11-25", status: "Not booked", note: "Seats for three", link: "https://rail.example.test/book", claimedBy: "", tickedBy: "", tickedAt: "", done: false, plannerComputes: false },
+      { id: "2", item: "Tea ceremony class", bookBy: "2026-12-01", status: "Pending", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: false, plannerComputes: false },
+      { id: "3", item: "Snow park day trip", bookBy: "2026-12-05", status: "Booked", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: true, plannerComputes: false },
     ],
     pulledAt: "2026-11-20T15:00:00.000Z",
     more: false,
@@ -263,7 +263,7 @@ test("a tick with the planner writable: saved first, one History entry, then exa
   const r = await call("tickTodo", { id: "1" });
   assert.equal(r.ok, true, JSON.stringify(r));
   assert.equal(r.data.planner, "written");
-  assert.deepEqual(r.data.todo, { id: "1", item: "Rail pass reservation", bookBy: "2026-11-25", status: "Booked", note: "Seats for three", link: "https://rail.example.test/book", claimedBy: "", tickedBy: "Mo", tickedAt: "2026-11-20T15:00:00.000Z", done: true });
+  assert.deepEqual(r.data.todo, { id: "1", item: "Rail pass reservation", bookBy: "2026-11-25", status: "Booked", note: "Seats for three", link: "https://rail.example.test/book", claimedBy: "", tickedBy: "Mo", tickedAt: "2026-11-20T15:00:00.000Z", done: true, plannerComputes: false });
   assert.ok(r.rev > rev0);
   assert.deepEqual(writes(call), [{ kind: "cell", tab: "Book Now", cell: "E4", value: "Booked" }, tickLog()]);
   assert.deepEqual([stored(call, "1").planner_written, stored(call, "1").status], ["yes", "Booked"]);
@@ -559,7 +559,7 @@ test("load: todos not gone, camel-cased, with done; todosPulledAt empty before a
   const reads = call.fake.planner.reads;
   const d = (await call("load")).data;
   assert.equal(call.fake.planner.reads, reads);
-  assert.deepEqual(Object.keys(d.todos[0]), ["id", "item", "bookBy", "status", "note", "link", "claimedBy", "tickedBy", "tickedAt", "done"]);
+  assert.deepEqual(Object.keys(d.todos[0]), ["id", "item", "bookBy", "status", "note", "link", "claimedBy", "tickedBy", "tickedAt", "done", "plannerComputes"]);
   assert.equal(/planner_?[wW]ritten|gone/.test(JSON.stringify(d.todos)), false);
 });
 
@@ -1013,13 +1013,51 @@ test("final 2: a tick on a Status cell that holds a formula writes nothing to th
   const t = await call("tickTodo", { id: "1" });
   assert.deepEqual([t.ok, t.data.planner, t.data.todo.tickedBy], [true, "kept", "Mo"]);
   assert.deepEqual(writes(call), [], "no cell, no Change Log row");
-  assert.equal(stored(call, "1").planner_written, "");
   const h = await history(call);
   assert.deepEqual([h[0].kind, h[0].summary, h[0].canUndo], ["planner", FORMULA_LINE, false]);
-  // A later pull retries the tick: still nothing written, no second line.
   await forced(call);
   assert.deepEqual(writes(call), []);
   assert.equal((await history(call)).filter((e) => e.summary === FORMULA_LINE).length, 1);
+});
+
+test("round 4: a tick on a formula Status is recorded as planner_written formula, planner_was empty", async () => {
+  const call = linked();
+  await call("syncTodos");
+  withFormula(call);
+  const t = await call("tickTodo", { id: "1" });
+  assert.deepEqual([stored(call, "1").planner_written, stored(call, "1").planner_was], ["formula", ""]);
+  assert.deepEqual([t.data.todo.done, t.data.todo.plannerComputes], [true, true]);
+});
+
+test("round 4: a settled formula tick counts as done and is never retried, read or written by a pull", async () => {
+  const call = linked();
+  await call("syncTodos");
+  withFormula(call);
+  await call("tickTodo", { id: "1" });
+  const start = call.fake.planner.calls.length;
+  const s = await forced(call);
+  const td = s.data.todos.find((x) => x.id === "1");
+  assert.deepEqual([td.done, td.tickedBy, td.plannerComputes], [true, "Mo", true]);
+  assert.deepEqual(call.fake.planner.calls.slice(start).map((c) => c.op + " " + c.tab), ["read Book Now"], "only the pull's own read");
+  assert.deepEqual(writes(call), []);
+  assert.equal(stored(call, "1").planner_written, "formula");
+});
+
+test("round 4: a pull never takes the tick off because the computed Status is not Booked, nor changes anything when it reads Booked", async () => {
+  const call = linked();
+  await call("syncTodos");
+  withFormula(call);
+  await call("tickTodo", { id: "1" });
+  await forced(call);
+  assert.equal(stored(call, "1").ticked_by, "Mo");
+  assert.equal(stored(call, "1").planner_written, "formula");
+  call.fake.planner.tabs["Book Now"][3][4] = "Booked";
+  const s = await forced(call);
+  const td = s.data.todos.find((x) => x.id === "1");
+  assert.deepEqual([td.tickedBy, td.done, td.plannerComputes], ["Mo", true, true]);
+  assert.deepEqual([stored(call, "1").planner_written, stored(call, "1").planner_was], ["formula", ""]);
+  assert.deepEqual(writes(call), []);
+  assert.deepEqual(s.data.problems, []);
 });
 
 test("final 2: undo of a tick made on a formula cell writes nothing", async () => {
@@ -1030,8 +1068,11 @@ test("final 2: undo of a tick made on a formula cell writes nothing", async () =
   later(call, 2);
   const u = await call("undo", { logId: t.data.logId }, "Ajen");
   assert.equal(u.ok, true);
-  assert.notEqual(u.data.planner, "written");
-  assert.deepEqual(writes(call), []);
+  assert.equal(u.data.planner, "kept");
+  assert.deepEqual([u.data.todo.tickedBy, u.data.todo.done, u.data.todo.plannerComputes], ["", false, false], "the tick is off in the app");
+  assert.deepEqual([stored(call, "1").planner_written, stored(call, "1").planner_was], ["", ""]);
+  assert.deepEqual(writes(call), [], "nothing in the planner, no Change Log row");
+  assert.equal(call.fake.planner.tabs["Change Log"].length, LOG.length);
 });
 
 test("final 2: a put-back never writes over a formula either", async () => {
@@ -1067,17 +1108,46 @@ test("final 3: a failed Change Log append puts the old Status back only while th
   assert.deepEqual(writes(call).filter((w) => w.kind === "cell").map((w) => w.value), ["Booked"]);
 });
 
-test("final 4: the Change Log row lands after the last used row, never in a blank gap above", async () => {
-  const gap = [LOG[0], CHEAD, LOG[2], [], [], LOG[3]];
-  const call = linked({ log: gap });
+test("round 4: a Change Log row someone adds between the app's read and its append survives", async () => {
+  const call = linked();
   await call("syncTodos");
+  const realSet = call.fake.world.plannerSetCell_;
+  const human = [9, "2026-11-20 10:01 ET", "By hand", "Payments", "C3", "x", "a", "b", "", "", ""];
+  call.fake.world.plannerSetCell_ = (...a) => { call.fake.planner.tabs["Change Log"].push(human.slice()); return realSet(...a); };
   const t = await call("tickTodo", { id: "1" });
+  call.fake.world.plannerSetCell_ = realSet;
   assert.equal(t.data.planner, "written");
   const rows = call.fake.planner.tabs["Change Log"];
-  assert.equal(rows.length, 7);
-  assert.deepEqual([rows[3], rows[4]], [[], []], "the gap stays blank");
-  assert.equal(rows[6][5], "Rail pass reservation");
-  assert.equal(rows[6][0], 8);
+  assert.equal(rows.length, LOG.length + 2);
+  assert.deepEqual(rows[LOG.length], human, "the hand-added row is still there");
+  assert.equal(rows[LOG.length + 1][5], "Rail pass reservation");
+  assert.deepEqual(call.fake.planner.writes.filter((w) => w.kind === "append").map((w) => [w.tab, w.headerRow]), [["Change Log", 2]]);
+});
+
+test("round 4: the fake's append adds a row and never replaces one, as Sheets' own append does", () => {
+  const call = linked({ log: [LOG[0], CHEAD, LOG[2], [], LOG[3]] });
+  call.fake.world.plannerAppendRow_("Change Log", 2, ["new"]);
+  const rows = call.fake.planner.tabs["Change Log"];
+  assert.equal(rows.length, 6);
+  assert.deepEqual([rows[2], rows[3], rows[5]], [LOG[2], ["new"], LOG[3]], "the gap takes it, nothing is overwritten");
+});
+
+test("round 4: when recording throws after planner_written landed, the planner is left alone and the answer is written", async () => {
+  const call = linked();
+  await call("syncTodos");
+  const ru = call.fake.world.updateById_;
+  const rb = call.fake.world.bumpRev_;
+  let armed = false;
+  call.fake.world.updateById_ = (tab, id, p) => { const r = ru(tab, id, p); if (p.planner_written === "yes") armed = true; return r; };
+  call.fake.world.bumpRev_ = (...a) => { if (armed) { armed = false; throw new Error("boom"); } return rb(...a); };
+  const t = await call("tickTodo", { id: "1" });
+  call.fake.world.updateById_ = ru;
+  call.fake.world.bumpRev_ = rb;
+  assert.equal(t.data.planner, "written");
+  assert.equal(stored(call, "1").planner_written, "yes");
+  assert.equal(bookStatus(call), "Booked");
+  assert.deepEqual(writes(call).filter((w) => w.kind === "cell").map((w) => w.value), ["Booked"], "no put-back");
+  assert.equal(call.fake.planner.tabs["Change Log"].length, LOG.length + 1);
 });
 
 test("final 5: the refusal that carries the stored list says stored: true", async () => {
@@ -1090,9 +1160,9 @@ test("final 5: the refusal that carries the stored list says stored: true", asyn
   assert.equal(r.data.todos.length, 3);
 });
 
-test("final 4: nextLogRow is the row after the last one holding anything", () => {
-  assert.equal(P.nextLogRow([["a"], ["b"], [], [], ["c", ""], ["", " "]]), 6);
-  assert.equal(P.nextLogRow([["a"], [], []]), 2);
-  assert.equal(P.nextLogRow([]), 1);
-  assert.equal(P.nextLogRow(null), 1);
+test("round 4: todoFromRow says when the planner computes the Status (planner_written formula)", () => {
+  assert.equal(P.todoFromRow({ id: "1", item: "x", ticked_by: "Mo", planner_written: "formula" }).plannerComputes, true);
+  assert.equal(P.todoFromRow({ id: "1", item: "x", ticked_by: "Mo", planner_written: "yes" }).plannerComputes, false);
+  assert.equal(P.todoFromRow({ id: "1", item: "x" }).plannerComputes, false);
+  assert.equal("nextLogRow" in P, false);
 });
