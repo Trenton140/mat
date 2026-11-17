@@ -22,39 +22,44 @@ const f2 = (n) => n.toFixed(2);
 
 // Where the paper did not take the ink: one side pressed lighter than the
 // other, patches of the ring that ran dry, fine grain, a few bigger voids
-// and fibres.
-function wear(id, r) {
+// and fibres. `box` is the side of the square it is drawn in (100 for the
+// paid stamp; the stamp book draws in 120): every position and size scales
+// with it, and at 100 nothing changes. The mask is black and white, so it
+// works for any ink. `id` only has to be unique on the page.
+export function wear(id, r, box = 100) {
+  const k = box / 100;
+  const c = 50 * k;
   const turn = r() * Math.PI * 2;
-  const dx = Math.cos(turn) * 50;
-  const dy = Math.sin(turn) * 50;
+  const dx = Math.cos(turn) * c;
+  const dy = Math.sin(turn) * c;
   const light = Math.round(140 + r() * 60); // how pale the light side is, 0-255
   const grey = "#" + light.toString(16).padStart(2, "0").repeat(3);
-  let s = '<linearGradient id="pg' + id + '" gradientUnits="userSpaceOnUse" x1="' + f1(50 - dx) + '" y1="' + f1(50 - dy) + '" x2="' + f1(50 + dx) + '" y2="' + f1(50 + dy) + '">' +
+  let s = '<linearGradient id="pg' + id + '" gradientUnits="userSpaceOnUse" x1="' + f1(c - dx) + '" y1="' + f1(c - dy) + '" x2="' + f1(c + dx) + '" y2="' + f1(c + dy) + '">' +
     '<stop offset="0" stop-color="#fff"/><stop offset=".45" stop-color="#fff"/><stop offset="1" stop-color="' + grey + '"/></linearGradient>';
-  s += '<mask id="pm' + id + '" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="url(#pg' + id + ')"/>';
+  s += '<mask id="pm' + id + '" maskUnits="userSpaceOnUse" x="0" y="0" width="' + box + '" height="' + box + '"><rect width="' + box + '" height="' + box + '" fill="url(#pg' + id + ')"/>';
   // Two stretches of the ring took less ink: grain gathered along them.
-  for (let k = 0; k < 2; k++) {
+  for (let j = 0; j < 2; j++) {
     const at = r() * Math.PI * 2;
     const span = 0.5 + r() * 0.8; // radians
     for (let i = 0; i < 34; i++) {
       const t = at + (r() - 0.5) * span;
       const rad = 40 + r() * 6;
-      s += '<circle cx="' + f1(50 + Math.cos(t) * rad) + '" cy="' + f1(50 + Math.sin(t) * rad) + '" r="' + f2(0.4 + r() * 1.1) + '" fill="#000" opacity="' + f2(0.35 + r() * 0.5) + '"/>';
+      s += '<circle cx="' + f1(c + Math.cos(t) * rad * k) + '" cy="' + f1(c + Math.sin(t) * rad * k) + '" r="' + f2((0.4 + r() * 1.1) * k) + '" fill="#000" opacity="' + f2(0.35 + r() * 0.5) + '"/>';
     }
   }
   for (let i = 0; i < 130; i++) {
-    s += '<circle cx="' + f1(r() * 100) + '" cy="' + f1(r() * 100) + '" r="' + f2(0.2 + r() * 0.55) + '" fill="#000" opacity="' + f2(0.25 + r() * 0.45) + '"/>';
+    s += '<circle cx="' + f1(r() * box) + '" cy="' + f1(r() * box) + '" r="' + f2((0.2 + r() * 0.55) * k) + '" fill="#000" opacity="' + f2(0.25 + r() * 0.45) + '"/>';
   }
   for (let i = 0; i < 24; i++) {
-    s += '<circle cx="' + f1(r() * 100) + '" cy="' + f1(r() * 100) + '" r="' + f1(0.6 + r() * 1.7) + '" fill="#000" opacity="' + f2(0.5 + r() * 0.5) + '"/>';
+    s += '<circle cx="' + f1(r() * box) + '" cy="' + f1(r() * box) + '" r="' + f1((0.6 + r() * 1.7) * k) + '" fill="#000" opacity="' + f2(0.5 + r() * 0.5) + '"/>';
   }
   for (let i = 0; i < 3; i++) {
-    const x = 10 + r() * 80;
-    const y = 10 + r() * 80;
+    const x = (10 + r() * 80) * k;
+    const y = (10 + r() * 80) * k;
     const a = r() * Math.PI;
-    const len = 4 + r() * 8;
+    const len = (4 + r() * 8) * k;
     s += '<line x1="' + f1(x) + '" y1="' + f1(y) + '" x2="' + f1(x + Math.cos(a) * len) + '" y2="' + f1(y + Math.sin(a) * len) +
-      '" stroke="#000" stroke-width="' + f2(0.35 + r() * 0.3) + '" opacity="' + f2(0.5 + r() * 0.4) + '"/>';
+      '" stroke="#000" stroke-width="' + f2((0.35 + r() * 0.3) * k) + '" opacity="' + f2(0.5 + r() * 0.4) + '"/>';
   }
   return s + "</mask>";
 }

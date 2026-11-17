@@ -7,7 +7,7 @@
 //
 // ticketEl(model) -> HTMLElement (an <article class="tk">), where
 // model = { day, number, count, state, header, stops, stays, total, mark,
-//           stay, nextId, minutes, toGo, tripName }
+//           stay, nextId, minutes, toGo, tripName, stampOpen }
 // - day: the Days row ({ date, city, title, ... }); header: header(day) from
 //   js/plan.js; stops: stopsFor(...) for the day, in order; stays: every stay
 //   (the first stop's directions start from the night before's); number:
@@ -17,7 +17,9 @@
 //   minutes past midnight; nextId: today's next stop (nextStopId, which keeps
 //   a stop just started for a while, R38), else null;
 //   total: the day's logged yen (dayTotalYen), printed as the fare when above
-//   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1.
+//   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1;
+//   stampOpen: today's stamp in the stamp book is open and not yet pressed,
+//   so the ticket carries a line, .tk-stampline, that opens the book.
 // - stay: the night's stay (stayShownFor: on today's ticket before 04:00,
 //   last night's), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
@@ -222,6 +224,16 @@ function validity(number, toGo) {
   return el("span", "", "当日限り有効");
 }
 
+// Under the date, on the day whose stamp is open and not yet pressed: a line
+// that opens the stamp book (the Days view sees to the tap).
+function stampLine() {
+  const b = el("button", "tk-stampline");
+  b.type = "button";
+  b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle class="d" cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="4.2"/></svg>';
+  b.append(el("span", "", "Today’s stamp is open"), el("i", "", "›"));
+  return b;
+}
+
 // 宿泊 Tonight and the stay's name: a button that opens the hotel card.
 function stayRow(stay) {
   const b = el("button", "tk-stay");
@@ -258,6 +270,7 @@ export function ticketEl(model) {
   const dateRow = el("div", "tk-date");
   dateRow.append(when, validity(number, toGo));
   head.append(dateRow);
+  if (model.stampOpen) head.append(stampLine());
   if (state === "used") head.append(gate(day, h, mark));
 
   const rows = el("div", "rows");

@@ -286,6 +286,7 @@ function tripInfo_() {
 function load_() {
   var rev = rev_();
   var rate = getRateInfo_();
+  var book = stampBook_();
   return ok_({
     trip: tripInfo_(),
     people: peopleRows_().map(personFromRow),
@@ -301,8 +302,8 @@ function load_() {
     todos: todosShown_(),
     todosPulledAt: getProp_("TODOS_PULLED_AT") || "",
     paymentsPulledAt: getProp_("PAYMENTS_PULLED_AT") || "",
-    stampDefs: stampDefs_(),
-    stamps: stampsShown_(),
+    stampDefs: book.defs,
+    stamps: book.stamps,
   }, rev);
 }
 
@@ -1408,12 +1409,17 @@ function stampDefs_() {
   return readTable_("StampDefs").filter(function (r) { return cellText_(r.id) !== ""; }).map(stampDefFromRow);
 }
 
-// Everyone's stamps that are not lifted.
-function stampsShown_() {
-  if (!stampsReady_()) return [];
-  return readTable_("Stamps")
-    .filter(function (r) { return cellText_(r.def) !== "" && cellText_(r.who) !== "" && cellText_(r.gone) !== "yes"; })
-    .map(stampFromRow);
+// What load shows of the book: the definitions, and everyone's stamps that are
+// not lifted. Both empty until migrate has made the tabs; the tabs are checked
+// and read once each.
+function stampBook_() {
+  if (!stampsReady_()) return { defs: [], stamps: [] };
+  return {
+    defs: readTable_("StampDefs").filter(function (r) { return cellText_(r.id) !== ""; }).map(stampDefFromRow),
+    stamps: readTable_("Stamps")
+      .filter(function (r) { return cellText_(r.def) !== "" && cellText_(r.who) !== "" && cellText_(r.gone) !== "yes"; })
+      .map(stampFromRow),
+  };
 }
 
 var STAMP_AT_RE_ = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
@@ -1446,8 +1452,9 @@ function pressStamp_(args, ctx) {
   var id = def.id + "|" + ctx.actor;
   var row = findRow_("Stamps", id);
   if (row && cellText_(row.gone) !== "yes") return ok_({ stamp: stampFromRow(row), logId: null }, rev_());
-  // The resend of a press that was lifted since: not a new press.
-  if (row && cellStamp_(row.at) === at) return err_("stale", MSG_.stampLifted);
+  // The resend of a press that was lifted since (the same moment and, when
+  // the phone sends one, the same seed): not a new press.
+  if (row && cellStamp_(row.at) === at && (args.seed === undefined || Number(row.seed) === args.seed)) return err_("stale", MSG_.stampLifted);
   var why = pressRefusal(def, defs, atMs, Date.parse(nowIso_()));
   if (why) return err_(why, MSG_[STAMP_REFUSALS_[why]]);
 

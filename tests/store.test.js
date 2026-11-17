@@ -2712,3 +2712,297 @@ test("loadHistory: a first-page load clears an error left by an earlier fetch", 
   await loading;
   assert.equal(p.store.state.history.error, null);
 });
+
+// ---------- the stamp book ----------
+
+const SDEFS = [
+  { id: "d1", date: "2030-01-05", name_ja: "試験", name_en: "Testville", place: "Test Hall", motif: "lantern", ink: "shu", shape: "round" },
+  { id: "d2", date: "2030-01-06", name_ja: "二", name_en: "Second", place: "Second Place", motif: "tower", ink: "ai", shape: "square" },
+  { id: "iss", date: "", name_ja: "発行", name_en: "Issued", place: "", motif: "crest", ink: "shu", shape: "round" },
+];
+// 10:00 in Japan on Jan 5 2030, inside d1's window.
+const IN_D1 = Date.UTC(2030, 0, 5, 1);
+const HOUR = 3600000;
+const CLOSED_LINE = "That stamp’s day has closed.";
+
+// One phone on a backend whose clock is the phone's (until clock.ms is moved).
+function stampPhone({ ms = IN_D1, defs = SDEFS, fake, storage, me = "Mo", missingTabs } = {}) {
+  const clock = { ms };
+  const f = fake || createFakeBackend(missingTabs ? { missingTabs } : {}, { clock: () => new Date(clock.ms).toISOString() });
+  if (!missingTabs && !fake) for (const d of defs) f.tables.StampDefs.push({ ...d });
+  const p = phone({ fake: f, storage, me, clock: () => clock.ms });
+  p.clock = clock;
+  return p;
+}
+const mineOf = (p) => p.store.state.stamps.filter((s) => s.who === "Mo");
+
+test("a press shows at once, flagged pending, and is the backend's stamp once it answers", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  assert.deepEqual(p.store.state.stampDefs.map((d) => d.id), ["d1", "d2", "iss"]);
+  const release = p.net.hold("pressStamp");
+  const token = p.store.pressStamp("d1");
+  assert.ok(token, "a token comes back");
+  const now = mineOf(p);
+  assert.equal(now.length, 1);
+  assert.deepEqual([now[0].def, now[0].who, now[0].at, now[0].pending], ["d1", "Mo", new Date(IN_D1).toISOString(), true]);
+  assert.ok(now[0].seed >= 1 && now[0].seed <= 4294967295);
+  assert.equal(p.store.state.lastChange, null, "no undo bar line: a press is lifted from History");
+  release();
+  await p.store.idle();
+  const after = mineOf(p);
+  assert.deepEqual(after.map((s) => [s.def, "pending" in s]), [["d1", false]]);
+  assert.equal(p.fake.tables.Stamps.length, 1);
+  assert.equal(after[0].seed, p.fake.tables.Stamps[0].seed, "the backend's own stamp");
+});
+
+test("the seed the phone drew is the one that stays: the ink does not change when the answer lands", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.store.pressStamp("d1");
+  const local = mineOf(p)[0].seed;
+  await p.store.idle();
+  assert.equal(mineOf(p)[0].seed, local);
+});
+
+test("the backend's answer replaces whatever the phone showed (a different seed from the backend wins)", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.net.override = (body) => (body.action === "pressStamp" ? { ok: true, rev: 99, data: { stamp: { def: "d1", who: "Mo", at: body.args.at, seed: 424242 }, logId: 5 } } : null);
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  assert.deepEqual(mineOf(p).map((s) => [s.seed, "pending" in s]), [[424242, false]]);
+});
+
+test("busy is true while a press is on its way, so the app does not reload under it; false when it has landed", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  assert.equal(p.store.busy(), false);
+  const release = p.net.hold("pressStamp");
+  p.store.pressStamp("d1");
+  assert.equal(p.store.busy(), true);
+  assert.equal(p.store.outbox().unsent, 1, "and it counts as something still to send");
+  release();
+  await p.store.idle();
+  await new Promise((r) => setImmediate(r));
+  assert.equal(p.store.busy(), false);
+  assert.equal(p.store.outbox().unsent, 0);
+});
+
+test("two fast taps are one press and one request", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  const release = p.net.hold("pressStamp");
+  assert.ok(p.store.pressStamp("d1"));
+  assert.equal(p.store.pressStamp("d1"), null);
+  release();
+  await p.store.idle();
+  assert.equal(p.store.pressStamp("d1"), null, "and not again once it is shown");
+  assert.equal(p.net.sent.filter((b) => b.action === "pressStamp").length, 1);
+  assert.equal(p.fake.tables.Stamps.length, 1);
+});
+
+test("nothing to press: an unknown stamp, or no one chosen yet", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  assert.equal(p.store.pressStamp("nope"), null);
+  const q = stampPhone({ me: null, fake: p.fake });
+  await q.store.boot();
+  assert.equal(q.store.pressStamp("d1"), null);
+  assert.equal(p.net.sent.filter((b) => b.action === "pressStamp").length, 0);
+});
+
+test("a press made with no signal is kept on the phone, survives a reload, and is sent with the same time and seed when signal returns", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  const first = mineOf(p)[0];
+  assert.equal(first.pending, true, "still shown, not rolled back");
+  assert.equal(p.fake.tables.Stamps.length, 0);
+  assert.equal(p.store.outbox().waiting, 1);
+  const kept = queueOf(p.storage);
+  assert.equal(kept.length, 1);
+  assert.deepEqual(Object.keys(kept[0].stamp).sort(), ["at", "def", "seed"]);
+  assert.equal(JSON.stringify(kept).includes(KEY), false, "no key in the queue");
+
+  // the phone is closed and opened again, still with no signal
+  const again = stampPhone({ fake: p.fake, storage: p.storage });
+  again.clock.ms = p.clock.ms + 5000;
+  again.net.offline = true;
+  await again.store.boot();
+  assert.deepEqual(mineOf(again).map((s) => [s.def, s.seed, s.pending]), [["d1", first.seed, true]], "back on the book after a reload");
+
+  // signal returns: it goes, as it was pressed
+  again.net.offline = false;
+  await again.store.checkRev();
+  await again.store.flush();
+  await again.store.idle();
+  assert.equal(p.fake.tables.Stamps.length, 1);
+  assert.deepEqual([p.fake.tables.Stamps[0].at, p.fake.tables.Stamps[0].seed], [first.at, first.seed]);
+  assert.deepEqual(mineOf(again).map((s) => "pending" in s), [false]);
+  assert.deepEqual(queueOf(again.storage), []);
+});
+
+test("a press arriving after its window closed is accepted when it was pressed inside it, and keeps the time it was pressed", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  p.clock.ms = IN_D1 + 30 * HOUR; // d1 closed 8 hours ago
+  p.net.offline = false;
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(p.fake.tables.Stamps.length, 1);
+  assert.equal(p.fake.tables.Stamps[0].at, new Date(IN_D1).toISOString());
+  assert.deepEqual(mineOf(p).map((s) => "pending" in s), [false]);
+});
+
+test("a reply lost: the press stays shown and is resent with the same def; one stamp, never two", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.net.lose.add("pressStamp");
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  assert.equal(p.fake.tables.Stamps.length, 1, "it reached the backend");
+  assert.deepEqual(mineOf(p).map((s) => s.pending), [true]);
+  p.net.lose.clear();
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(p.fake.tables.Stamps.length, 1);
+  assert.equal(p.fake.tables.Log.filter((r) => r.kind === "stamp").length, 1, "one History line");
+  assert.deepEqual(p.net.sent.filter((b) => b.action === "pressStamp").map((b) => b.args.def), ["d1", "d1"]);
+  assert.deepEqual(mineOf(p).map((s) => "pending" in s), [false]);
+});
+
+test("a press the backend refuses as closed is taken back and its line is said", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.clock.ms = IN_D1 + 40 * HOUR; // the phone's clock says d1 is long closed
+  const token = p.store.pressStamp("d1");
+  assert.ok(token);
+  await p.store.idle();
+  assert.deepEqual(mineOf(p), []);
+  assert.equal(p.store.state.notice, CLOSED_LINE);
+  assert.equal(p.fake.tables.Stamps.length, 0);
+  assert.deepEqual(queueOf(p.storage), [], "nothing left to resend");
+});
+
+test("a press for a day that is not open, or from a clock ahead of the backend's, is taken back with its own line", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.store.pressStamp("d2"); // d2 opens tomorrow
+  await p.store.idle();
+  assert.deepEqual(mineOf(p), []);
+  assert.equal(p.store.state.notice, "That stamp isn’t open yet.");
+  p.store.clearNotice();
+  // the phone's clock an hour ahead of the backend's
+  const skew = createFakeBackend({}, { clock: () => new Date(IN_D1).toISOString() });
+  for (const d of SDEFS) skew.tables.StampDefs.push({ ...d });
+  const late = phone({ fake: skew, clock: () => IN_D1 + HOUR });
+  await late.store.boot();
+  late.store.pressStamp("d1");
+  await late.store.idle();
+  assert.deepEqual(late.store.state.stamps, []);
+  assert.match(late.store.state.notice, /clock is ahead/);
+});
+
+test("a press still queued 48 hours and one second after it was made is dropped with a line; at exactly 48 hours it is kept", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  assert.equal(queueOf(p.storage).length, 1);
+  p.clock.ms = IN_D1 + 48 * HOUR;
+  await p.store.flush();
+  assert.equal(mineOf(p).length, 1, "exactly 48 hours: kept");
+  assert.equal(p.store.state.notice, null);
+  p.clock.ms = IN_D1 + 48 * HOUR + 1000;
+  await p.store.flush();
+  assert.deepEqual(mineOf(p), []);
+  assert.equal(p.store.state.notice, CLOSED_LINE);
+  assert.deepEqual(queueOf(p.storage), []);
+  assert.equal(p.store.outbox().unsent, 0);
+  // and when the signal comes back, nothing is sent
+  p.net.offline = false;
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(p.fake.tables.Stamps.length, 0);
+});
+
+test("a queued press that is 48 hours old when the app opens is dropped at once", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  const later = stampPhone({ fake: p.fake, storage: p.storage, ms: IN_D1 + 49 * HOUR });
+  later.net.offline = true;
+  await later.store.boot();
+  assert.deepEqual(later.store.state.stamps.filter((s) => s.who === "Mo"), []);
+  assert.equal(later.store.state.notice, CLOSED_LINE);
+});
+
+test("lifting a press from History lifts it here; pressing it again inside the window works, after the window it does not", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  p.store.pressStamp("d1");
+  await p.store.idle();
+  await p.store.loadHistory();
+  const line = p.store.state.history.entries.find((e) => e.kind === "stamp");
+  assert.equal(line.summary, "stamped Jan 5");
+  assert.equal(await p.store.undoEntry(line.id), true);
+  assert.deepEqual(mineOf(p).filter((s) => !s.gone), [], "the ring is empty");
+  assert.equal(p.fake.tables.Stamps[0].gone, "yes");
+  // inside the window it can be pressed again
+  assert.ok(p.store.pressStamp("d1"));
+  await p.store.idle();
+  assert.deepEqual(mineOf(p).filter((s) => !s.gone).map((s) => "pending" in s), [false]);
+  assert.equal(p.fake.tables.Stamps[0].gone, "");
+  // lift it, and let the window close
+  await p.store.loadHistory();
+  const again = p.store.state.history.entries.find((e) => e.kind === "stamp" && e.action === "press" && e.canUndo);
+  assert.equal(await p.store.undoEntry(again.id), true);
+  p.clock.ms = IN_D1 + 20 * HOUR;
+  assert.ok(p.store.pressStamp("d1"), "the phone tries");
+  await p.store.idle();
+  assert.deepEqual(mineOf(p).filter((s) => !s.gone), []);
+  assert.equal(p.store.state.notice, CLOSED_LINE);
+  assert.equal(p.fake.tables.Stamps[0].gone, "yes");
+});
+
+test("a sheet where migrate has not been run: no definitions, no stamps, nothing to press, everything else as before", async () => {
+  const p = stampPhone({ missingTabs: ["StampDefs", "Stamps"] });
+  await p.store.boot();
+  assert.equal(p.store.state.status, "ready");
+  assert.deepEqual([p.store.state.stampDefs, p.store.state.stamps], [[], []]);
+  assert.equal(p.store.state.people.length, 3);
+  assert.equal(p.store.pressStamp("d1"), null);
+  assert.equal(p.net.sent.filter((b) => b.action === "pressStamp").length, 0);
+});
+
+test("a cache saved before the book existed opens with an empty book", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  const cache = JSON.parse(p.storage.getItem("mat.cache"));
+  delete cache.data.stampDefs;
+  delete cache.data.stamps;
+  p.storage.setItem("mat.cache", JSON.stringify(cache));
+  const q = stampPhone({ fake: p.fake, storage: p.storage });
+  q.net.offline = true;
+  await q.store.boot();
+  assert.deepEqual([q.store.state.stampDefs, q.store.state.stamps], [[], []]);
+  assert.equal(q.store.state.status, "ready");
+});
+
+test("everyone's stamps come with a load; another phone's press arrives on the next check", async () => {
+  const p = stampPhone();
+  await p.store.boot();
+  const ajen = await p.fake({ key: KEY, actor: "Ajen", action: "pressStamp", args: { def: "d1", at: new Date(IN_D1).toISOString() } });
+  assert.equal(ajen.ok, true);
+  await p.store.checkRev();
+  assert.deepEqual(p.store.state.stamps.map((s) => [s.def, s.who]), [["d1", "Ajen"]]);
+});

@@ -135,6 +135,16 @@ The app's "Before we go" list is the planner's `Book Now` tab: bookings and prep
 6. Check a real write: add a test row to the planner's Book Now tab, fetch, tick it in the app, then undo the tick. Look at the planner: the row's Status should read `Booked` after the tick and its old value after the undo, and the Change Log should have exactly two new rows, directly under the last one. Then delete the test row from the planner by hand.
 7. Last: publish the front end (merge to `main` / push to Pages, `APP_VERSION` 6) only after the backend's new version is live, `migrate` has run and one forced `syncTodos` has answered.
 
+## The stamp book
+
+A book of twelve stamps that each person presses by hand: one per trip day, and an issue stamp for the book itself. It opens from the stamp button on the Days bar (a small ring and how many stamps you have) or from the line on today's ticket ("Today's stamp is open"), as a panel like History. Nothing here is money: a press is a History line ("Mo stamped Dec 12", or "Mo stamped the book") and can be undone from History, which lifts the stamp.
+
+**The definitions are data, not code.** The `StampDefs` tab (made by `migrate`) has one row per stamp: `id`, `date` (`YYYY-MM-DD`, or empty for the issue stamp), `name_ja`, `name_en`, `place`, `motif` (one of `lantern, books, onsen, temple, mountain, snow, lamp, tower, record, sake, plane, crest`; any other word draws the ring with no drawing), `ink` (`shu`, `matsu` or `ai`; any other is `shu`) and `shape` (`round` or `square`). Which day gets which name and drawing is typed there, never into this repo. The app draws only the stamps a person has pressed; every phone receives all twelve definitions, so the surprise is on the honour system.
+
+**When a stamp is open** is decided in Japan time (fixed UTC+9), by the backend's `stampWindow` and the app's copy of it (`js/stampbook.js`): a day stamp from 00:00 on its date until 03:00 the next day (27 hours); the issue stamp from the start until the last day stamp closes. A press made offline is accepted when the phone's own time for it falls inside the window and it arrives within 48 hours; it is stored with the time it was pressed. The app drops a press still waiting on the phone after 48 hours. Lifting a stamp lets it be pressed again while its window is open; after that it cannot be. There is no location check.
+
+**The `Stamps` tab** holds the presses: `id` (`<stamp id>|<name>`), `def`, `who`, `at`, `seed` (how the ink wore: the same on every phone), `gone` (`yes` when lifted). Rows are never deleted. `pressStamp` (`{ def, at, seed? }`) is not one of the Claude connector's tools and is refused through it ("Press this one in the app."). On a Sheet where `migrate` has not been run the book is simply absent: `load` answers empty lists, and the Days bar shows no stamp button.
+
 ## You 設定
 
 **Your picture.** In You, "Your picture" opens the phone's own picker. The phone crops the picture to a centred square, shrinks it to 128 × 128 and sends it as a small JPEG (at most 12,000 characters; one that will not fit is refused before anything is sent). It then shows inside your round seal, in place of your initials, on every seal on every phone; Change and Remove are on the same row. Each person sets only their own. Setting, changing or removing it is one History entry, which its owner can undo.
@@ -142,6 +152,7 @@ The app's "Before we go" list is the planner's `Book Now` tab: bookings and prep
 ## The Sheet
 
 - **Todos:** the "Before we go" list (above). A pull keeps it in step with the planner; do not type into it.
+- **StampDefs** and **Stamps:** the stamp book (above). Type the definitions into `StampDefs`; do not type into `Stamps`.
 - **People:** `name`, `initials`, `order`, `etransfer`, `simplify`, `email`, `photo`. `photo` is the person's picture as a JPEG data address, or empty for none (then the seal shows `initials`). Set it from the app, not by hand; `migrate` adds the column to an older Sheet.
 
 - Once the trip is live, do not delete rows by hand. Deleted expenses, stops and stays and removed payments stay as rows with a date in `deleted_at` / `removed_at`; clear that cell, or use History in the app, to bring one back. To take a row out by hand, put any date in its `deleted_at` instead of deleting it.

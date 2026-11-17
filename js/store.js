@@ -49,18 +49,26 @@ const TODO_PULLS = 4;
 
 // How often an open phone asks for the planner's payments on its own.
 const PAY_AUTO_MS = 10 * 60 * 1000;
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt"];
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt", "stampDefs", "stamps"];
 // Every kind of item the store keeps, the field it is found by and the flag
 // that marks it gone. Stays and day headers only ever change here through an
 // undo from History (their writes come in later tasks). A todo is an item
 // of the planner's Book Now list ("Before we go"): ticked and claimed here.
-const LIST = { expense: "expenses", payment: "payments", person: "people", stop: "stops", stay: "stays", day: "days", todo: "todos" };
+// A stamp of the book (js/stampbook.js) is one person's press of one stamp:
+// found by its definition and who pressed it ("def|who", as the backend's Log
+// names it), and marked gone when it is lifted from History.
+const LIST = { expense: "expenses", payment: "payments", person: "people", stop: "stops", stay: "stays", day: "days", todo: "todos", stamp: "stamps" };
 const KEY_FIELD = { expense: "id", payment: "id", person: "name", stop: "id", stay: "id", day: "date", todo: "id" };
-const FLAG = { expense: "deleted", payment: "removed", stop: "deleted", stay: "deleted" };
+const FLAG = { expense: "deleted", payment: "removed", stop: "deleted", stay: "deleted", stamp: "gone" };
+const keyOf = (kind, x) => (kind === "stamp" ? x.def + "|" + x.who : x[KEY_FIELD[kind]]);
 // Adds kept in mat.queue and resent with the same id until the backend has
 // them. A stop add is not one of them: stop writes need a connection, so
 // with no reply it is rolled back like any other write (and never resent).
-const ADD_API = { expense: "addExpense", payment: "addPayment" };
+const ADD_API = { expense: "addExpense", payment: "addPayment", stamp: "pressStamp" };
+// A press still queued this long after the moment it was made is dropped:
+// the backend would refuse it as late, and its day has closed.
+const STAMP_DROP_MS = 48 * 3600000;
+const STAMP_DROPPED = "That stamp’s day has closed.";
 
 // A stop as the backend gives it back, before the fields are filled in.
 const STOP_BLANK = { date: "", time: "", title: "", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "" };
@@ -158,7 +166,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "",
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "", stampDefs: [], stamps: [],
     loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
@@ -199,6 +207,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   function derive() {
     if (base) for (const k of DATA_KEYS) state[k] = base[k];
+    // A cache or a backend from before the book has neither list.
+    if (!Array.isArray(state.stampDefs)) state.stampDefs = [];
     const lists = {};
     // A cache kept before the plan existed has no stops, stays or days.
     for (const kind of Object.keys(LIST)) lists[kind] = base && Array.isArray(base[LIST[kind]]) ? base[LIST[kind]].slice() : [];
@@ -217,8 +227,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     state.setAside = aside;
     for (const op of ops) {
       const list = lists[op.kind];
-      const field = KEY_FIELD[op.kind];
-      const i = list.findIndex((x) => x[field] === op.id);
+      const i = list.findIndex((x) => keyOf(op.kind, x) === op.id);
       const next = op.view(i >= 0 ? bare(list[i]) : null);
       if (!next) continue;
       const shown = bare(next);
@@ -234,12 +243,13 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   }
 
   function changed() {
+    dropStalePresses();
     derive();
     emit();
   }
 
   function find(kind, id) {
-    return state[LIST[kind]].find((x) => x[KEY_FIELD[kind]] === id) || null;
+    return state[LIST[kind]].find((x) => keyOf(kind, x) === id) || null;
   }
 
   function track(promise) {
@@ -265,6 +275,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     const live = ops.filter(isLiveAdd).map((op) =>
       op.kind === "payment"
         ? { payment: op.args.payment, stampedAt: op.after.stampedAt, stampedBy: op.after.stampedBy, sent: op.inFlight || op.lost }
+        : op.kind === "stamp"
+        ? { stamp: op.args, who: op.after.who, sent: op.inFlight || op.lost }
         : {
             expense: op.args.expense,
             addedAt: op.after.addedAt,
@@ -333,8 +345,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   function putBase(kind, item) {
     if (!base) return;
     const list = Array.isArray(base[LIST[kind]]) ? base[LIST[kind]].slice() : [];
-    const field = KEY_FIELD[kind];
-    const i = list.findIndex((x) => x[field] === item[field]);
+    const i = list.findIndex((x) => keyOf(kind, x) === keyOf(kind, item));
     if (i >= 0) list[i] = item;
     else list.push(item);
     base = { ...base, [LIST[kind]]: list };
@@ -441,7 +452,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       if (!q || typeof q !== "object") continue;
       if (q.undo === true) {
         const kind = q.kind;
-        const item = q.args && typeof q.args === "object" ? q.args[kind] : null;
+        // A press carries { def, at, seed }; the press is found by its definition and who made it.
+        const who = typeof q.actor === "string" ? q.actor : myName;
+        const item = q.args && typeof q.args === "object" ? (kind === "stamp" ? (typeof q.args.def === "string" && who ? { id: q.args.def + "|" + who } : null) : q.args[kind]) : null;
         if (!ADD_API[kind] || !item || typeof item.id !== "string") continue;
         if (resolving.some((o) => o.kind === kind && o.id === item.id)) continue;
         const op = {
@@ -452,6 +465,16 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
           actor: typeof q.actor === "string" ? q.actor : null,
         };
         startResolving(op);
+        continue;
+      }
+      if (q.stamp && typeof q.stamp === "object" && typeof q.stamp.def === "string" && typeof q.stamp.at === "string") {
+        const who = typeof q.who === "string" ? q.who : myName;
+        if (!who || ops.some((o) => o.kind === "stamp" && o.id === q.stamp.def + "|" + who)) continue;
+        const op = pressOp({ def: q.stamp.def, at: q.stamp.at, seed: q.stamp.seed }, who);
+        op.status = "queued";
+        op.lost = q.sent !== false;
+        writes.set(op.token, op);
+        ops.push(op);
         continue;
       }
       if (q.payment && typeof q.payment === "object" && typeof q.payment.id === "string") {
@@ -534,7 +557,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     ops.push(op);
     // A write its caller waits on (op.quiet) is shown on the bar once saved.
     if (op.quiet) op.outcome = new Promise((resolve) => { op.finish = resolve; });
-    else showChange(op, op.after);
+    else if (!op.silent) showChange(op, op.after);
     if (op.api === "addExpense" && !state.online) {
       // Known to be without signal: keep it on the phone (so it provably never
       // left) and check for signal; the next contact sends it.
@@ -632,7 +655,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     }
     wantReload();
     nextLoad(loadCount).then(() => {
-      const item = (base && Array.isArray(base[LIST[op.kind]]) ? base[LIST[op.kind]] : []).find((x) => x[KEY_FIELD[op.kind]] === op.id) || null;
+      const item = (base && Array.isArray(base[LIST[op.kind]]) ? base[LIST[op.kind]] : []).find((x) => keyOf(op.kind, x) === op.id) || null;
       const landed = !!item && (!op.before || sameAs(item, op.patch));
       if (!landed) {
         op.finish({ saved: false, reason: "notLanded" });
@@ -724,6 +747,54 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       view: (cur) => ({ ...(cur || {}), ...after }),
       status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: after.stampedBy,
     };
+  }
+
+  // ---- the stamp book ----
+
+  // A press: shown at once (a stamp of mine, with the seed that wears its
+  // ink), sent as pressStamp { def, at, seed }. Kept in mat.queue like a line
+  // until the backend has it, resent with the same def (the backend answers a
+  // second press of the same stamp with the first), and never shown on the
+  // undo bar: it is lifted from History.
+  function pressOp({ def, at, seed }, who) {
+    const after = { def, who, at, seed, gone: false };
+    return {
+      token: newId(), kind: "stamp", id: def + "|" + who, action: "press", api: "pressStamp",
+      args: { def, at, seed }, before: null, after,
+      view: (cur) => ({ ...(cur || {}), ...after }),
+      status: "sending", undone: false, logId: null, inFlight: false, lost: false, actor: who, silent: true,
+    };
+  }
+
+  // Returns the press's token, or null when there is nothing to press: no
+  // such stamp, nobody chosen yet, one of mine already shown, or this one's
+  // press still on its way (a second tap is not a second request).
+  function pressStamp(defId) {
+    if (!myName || !state.stampDefs.some((d) => d && d.id === defId)) return null;
+    const id = defId + "|" + myName;
+    if (ops.some((o) => o.kind === "stamp" && o.id === id && !o.undone)) return null;
+    const held = find("stamp", id);
+    if (held && !held.gone) return null;
+    const rnd = new Uint32Array(1);
+    globalThis.crypto.getRandomValues(rnd);
+    const seed = 1 + (rnd[0] % 4294967295);
+    return begin(pressOp({ def: defId, at: new Date(now()).toISOString(), seed }, myName));
+  }
+
+  // A press still queued more than 48 hours after the moment it was made is
+  // dropped, with a line saying so: its day has closed. (One that may have
+  // landed is checked against the next load.)
+  function dropStalePresses() {
+    const t = now();
+    const stale = ops.filter((o) => o.kind === "stamp" && isLiveAdd(o) && o.status === "queued" && t - Date.parse(o.after.at) > STAMP_DROP_MS);
+    if (!stale.length) return false;
+    for (const op of stale) {
+      removeOp(op);
+      if (mayHaveLanded(op)) wantReload();
+    }
+    saveQueue();
+    state.notice = STAMP_DROPPED;
+    return true;
   }
 
   // Removing (or deleting) an item whose add the backend has not confirmed:
@@ -898,7 +969,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       unsureUndos.push(op);
       return;
     }
-    const item = base ? (base[LIST[op.kind]] || []).find((x) => x[KEY_FIELD[op.kind]] === op.id) || null : null;
+    const item = base ? (base[LIST[op.kind]] || []).find((x) => keyOf(op.kind, x) === op.id) || null : null;
     // A stop add (the only add that comes here: it is not resent like a
     // queued one) has no patch: it landed when the backend has its id, which
     // only this phone could have made.
@@ -1003,6 +1074,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
   // Sends queued lines, then finishes undos left open. One pass at a time.
   function flush() {
     if (flushing) return flushing;
+    if (dropStalePresses()) changed();
     flushing = (async () => {
       for (const op of ops.slice()) {
         if (!isAdd(op) || op.status !== "queued") continue;
@@ -1245,7 +1317,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       const top = r.data.entry;
       const rest = state.history.entries.map((e) => {
         if (e.id === logId) return { ...e, undoneBy: r.data.logId, canUndo: false };
-        if (e.kind === kind && e.ref === item[KEY_FIELD[kind]]) return { ...e, canUndo: false };
+        if (e.kind === kind && e.ref === keyOf(kind, item)) return { ...e, canUndo: false };
         return e;
       });
       state.history = { ...state.history, entries: top ? [top, ...rest] : rest };
@@ -1300,6 +1372,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     boot, refresh, checkRev, flush, idle,
     setMe, setPerson, markSeen, notify, clearNotice, claudeToken, syncPayments, autoPayments,
     syncTodos, tickTodo, claimTodo,
+    pressStamp,
     addExpense,
     updateExpense: (id, patch) => change("expense", id, "edit", "updateExpense", patch),
     deleteExpense: (id) => takeBackLive("expense", id) || change("expense", id, "delete", "deleteExpense", { deleted: true }),

@@ -20,6 +20,7 @@ import { mountStopSheet } from "./views/stopsheet.js";
 import { mountUndoBar } from "./views/ubar.js";
 import { mountNet } from "./views/net.js";
 import { mountTodos } from "./views/todos.js";
+import { mountStampBook } from "./views/stampbook.js";
 import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
 import { createUpdater } from "./update.js";
@@ -200,10 +201,13 @@ function start() {
   const stayCard = mountStayCard(phone, store);
   const allDays = mountAllDays(phone, store, { clock, onPick: (i) => days.goDay(i) });
   const stopSheet = mountStopSheet(phone, store);
+  // The stamp book, a panel like History, opened from the Days bar or today's ticket.
+  const book = mountStampBook(phone, store);
   const closeDaySheets = () => {
     stayCard.close(false);
     allDays.close(false);
     stopSheet.close(false);
+    book.close(false);
   };
   // A tab switch closes them (they belong to Days).
   document.getElementById("nav").addEventListener("click", (ev) => {
@@ -340,6 +344,10 @@ function start() {
     onAllDays: () => {
       closeForDays();
       allDays.open();
+    },
+    onStampBook: () => {
+      closeForDays();
+      book.open();
     },
     onAddStop: (date) => {
       closeForDays();

@@ -41,6 +41,7 @@
 import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor } from "../plan.js";
 import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
+import { summary as bookSummary, countText } from "../stampbook.js";
 
 const TICK_MS = 15000;
 // While a demo runs, a trip minute passes every half second.
@@ -116,14 +117,25 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, held = () => false } = {}) {
+export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
   const pager = el("div", "pager");
   pager.id = "pager";
+  // The stamp book's way in: a small ring and how many stamps this person has.
+  // Only while the book has stamps (the Sheet's definitions); see showStamps.
+  const stampBtn = el("button", "bar-stamp");
+  stampBtn.type = "button";
+  stampBtn.id = "stampBtn";
+  stampBtn.hidden = true;
+  const stampN = el("span", "bar-stamp-n");
+  stampBtn.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle class="d" cx="12" cy="12" r="9.5"/><circle cx="12" cy="12" r="4.2"/></svg>';
+  stampBtn.append(stampN);
+  const left = el("div", "bar-l");
+  left.append(count, stampBtn);
   const bar = el("div", "bar");
-  bar.append(count, pager);
+  bar.append(left, pager);
   const rail = el("div", "rail");
   rail.id = "rail";
   // The demo banner: plain ground and text, above the bar, only while a demo
@@ -297,6 +309,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     if (b) jump(Number(b.dataset.i), true);
   });
   count.addEventListener("click", () => onAllDays());
+  stampBtn.addEventListener("click", () => onStampBook());
   root.addEventListener("keydown", (ev) => {
     if (ev.target.closest("input, textarea, select")) return;
     if ((ev.key === "Enter" || ev.key === " ") && ev.target.classList.contains("r-b")) {
@@ -317,6 +330,10 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     applyOpen();
   }
   rail.addEventListener("click", (ev) => {
+    if (ev.target.closest(".tk-stampline")) {
+      onStampBook();
+      return;
+    }
     const stay = ev.target.closest(".tk-stay");
     if (stay) {
       onStay(stay.dataset.stay);
@@ -383,8 +400,23 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     demoText.replaceChildren(head, demoTime);
   }
 
+  // The stamp button and its count; the date of today's open stamp for the ticket's line.
+  function showStamps(s) {
+    const b = bookSummary(s, Date.now());
+    const on = s.status === "ready" && b.total > 0;
+    stampBtn.hidden = !on;
+    bar.classList.toggle("has-stamp", on);
+    if (on) {
+      const text = countText(b.n, b.total);
+      stampN.textContent = b.n + "/" + b.total;
+      stampBtn.setAttribute("aria-label", "Stamp book, " + text);
+    }
+    return on ? b.openToday : "";
+  }
+
   function render(s) {
     showDemo();
+    const stampToday = showStamps(s);
     const ready = s.status === "ready" && s.trip && s.trip.start && list(s.days).length;
     if (!ready) {
       if (!dates.length) {
@@ -446,6 +478,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
         minutes: state === "today" ? now.minutes : null,
         toGo: i === 0 ? toGo : 0,
         tripName: s.trip.name,
+        // Today's stamp is open and not yet pressed: the ticket says so.
+        stampOpen: stampToday === day.date,
       };
       const sig = JSON.stringify(model);
       if (sigs.get(day.date) === sig) return;
