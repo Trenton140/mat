@@ -29,10 +29,18 @@
   --paper-down:inset 0 1px 0 #fff, inset 0 -1px 0 rgba(0,0,0,.22);
 }
 html,body{height:100%;margin:0}
-/* Reaching the bottom of the screen in a Home Screen app that is told it is
-   shorter than the screen (js/fit.js): four ways, tried from the Screen
-   check under You. None pins the page (position:fixed): a pinned page is cut
-   off at the told height. */
+/* A Home Screen app on an iPhone: "100%" of the page comes out short by the
+   top inset (793 of 852 on Mo's phone, measured 2026-11-17), so the app ended
+   early and the bottom bar floated above a dead band. The large viewport
+   height is the whole screen there. max(): on a phone without the fault the
+   two are equal, so nothing can overshoot. The first line is for a phone that
+   does not know lvh. */
+@media (display-mode: standalone){
+  html{height:100%;height:max(100%, 100lvh)}
+}
+/* Other ways of reaching the bottom of the screen (js/fit.js), tried from the
+   Screen check under You, in case a phone needs one. None pins the page
+   (position:fixed): a pinned page is cut off at the told height. */
 html.fit-a,html.fit-a body{height:var(--full-h)}
 html.fit-b,html.fit-b body{height:100lvh}
 html.fit-c,html.fit-c body{height:var(--full-h);overflow:visible}
