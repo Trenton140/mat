@@ -48,6 +48,8 @@ import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
 import { summary as bookSummary, countText } from "../stampbook.js";
 import { isPhone, isWide } from "../shape.js";
+import { mountBoard } from "./board.js";
+import { boardFor } from "../board.js";
 
 const TICK_MS = 15000;
 // While a demo runs, a trip minute passes every half second.
@@ -133,7 +135,7 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-export function mountDays(root, store, { clock, where = null, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
+export function mountDays(root, store, { clock, where = null, storage = null, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
@@ -166,7 +168,9 @@ export function mountDays(root, store, { clock, where = null, onAllDays = () => 
   demo.append(demoText, demoStop);
   demo.hidden = true;
   demoStop.addEventListener("click", () => clock.stop());
-  root.replaceChildren(demo, bar, rail);
+  // The departure board (js/views/board.js): between the top line and the rail.
+  const board = mountBoard({ storage });
+  root.replaceChildren(demo, bar, board.el, rail);
 
   let dates = []; // the dates of the drawn tickets, in order
   let states = []; // each one's dayState
@@ -490,6 +494,7 @@ export function mountDays(root, store, { clock, where = null, onAllDays = () => 
     const stampToday = showStamps(s);
     const ready = s.status === "ready" && s.trip && s.trip.start && list(s.days).length;
     if (!ready) {
+      board.update(null);
       if (!dates.length) {
         count.hidden = true;
         rail.replaceChildren();
@@ -511,6 +516,7 @@ export function mountDays(root, store, { clock, where = null, onAllDays = () => 
     const inView = cur >= 0 ? dates[cur] : null;
     // Where the phone is, when usable (js/where.js): memory only.
     const here = where ? where.current() : null;
+    board.update(boardFor(s, nowMs, here), tz);
     const left = rail.scrollLeft;
     const spot = focusSpot();
 

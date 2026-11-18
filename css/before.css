@@ -24,7 +24,7 @@
 .rv-no{font-family:var(--dot);font-size:12px;line-height:1}
 .rv-stub .bw-seal{margin-top:0}
 .bw-r.is-open .rv-stub{background:rgba(40,64,143,.05)}
-.rv-l{display:block;color:var(--ai);font-size:10px;font-weight:700;line-height:1.1;margin-bottom:2px}
+.rv-l{display:block;color:var(--ai);font-size:10.5px;font-weight:700;line-height:1.1;margin-bottom:2px}
 .bw-b{padding:8px 12px 8px 10px}
 div.bw-b{min-height:0}
 .bw-note{margin:0 12px 0 10px}
