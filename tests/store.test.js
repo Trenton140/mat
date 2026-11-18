@@ -40,7 +40,8 @@ function memStorage(init = {}) {
 //   net.lose           actions that reach the backend but whose reply is lost
 //   net.garble         actions that reach the backend but get a non-envelope reply
 //   net.knownOffline   the phone itself says it has no network: nothing is sent
-function phone({ seed, fake, storage, me = "Mo", nowMs = NOW, clock } = {}) {
+//   timeoutMs          how long the api waits for a reply (the app's own 30 s by default)
+function phone({ seed, fake, storage, me = "Mo", nowMs = NOW, clock, timeoutMs } = {}) {
   fake = fake || createFakeBackend(seed);
   storage = storage || memStorage({ "mat.key": KEY, "mat.me": me });
   const net = { offline: false, knownOffline: false, failing: new Set(), lose: new Set(), garble: new Set(), override: null, holds: [], sent: [] };
@@ -65,7 +66,7 @@ function phone({ seed, fake, storage, me = "Mo", nowMs = NOW, clock } = {}) {
     }
     return { ok: true, status: 200, text: async () => JSON.stringify(env) };
   };
-  const api = createApi({ url: URL, getKey: () => storage.getItem("mat.key"), getActor: () => storage.getItem("mat.me"), fetchImpl, isOnline: () => !net.knownOffline });
+  const api = createApi({ url: URL, getKey: () => storage.getItem("mat.key"), getActor: () => storage.getItem("mat.me"), fetchImpl, isOnline: () => !net.knownOffline, ...(timeoutMs ? { timeoutMs } : {}) });
   const waits = [];
   const store = createStore({ api, storage, now: clock || (() => nowMs), wait: async (ms) => { waits.push(ms); } });
   return { fake, storage, net, api, store, waits };
@@ -3035,4 +3036,154 @@ test("everyone's stamps come with a load; another phone's press arrives on the n
   assert.equal(ajen.ok, true);
   await p.store.checkRev();
   assert.deepEqual(p.store.state.stamps.map((s) => [s.def, s.who]), [["d1", "Ajen"]]);
+});
+
+// ---------- wave A: the Before list ----------
+
+const NOTODOPROBS = { at: "", list: [], more: 0 };
+// A Book Now tab where #1 is there twice (rows 2 and 4 of the tab).
+const twiceSeed = () => {
+  const s = bookSeed(2);
+  s.plannerTabs["Book Now"].push(brow({ "#": 1, Item: "Made-up repeat", Status: "" }));
+  return s;
+};
+
+test("wave A 1: todoProblems comes from load (empty shape before any pull) and is kept in the cache", async () => {
+  const none = phone({ seed: bookSeed(2) });
+  assert.deepEqual(none.store.state.todoProblems, NOTODOPROBS, "initial state");
+  await none.store.boot();
+  assert.deepEqual(none.store.state.todoProblems, NOTODOPROBS);
+  const seeded = { at: "2026-12-11T02:00:00.000Z", list: [{ id: "4", message: "Made-up reason.", row: 7, what: "Made-up item" }], more: 1 };
+  const p = phone({ seed: { ...bookSeed(2), todoProblems: seeded } });
+  await p.store.boot();
+  assert.deepEqual(p.store.state.todoProblems, seeded);
+  assert.deepEqual(JSON.parse(p.storage.map.get("mat.cache")).data.todoProblems, seeded);
+});
+
+test("wave A 1: a real pull brings its problems in at once; a stored answer leaves them alone", async () => {
+  const at = { ms: NOW };
+  const fake = createFakeBackend(twiceSeed(), { clock: () => new Date(at.ms).toISOString() });
+  const p = phone({ fake, clock: () => at.ms });
+  await p.store.boot();
+  await p.store.syncTodos();
+  assert.deepEqual(p.store.state.todoProblems.list, [{ id: "1", message: "That number is in the Book Now tab twice.", row: 4, what: "Made-up repeat" }]);
+  assert.equal(p.store.state.todoProblems.more, 0);
+  // The planner is put right; within 10 minutes the backend answers its stored list.
+  fake.planner.tabs["Book Now"].pop();
+  at.ms += 60 * 1000;
+  const r = await p.store.syncTodos();
+  assert.equal(r.stored, true);
+  assert.equal(p.store.state.todoProblems.list.length, 1, "left alone");
+  const forced = await p.store.syncTodos({ force: true });
+  assert.equal(forced.stored, false);
+  assert.deepEqual(p.store.state.todoProblems.list, [], "a real pull with none clears them");
+});
+
+test("wave A 2: syncTodos says when the backend answered with its stored list", async () => {
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  const first = await p.store.syncTodos({ force: true });
+  assert.equal(first.stored, false);
+  const again = await p.store.syncTodos({ force: true });
+  assert.deepEqual([again.ok, again.stored, again.pulledAt], [true, true, first.pulledAt]);
+});
+
+test("wave A 3: a tick whose reply comes after the phone stopped waiting: one tick, one History line, one planner write, and the phone shows the tick", async () => {
+  const p = phone({ seed: bookSeed(2), timeoutMs: 40 });
+  await p.store.boot();
+  await p.store.syncTodos();
+  const release = p.net.hold("tickTodo"); // the backend finishes; its reply is late
+  p.store.tickTodo("1");
+  await until(() => p.store.state.notice);
+  assert.equal(p.store.state.notice, "Couldn’t confirm that. Checking…");
+  await p.store.idle();
+  const t = byId(p.store.state.todos, "1");
+  assert.deepEqual([t.tickedBy, t.done, t.status, !!t.pending], ["Mo", true, "Booked", false], "the phone shows the tick the backend has");
+  release();
+  // A second tap (a re-send) changes nothing on the backend.
+  const ticks = () => p.fake.tables.Log.filter((r) => r.kind === "todo" && r.action === "tick").length;
+  assert.equal(ticks(), 1);
+  assert.equal(p.fake.planner.writes.filter((w) => w.kind === "cell").length, 1);
+  assert.equal(p.store.tickTodo("1") === null || isDoneShown(p, "1"), true);
+  await p.store.idle();
+  assert.equal(ticks(), 1, "one History line");
+  assert.equal(p.fake.planner.writes.filter((w) => w.kind === "cell").length, 1, "no second planner write");
+  assert.equal(byId(p.store.state.todos, "1").tickedBy, "Mo");
+});
+
+test("wave A 3: a re-send while the first tick's reply is still out: refused as done, and the phone still ends up showing the tick", async () => {
+  const p = phone({ seed: bookSeed(2), timeoutMs: 40 });
+  await p.store.boot();
+  await p.store.syncTodos();
+  const release = p.net.hold("tickTodo");
+  p.store.tickTodo("1");
+  p.store.tickTodo("1"); // a second tap, sent once the first has given up
+  await p.store.idle();
+  release();
+  assert.equal(p.fake.tables.Log.filter((r) => r.kind === "todo" && r.action === "tick").length, 1);
+  assert.equal(p.fake.planner.writes.filter((w) => w.kind === "cell").length, 1);
+  assert.equal(p.net.sent.filter((b) => b.action === "tickTodo").length, 2);
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(byId(p.store.state.todos, "1").tickedBy, "Mo");
+});
+
+const isDoneShown = (p, id) => { const t = byId(p.store.state.todos, id); return !!t && t.done === true; };
+
+test("wave A 5: undoing a tick says what became of the planner: put back, still to put back, or left as it was changed", async () => {
+  const { changeText } = await import("../js/format.js");
+  // Written, then put back: just Undone.
+  const a = phone({ seed: bookSeed(2) });
+  await a.store.boot();
+  await a.store.syncTodos();
+  const ta = a.store.tickTodo("1");
+  await a.store.idle();
+  await a.store.undo(ta);
+  await a.store.idle();
+  assert.equal(changeText(a.store.state.lastChange), "Undone.");
+  // Written, then the planner refuses the put-back: pending.
+  const b = phone({ seed: bookSeed(2) });
+  await b.store.boot();
+  await b.store.syncTodos();
+  const tb = b.store.tickTodo("1");
+  await b.store.idle();
+  b.fake.planner.cellFails = true;
+  await b.store.undo(tb);
+  await b.store.idle();
+  assert.equal(changeText(b.store.state.lastChange), "Undone. The planner couldn’t be changed back yet, so it may still say Booked.");
+  // Written, then someone changed the planner's Status: kept.
+  const c = phone({ seed: bookSeed(2) });
+  await c.store.boot();
+  await c.store.syncTodos();
+  const tc = c.store.tickTodo("1");
+  await c.store.idle();
+  c.fake.planner.tabs["Book Now"][1][3] = "Booked (made-up ref)";
+  await c.store.undo(tc);
+  await c.store.idle();
+  assert.equal(changeText(c.store.state.lastChange), "Undone. The planner’s Status was changed there since, so it was left as it is.");
+  // Never written (the planner was down for the tick): its "kept" means nothing to do there.
+  const d = phone({ seed: bookSeed(2) });
+  await d.store.boot();
+  await d.store.syncTodos();
+  d.fake.planner.cellFails = true;
+  const td = d.store.tickTodo("1");
+  await d.store.idle();
+  await d.store.undo(td);
+  await d.store.idle();
+  assert.equal(changeText(d.store.state.lastChange), "Undone.");
+});
+
+test("wave A 5: an undo from History says the same", async () => {
+  const { changeText } = await import("../js/format.js");
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  await p.store.syncTodos();
+  p.store.tickTodo("1");
+  await p.store.idle();
+  await p.store.loadHistory();
+  const tick = p.store.state.history.entries.find((e) => e.kind === "todo" && e.action === "tick");
+  p.fake.planner.cellFails = true;
+  await p.store.undoEntry(tick.id);
+  await p.store.idle();
+  assert.equal(changeText(p.store.state.lastChange), "Undone. The planner couldn’t be changed back yet, so it may still say Booked.");
 });

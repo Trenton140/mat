@@ -108,6 +108,31 @@ export function tickedLine(t) {
   return "済 " + who + " · " + dayHead(day, []).en.split(" ").slice(1).join(" ");
 }
 
+// What an undone tick left in the planner, worth saying on the undo bar,
+// from the item as shown before the undo and the backend's reply to it
+// ({ planner, todo }): "pending" (the app's Booked could not be taken back
+// out yet), "kept" (the app had written Booked, and the planner's Status was
+// changed there since, so it was left alone), or null (put back, never
+// written, or not an undone tick: nothing more to say).
+export function untickOutcome(before, data) {
+  const after = data && data.todo;
+  if (!after || str(after.tickedBy) !== "") return null;
+  if (data.planner === "pending") return "pending";
+  const wasWritten = !!before && str(before.tickedBy) !== "" && before.plannerComputes !== true && isBooked(before.status);
+  if (data.planner === "kept" && wasWritten && !isBooked(after.status)) return "kept";
+  return null;
+}
+
+// The first line of a Book Now item a pull could not read: "#4 · row 7 ·
+// Made-up item". Each part is left out when the backend had none.
+export function todoProblemHead({ id, row, what } = {}) {
+  const parts = [];
+  if (typeof id === "string" && id !== "") parts.push("#" + id);
+  if (typeof row === "number" && Number.isFinite(row)) parts.push("row " + row);
+  if (typeof what === "string" && what !== "") parts.push(what);
+  return parts.length ? parts.join(" · ") : "A Book Now row";
+}
+
 // The list is due a fetch: never fetched, or fetched an hour ago or more.
 export function isStale(pulledAt, nowMs) {
   const ms = Date.parse(typeof pulledAt === "string" ? pulledAt : "");

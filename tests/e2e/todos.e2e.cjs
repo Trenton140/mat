@@ -587,12 +587,13 @@ module.exports = [
       await page.click("#bwFetch");
       await expectText(page, "#bwFetch", "Fetching…");
       release();
-      await expectText(page, "#bwFetch", "Up to date ✓");
-      assert.deepEqual(sent(backend, "syncTodos").map((r) => r.args), [{ force: false }, { force: true }]);
-      // Within 30 seconds of the last pull the backend answers the stored list: the line shows when that was.
+      // Within 30 seconds of the last pull the backend answers the stored list: the line shows when that was,
+      // and (wave A item 2) so does Fetch, in place of "Up to date ✓".
+      await until(() => page.evaluate(() => window.__matTest.store.state.todosPulledAt), "pulled");
       const pulled = await page.evaluate(() => window.__matTest.store.state.todosPulledAt);
-      assert.ok(pulled);
       const clock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(Date.parse(pulled)));
+      await expectText(page, "#bwFetch", "Read " + clock);
+      assert.deepEqual(sent(backend, "syncTodos").map((r) => r.args), [{ force: false }, { force: true }]);
       await expectText(page, "#bwAt", "From the planner · fetched " + clock);
     },
   },
@@ -613,7 +614,8 @@ module.exports = [
       await until(() => stored(backend, "3").planner_written === "yes", "written");
       bookRow(backend, 3)[4] = "Booked (paid at the desk)";
       await page.click("#ubarU");
-      await expectText(page, "#ubarT", "Undone.");
+      // Wave A item 5: the bar says what became of the planner (was: "Undone." alone).
+      await expectText(page, "#ubarT", "Undone. The planner’s Status was changed there since, so it was left as it is.");
       await until(() => stored(backend, "3").ticked_by === "", "undone");
       assert.equal(backend.requests.filter((r) => r.action === "undo").length, 1);
       assert.deepEqual(undos.map((e) => [e.ok, e.data && e.data.planner]), [[true, "kept"]], "the backend answered kept");
@@ -640,6 +642,61 @@ module.exports = [
     },
   },
 ];
+
+// Wave A: the items a pull could not read, under the fetch line; and Fetch within 30 seconds of the last.
+module.exports.push(
+  {
+    name: "wave A: the items the last pull could not read show under the fetch line, as text, two lines each; gone once the planner is put right",
+    viewport: { width: 393, height: 852 },
+    async run({ page }) {
+      // #2 and #3 are each in the tab twice (rows 8 and 9: a title row, the header, then five items).
+      const items = [...ITEMS, { "#": 2, Item: "Made-up <b>second</b> tea class" }, { "#": 3, Item: "Made-up snow park repeat" }];
+      const backend = await ready(page, { items });
+      await until(() => visible(page, "#bwProblems"), "the block shows");
+      const got = await page.evaluate(() => {
+        const box = document.getElementById("bwProblems");
+        const r = box.getBoundingClientRect();
+        const foot = document.querySelector(".bw-foot").getBoundingClientRect();
+        return {
+          head: box.querySelector(".bw-pp-h").firstChild.textContent,
+          entries: [...box.querySelectorAll(".bw-pp-i")].map((i) => [i.querySelector(".bw-pp-w").textContent, i.querySelector(".bw-pp-m").textContent]),
+          bold: box.querySelectorAll("b").length,
+          below: r.top >= foot.bottom - 1,
+          fits: r.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth,
+        };
+      });
+      assert.deepEqual(got, {
+        head: "Not read from the planner",
+        entries: [["#2 · row 8 · Made-up <b>second</b> tea class", "That number is in the Book Now tab twice."], ["#3 · row 9 · Made-up snow park repeat", "That number is in the Book Now tab twice."]],
+        bold: 0, below: true, fits: true,
+      });
+      await page.evaluate(() => document.getElementById("bwProblems").scrollIntoView({ block: "end" }));
+      require("fs").mkdirSync("/private/tmp/claude-501/mat-shots/ticks", { recursive: true });
+      await page.screenshot({ path: "/private/tmp/claude-501/mat-shots/ticks/before-problems.png" });
+      // The planner put right: the next real pull clears the block.
+      backend.fake.planner.tabs["Book Now"].splice(-2, 2);
+      await advance(page, backend, 31 * 1000);
+      await page.click("#bwFetch");
+      await until(async () => !(await visible(page, "#bwProblems")), "the block goes");
+    },
+  },
+  {
+    name: "wave A: Fetch again within 30 seconds says when the planner was read, not Up to date",
+    async run({ page }) {
+      const backend = await ready(page, { ago: 2 * MIN });
+      await advance(page, backend, 3 * MIN);
+      await page.click("#bwFetch");
+      await expectText(page, "#bwFetch", "Up to date ✓");
+      await advance(page, backend, 10 * 1000);
+      await page.click("#bwFetch");
+      const clock = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(BEFORE + 3 * MIN));
+      await expectText(page, "#bwFetch", "Read " + clock);
+      assert.equal(sent(backend, "syncTodos").length, 2);
+      const bookReads = backend.fake.planner.calls.filter((c) => c.op === "read" && c.tab === "Book Now").length;
+      assert.equal(bookReads, 2, "the second fetch read nothing (the backend's own first pull, then the first Fetch)");
+    },
+  },
+);
 
 const FIVE = ["days", "before", "ring", "money", "youBtn"];
 const FOUR = ["days", "money", "youBtn", "ring"];
