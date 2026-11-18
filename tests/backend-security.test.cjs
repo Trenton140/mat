@@ -493,3 +493,40 @@ test("minor: an e-mail address in an error's text is blanked in the owner's log"
   await w.as(w.keys.Mo, "history");
   assert.equal(w.fake.consoleLines[0].includes("someone@example.com"), false, w.fake.consoleLines[0]);
 });
+
+// ---------- fix round 2 ----------
+
+test("round 2: issueLinks with an empty or unreadable People tab refuses and changes nothing", () => {
+  const w = world();
+  const before = w.fake.props.PERSON_KEYS;
+  w.fake.tables.People.length = 0;
+  w.fake.world.issueLinks();
+  assert.deepEqual(w.fake.logged, ["Not done: the People tab lists nobody. Nothing was changed."]);
+  assert.equal(w.fake.props.PERSON_KEYS, before);
+  w.fake.logged.length = 0;
+  w.fake.world.peopleNames_ = () => { throw new Error("Missing tab: People"); };
+  w.fake.world.issueLinks();
+  assert.deepEqual(w.fake.logged, ["Not done: the People tab can’t be read. Nothing was changed."]);
+  assert.equal(w.fake.props.PERSON_KEYS, before);
+});
+
+test("round 2: the advice for a broken PERSON_KEYS says to mend it, and that deleting it cancels every link", () => {
+  const w = world();
+  w.fake.props.PERSON_KEYS = "{bad";
+  w.fake.world.linksStatus();
+  assert.match(w.fake.logged[0], /mend the text/);
+  assert.match(w.fake.logged[0], /Deleting or emptying it cancels every personal link/);
+  const readme = fs.readFileSync(path.join(__dirname, "..", "README.md"), "utf8");
+  assert.match(readme, /mend the text/);
+  assert.match(readme, /cancels every personal link/);
+});
+
+test("round 2: linksStatus lists an entry that is there but unusable as unreadable, not as no link", () => {
+  const w = world();
+  const keys = JSON.parse(w.fake.props.PERSON_KEYS);
+  keys.Ajen.hash = keys.Ajen.hash.slice(1); // one character short
+  w.fake.props.PERSON_KEYS = JSON.stringify(keys);
+  w.fake.world.linksStatus();
+  assert.ok(w.fake.logged.includes("2. Ajen: unreadable entry for Ajen (run newLinkForPerson2 to give a new link)"), w.fake.logged.join("\n"));
+  assert.ok(w.fake.logged.some((l) => /^1\. Mo: has a link/.test(l)));
+});

@@ -104,7 +104,7 @@ function linkableName_(name) {
   return typeof name === "string" && name !== "" && name !== "__proto__";
 }
 
-var LINKS_UNREADABLE_ = "PERSON_KEYS can’t be read (it is not what issueLinks writes). Nobody can open the trip with a personal link until it is fixed. To start again: in Project Settings → Script Properties delete PERSON_KEYS, then run issueLinks and send everyone their new link.";
+var LINKS_UNREADABLE_ = "PERSON_KEYS can’t be read (it is not what issueLinks writes). Nobody can open the trip until it is fixed. If only its punctuation is broken (a quote, brace or comma), mend the text in Project Settings → Script Properties: every link keeps working. Deleting or emptying it cancels every personal link: each phone then clears itself, and issueLinks makes new links to send to everyone.";
 
 // PERSON_KEYS, or null after saying in the log that it can't be read.
 function personKeysOrSay_() {
@@ -121,6 +121,19 @@ function personKeysOrSay_() {
 // names no longer on the trip are removed (named in the log).
 function issueLinks() {
   if (personKeysOrSay_() === null) return;
+  // Fix round 2: with nobody in the People tab (or no People tab), the
+  // leftover removal below would delete every link: change nothing.
+  var listed;
+  try {
+    listed = peopleNames_();
+  } catch (e) {
+    Logger.log("Not done: the People tab can’t be read. Nothing was changed.");
+    return;
+  }
+  if (!listed.length) {
+    Logger.log("Not done: the People tab lists nobody. Nothing was changed.");
+    return;
+  }
   var made = [];
   var had = [];
   var gone = [];
@@ -240,8 +253,19 @@ function linksStatus() {
   var keys = personKeysOrSay_();
   if (keys === null) return;
   var names = peopleNames_();
+  // An entry that is there but not a usable { hash, at } (personKeysFrom
+  // leaves it out): said as unreadable, not as no link.
+  var raw = {};
+  try {
+    raw = JSON.parse(getProp_("PERSON_KEYS") || "{}") || {};
+  } catch (e) {
+    raw = {};
+  }
   names.forEach(function (name, i) {
-    Logger.log((i + 1) + ". " + name + ": " + (hasLink_(keys, name) ? "has a link (issued " + dayOf_(keys[name].at) + ")" : "no link yet"));
+    var said = hasLink_(keys, name) ? "has a link (issued " + dayOf_(keys[name].at) + ")"
+      : Object.prototype.hasOwnProperty.call(raw, name) ? "unreadable entry for " + name + " (run newLinkForPerson" + (i + 1) + " to give a new link)"
+      : "no link yet";
+    Logger.log((i + 1) + ". " + name + ": " + said);
   });
   var stale = Object.keys(keys).filter(function (name) { return names.indexOf(name) === -1; });
   if (stale.length) Logger.log("Not on the trip any more, still has a link: " + stale.join(", ") + ". Run issueLinks to remove it.");

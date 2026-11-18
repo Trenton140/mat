@@ -3490,3 +3490,28 @@ test("I3: a broken PERSON_KEYS (the plain server sentence) never takes the trip 
   assert.equal(storage.getItem("mat.key"), mine);
   assert.ok(storage.getItem("mat.cache"));
 });
+
+test("round 2: an address key that is taken becomes the saved trip at once, so a failed next load can't let the shared link replace it", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Trenton");
+  const storage = memStorage({ "mat.key": KEY, "mat.me": "Mo" });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  // Opened from Trenton's own link: the try (a load with that key) answers;
+  // the load after it fails.
+  let withMine = 0;
+  p.net.override = (b) => (b.action === "load" && b.key === mine && ++withMine > 1 ? { ok: false, error: "server", message: "x" } : null);
+  const boot = p.store.boot({ candidate: mine });
+  await boot;
+  await p.store.idle();
+  assert.equal(storage.getItem("mat.key"), mine);
+  assert.equal(JSON.parse(storage.getItem("mat.cache")).data.personal, true, "the saved trip says personal at once");
+  assert.deepEqual([p.store.state.personal, p.store.state.me], [true, "Trenton"]);
+  // Opened again from the old shared link: the personal key stays.
+  p.net.override = null;
+  const again = phone({ fake, storage });
+  await again.store.boot({ candidate: KEY });
+  await again.store.idle();
+  assert.equal(storage.getItem("mat.key"), mine);
+  assert.equal(again.store.state.me, "Trenton");
+});

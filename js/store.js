@@ -628,7 +628,20 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       return;
     }
     const personal = !!(r && r.data && r.data.personal === true);
-    if (personal || storedPersonal === false) setItem("mat.key", candidate);
+    if (!(personal || storedPersonal === false) || wiped) return;
+    setItem("mat.key", candidate);
+    // Fix round 2: the reply it already has is the phone's trip at once, so
+    // the saved trip says who this is even if the next load fails (else the
+    // old shared link could replace the key again from a stale saved trip).
+    if (isData(r.data)) {
+      base = copy(r.data);
+      takeIdentity(base);
+      state.rev = r.rev;
+      state.loadedAt = now();
+      state.status = "ready";
+      saveCache();
+      changed();
+    }
   }
 
   async function boot({ candidate = null } = {}) {
