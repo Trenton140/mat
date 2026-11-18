@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { metres, walkMinutes, usable, distanceText, pointFromLink, point, FRESH_MS } from "../js/geo.js";
+import { metres, walkMinutes, usable, distanceText, pointFromLink, linkProblem, DIRECTIONS_LINK, point, FRESH_MS } from "../js/geo.js";
 
 const GION = { lat: 35.0037, lng: 135.7788 };
 const NOW = Date.parse("2026-12-15T13:20:00+09:00");
@@ -54,8 +54,23 @@ test("distanceText", () => {
 test("pointFromLink: the pin, else the map's centre, else nothing", () => {
   const full = "https://www.google.com/maps/place/Tenryu-ji/@35.0158,135.6721,17z/data=!3m1!4b1!4m6!3m5!1s0x6001!8m2!3d35.0156286!4d135.6737472!16s";
   assert.deepEqual(pointFromLink(full), { lat: 35.0156286, lng: 135.6737472 });
-  assert.deepEqual(pointFromLink("https://www.google.com/maps/@34.9858,135.7588,15z"), { lat: 34.9858, lng: 135.7588 });
-  assert.deepEqual(pointFromLink("  https://www.google.com/maps/@-33.8688,151.2093,12z "), { lat: -33.8688, lng: 151.2093 });
+  assert.deepEqual(pointFromLink("https://www.google.com/maps/place/Kyoto+Station/@34.9858,135.7588,15z"), { lat: 34.9858, lng: 135.7588 });
+  assert.deepEqual(pointFromLink("  https://www.google.com/maps/search/ramen/@-33.8688,151.2093,12z "), { lat: -33.8688, lng: 151.2093 });
   for (const none of ["https://maps.app.goo.gl/abc123", "Kyoto Station", "", null, 7, "https://www.google.com/maps/@95.1,135.1,15z"]) assert.equal(pointFromLink(none), null, String(none));
   assert.deepEqual(point({ lat: "35.1", lng: "135.2" }), { lat: 35.1, lng: 135.2 });
+});
+
+test("I3: a directions link is refused; the map's centre is read only from a place or search link", () => {
+  const dir = "https://www.google.com/maps/dir/35.0036,135.7787/Kyoto+Station/@35.0,135.76,14z/data=!3m1!4b1!4m9!4m8!1m1!4e1!1m5!1m1!1s0x0:0x0!2m2!1d135.7588!2d34.9858";
+  assert.equal(DIRECTIONS_LINK, "That’s a directions link. Paste the place’s own link.");
+  assert.equal(linkProblem(dir), DIRECTIONS_LINK);
+  assert.equal(pointFromLink(dir), null, "never read, it may say where a person was");
+  assert.equal(pointFromLink("https://www.google.com/maps/dir/?api=1&destination=x!3d35.1!4d139.1"), null);
+  // A bare map view's centre is where someone was looking (or standing): not read.
+  assert.equal(pointFromLink("https://www.google.com/maps/@34.9858,135.7588,15z"), null);
+  assert.equal(linkProblem("https://www.google.com/maps/@34.9858,135.7588,15z"), "");
+  // The pin is read from any other Maps link, as before.
+  assert.deepEqual(pointFromLink("https://www.google.com/maps/@1,2,3z/data=!3d35.5!4d139.5"), { lat: 35.5, lng: 139.5 });
+  assert.equal(linkProblem("https://www.google.com/maps/place/x/@35,139,17z"), "");
+  assert.equal(linkProblem(""), "");
 });

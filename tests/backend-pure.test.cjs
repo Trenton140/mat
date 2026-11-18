@@ -721,3 +721,13 @@ test("wave A 9: a stay's photo link over 500 letters says it is too long, not th
   assert.equal(P.validateStay({ ...stay, photo: "  " + long.slice(0, 498) + "  " }).ok, true, "500 letters once trimmed is fine");
   assert.equal(P.validateStay({ ...stay, photo: "http://photos.example.test/a.jpg" }).message, "That photo link has to start with https://.");
 });
+
+test("I3: the backend's pointFromLink never reads a directions link, and the map's centre only from a place or search link", () => {
+  const dir = "https://www.google.com/maps/dir/35.0036,135.7787/Kyoto+Station/@35.0,135.76,14z/data=!3d34.9858!4d135.7588";
+  assert.equal(P.pointFromLink(dir), null);
+  assert.equal(P.pointFromLink("https://www.google.com/maps/@34.9858,135.7588,15z"), null);
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/place/Kyoto+Station/@34.9858,135.7588,15z"), { lat: "34.9858", lng: "135.7588" });
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/search/ramen/@34.9858,135.7588,15z"), { lat: "34.9858", lng: "135.7588" });
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/place/x/@1,2,3z/data=!3d35.5!4d139.5"), { lat: "35.5", lng: "139.5" });
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/@1,2,3z/data=!3d35.5!4d139.5"), { lat: "35.5", lng: "139.5" });
+});

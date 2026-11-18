@@ -298,12 +298,16 @@ function optCoords_(lat, lng) {
   return { ok: true, value: c };
 }
 
-// The position in a pasted Google Maps link (the place's pin !3d..!4d.., else
-// the map's centre @lat,lng), or null. The same rule as js/geo.js pointFromLink.
+// The position in a pasted Google Maps link (the place's pin !3d..!4d.., else,
+// only in a place or search link, the map's centre @lat,lng), or null. Never
+// from a directions link (its start may be where someone was) or a bare map
+// view. The same rule as js/geo.js pointFromLink.
 function pointFromLink(text) {
   if (typeof text !== "string") return null;
   var s = text.trim();
-  var m = /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/.exec(s) || /@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/.exec(s);
+  if (/\/dir\//i.test(s)) return null;
+  var m = /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/.exec(s);
+  if (!m && /\/(?:place|search)\//i.test(s)) m = /@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/.exec(s);
   if (!m) return null;
   var c = coordsOf_({ lat: m[1], lng: m[2] });
   return c.lat === "" ? null : c;

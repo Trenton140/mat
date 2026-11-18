@@ -30,7 +30,7 @@
 
 import { dayHead } from "../format.js";
 import { newId } from "../time.js";
-import { pointFromLink } from "../geo.js";
+import { pointFromLink, linkProblem } from "../geo.js";
 
 const NO_SIGNAL = "No signal. Stops need a connection.";
 const GONE = "Someone removed this stop, so it can’t be saved.";
@@ -153,7 +153,8 @@ export function mountStopSheet(root, store) {
     const p = pointFromLink(pin.value);
     const w = where(f.place.value.trim());
     atWord.textContent = w.lat !== "" ? "On the map" : "Not on the map";
-    atSay.textContent = p ? "From the pasted link." : typed ? "No position in that link. Copy the long link from Google Maps’ address bar." : w.lat !== "" ? "Paste a Google Maps link to move it." : "Paste a Google Maps link to put it there.";
+    const bad = linkProblem(pin.value);
+    atSay.textContent = bad ? bad : p ? "From the pasted link." : typed ? "No position in that link. Copy the long link from Google Maps’ address bar." : w.lat !== "" ? "Paste a Google Maps link to move it." : "Paste a Google Maps link to put it there.";
   }
 
   // The fields as the backend takes them.

@@ -119,6 +119,24 @@ module.exports = [
     },
   },
   {
+    name: "a directions link is refused and nothing is sent; a bare map view is not read either",
+    async run({ page }) {
+      const backend = await ready(page);
+      await openEdit(page, DINNER);
+      await page.fill("#stPin", "https://www.google.com/maps/dir/35.6612,139.6990/Uobei/@35.66,139.70,16z/data=!3d35.66!4d139.70");
+      assert.equal(await text(page, "#stAtW"), "Not on the map");
+      assert.equal(await text(page, "#stAtS"), "That’s a directions link. Paste the place’s own link.");
+      await page.fill("#stPin", "https://www.google.com/maps/@35.6612,139.6990,16z");
+      assert.equal(await text(page, "#stAtW"), "Not on the map");
+      await page.fill("#stDetail", "Counter seats");
+      await page.click("#stSave");
+      await saved(page);
+      const req = backend.requests.filter((b) => b.action === "updateStop").at(-1);
+      assert.deepEqual(req.args.patch, { detail: "Counter seats" });
+      assert.equal(JSON.stringify(backend.requests).includes("35.6612"), false, "nothing of the link is sent");
+    },
+  },
+  {
     name: "a new stop can be put on the map as it is added",
     async run({ page }) {
       const backend = await ready(page);
@@ -126,7 +144,7 @@ module.exports = [
       await waitSheet(page);
       assert.equal(await text(page, "#stAtW"), "Not on the map");
       await page.fill("#stWhat", "Tea");
-      await page.fill("#stPin", "https://www.google.com/maps/@35.0037,135.7788,16z");
+      await page.fill("#stPin", "https://www.google.com/maps/place/Tea+house/@35.0037,135.7788,16z");
       await page.click("#stSave");
       await saved(page);
       const r = backend.fake.tables.Stops.find((x) => x.title === "Tea");

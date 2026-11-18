@@ -54,14 +54,28 @@ export function distanceText(m) {
   return Math.round(m / 1000) + " km";
 }
 
+// What a pasted directions link would give away: its start is often where
+// someone was. Refused, never read.
+export const DIRECTIONS_LINK = "That’s a directions link. Paste the place’s own link.";
+const isDirections = (s) => /\/dir\//i.test(s);
+
+// Why a pasted link cannot be used, or "".
+export function linkProblem(text) {
+  return typeof text === "string" && isDirections(text.trim()) ? DIRECTIONS_LINK : "";
+}
+
 // The position in a pasted Google Maps link: the place's own pin
-// (!3d<lat>!4d<lng>) when the link has one, else the map's centre
-// (@<lat>,<lng>). null when it has neither (a short maps.app.goo.gl link).
+// (!3d<lat>!4d<lng>) when the link has one, else, only in a place or search
+// link, the map's centre (@<lat>,<lng>). null for a directions link (its
+// start may be where someone was), a bare map view (its centre may be too)
+// and a link with neither (a short maps.app.goo.gl link). Backend/Pure.js
+// pointFromLink is the same rule.
 export function pointFromLink(text) {
   if (typeof text !== "string") return null;
   const s = text.trim();
+  if (isDirections(s)) return null;
   const pin = /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/.exec(s);
-  const at = /@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/.exec(s);
+  const at = /\/(?:place|search)\//i.test(s) ? /@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/.exec(s) : null;
   const m = pin || at;
   return m ? point({ lat: m[1], lng: m[2] }) : null;
 }
