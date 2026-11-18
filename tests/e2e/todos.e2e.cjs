@@ -99,7 +99,7 @@ module.exports = [
       // Days has no list in it.
       assert.equal(await page.$("#vDays #todos, #vDays .bw"), null, "no list inside Days");
       await expectText(page, "#vDays #dayCount", /in 23 days/);
-      await expectText(page, "#bwTitle", "出発前Before we go");
+      await expectText(page, "#bwTitle", "予約票Reservation slips · Before we go");
       await expectText(page, "#bwCard .bw-band .num", "4open");
       assert.deepEqual(await rowIds(page), ["1", "2", "3", "4"]);
       await expectText(page, row(1) + " .bw-due", "was due Sat Nov 14 · 2 days late");
@@ -116,7 +116,7 @@ module.exports = [
       assert.ok((await text(page, row(2) + " .bw-seal")).length > 0);
       assert.equal(await page.evaluate((s) => document.querySelector(s).classList.contains("is-empty"), row(1) + " .bw-seal"), true);
       await expectText(page, row(2) + " .bw-b", /Ajen is on it/);
-      await expectText(page, "#bwDoneB", "済 Done (1)");
+      await expectText(page, "#bwDoneB", "済 Torn off and done (1)");
       assert.equal(await visible(page, "#bwDone"), false, "done is folded");
       await expectText(page, "#bwAt", /^From the planner · fetched \d\d:\d\d$/);
       // Fetched 5 minutes ago: no fetch of its own.
@@ -313,7 +313,7 @@ module.exports = [
       await advance(page, backend, 1700);
       await until(async () => !(await rowIds(page)).includes("3"), "it moves to the done group");
       assert.ok(await visible(page, "#bwDone"), "the done group opens to show it");
-      await expectText(page, "#bwDoneB", "済 Done (2)");
+      await expectText(page, "#bwDoneB", "済 Torn off and done (2)");
       assert.deepEqual(await rowIds(page, "#bwDone"), ["3", "5"], "newest first");
       await expectText(page, '#bwDone .bw-d[data-id="3"] .bw-n', "Snow park day trip");
       await expectText(page, '#bwDone .bw-d[data-id="3"] .bw-due', "済 Mo · " + phoneDay(BEFORE));
@@ -331,7 +331,7 @@ module.exports = [
       await until(() => stored(backend, "3").ticked_by === "", "undone on the backend");
       await page.click("#histDone");
       await until(async () => (await rowIds(page)).includes("3"), "back among the open items");
-      await expectText(page, "#bwDoneB", "済 Done (1)");
+      await expectText(page, "#bwDoneB", "済 Torn off and done (1)");
       assert.ok(await visible(page, "#bwDone"), "still open while the Before tab stays the screen");
       // It does not stay open: the next time the Before tab is shown it is folded again.
       await page.click('#nav button[data-tab="money"]');
@@ -388,7 +388,7 @@ module.exports = [
     async run({ page, newPhone }) {
       await ready(page, { items: [ITEMS[4]] });
       await expectText(page, "#bwOpen", "済 All done. Nothing left to book.");
-      await expectText(page, "#bwDoneB", "済 Done (1)");
+      await expectText(page, "#bwDoneB", "済 Torn off and done (1)");
       await expectText(page, "#bwCard .bw-band .num", "0open");
 
       const other = await newPhone();
