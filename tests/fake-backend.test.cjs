@@ -25,6 +25,14 @@ function stampOf(over = {}) {
   return { id: "pay0000001", from: "Ajen", to: "Mo", cad: 25, seed: 3, rot: -2.5, ...over };
 }
 
+// A request on person `name`'s own link (a personal key, security 2026-11-18).
+const ownKey = (call, name) => {
+  call.keys = call.keys || {};
+  if (!call.keys[name]) call.keys[name] = call.fake.personKey(name);
+  return call.keys[name];
+};
+const asOwn = (call, name) => (action, args = {}) => call.fake({ key: ownKey(call, name), action, args });
+
 async function historyAll(call, args = {}) {
   const r = await call("history", args);
   assert.equal(r.ok, true);
@@ -699,31 +707,32 @@ test("load says where today's rate came from: live by default, or what the fake 
 });
 
 test("changing an e-Transfer address is logged without the address; a Simplify flip alone is not (F9)", async () => {
-  const call = client();
+  const base = client();
+  const call = asOwn(base, "Trenton");
   const r = await call("setPerson", { name: "Trenton", patch: { etransfer: "t@example.com" } });
   assert.equal(r.ok, true);
   assert.equal(r.rev, 1);
-  const [entry] = await historyAll(call);
+  const [entry] = await historyAll(base);
   assert.deepEqual(
     { action: entry.action, kind: entry.kind, ref: entry.ref, who: entry.who, summary: entry.summary, canUndo: entry.canUndo },
-    { action: "edit", kind: "person", ref: "Trenton", who: "Mo", summary: "changed Trenton’s e-Transfer address", canUndo: false },
+    { action: "edit", kind: "person", ref: "Trenton", who: "Trenton", summary: "changed Trenton’s e-Transfer address", canUndo: false },
   );
   assert.equal(JSON.stringify(entry).includes("t@example.com"), false, "the address is not in what history returns");
-  const row = call.fake.tables.Log[0];
+  const row = base.fake.tables.Log[0];
   assert.deepEqual(JSON.parse(row.before), { name: "Trenton", etransfer: "" });
   assert.deepEqual(JSON.parse(row.after), { name: "Trenton", etransfer: "t@example.com" });
 
   await call("setPerson", { name: "Trenton", patch: { simplify: false } });
   await call("setPerson", { name: "Trenton", patch: { etransfer: "t@example.com", simplify: true } }); // same address
-  assert.equal((await historyAll(call)).length, 1, "a Simplify flip writes no Log row");
+  assert.equal((await historyAll(base)).length, 1, "a Simplify flip writes no Log row");
 
   await call("setPerson", { name: "Trenton", patch: { etransfer: "new@example.com", simplify: false } });
-  assert.equal((await historyAll(call)).length, 2);
+  assert.equal((await historyAll(base)).length, 2);
 });
 
 test("a person entry can never be undone: undo answers stale and changes nothing (F9)", async () => {
   const call = client();
-  await call("setPerson", { name: "Ajen", patch: { etransfer: "a@example.com" } });
+  await asOwn(call, "Ajen")("setPerson", { name: "Ajen", patch: { etransfer: "a@example.com" } });
   const [entry] = await historyAll(call);
   const r = await call("undo", { logId: entry.id });
   assert.equal(r.ok, false);
@@ -1334,7 +1343,7 @@ test("fix 3 (the review's probe): two live lines carrying one payment's id: a pr
 test("fix 4: a planner cannot be relinked from outside, and no problem repeats a planner cell's text", async () => {
   const call = linked();
   const other = "anotherSheetId_ABCDEFGHIJKLMNOP0123";
-  assert.deepEqual(await call.fake({ key: KEY, action: "linkPlanner", args: { id: other } }), { ok: false, error: "bad_input", message: "A planner is already linked.", rev: 0 });
+  assert.deepEqual(await call.fake({ key: KEY, action: "linkPlanner", args: { id: other } }), { ok: false, error: "bad_input", message: "The app asked for something the trip sheet doesn’t know how to do.", rev: 0 });
   assert.equal(call.fake.props.PLANNER_ID, PLANNER_ID);
 
   call.fake.planner.rows = [PHEAD, prow({ ...PX7, payer: "Secretname" }), prow({ ...PX7, payment_id: "Q4", split_between: "Mo, Othername" }), prow({ ...PX7, payment_id: "Has Space Hidden" }), prow({ ...PX7, payment_id: "W1", split_type: "Privatetype" })];
@@ -1445,23 +1454,20 @@ test("Log rows from a pull say planner whoever started it; an app body cannot cl
   assert.equal(stored(call, "exp0000001").planner_id, "");
 });
 
-test("linkPlanner stores a spreadsheet id; a bad one is refused; nothing is logged and the id is never in a reply", async () => {
+test("linkPlanner is gone (security): no key can set PLANNER_ID; the owner sets it in Script Properties", async () => {
   const call = client();
-  for (const id of ["short", "x".repeat(19), "x".repeat(81), "has spaces in it, twenty+", "abc/def/ghi/jkl/mno/pqr", 12345678901234567890, null]) {
-    assert.deepEqual(await call.fake({ key: KEY, action: "linkPlanner", args: { id } }), { ok: false, error: "bad_input", message: "That isn’t a spreadsheet id.", rev: 0 }, String(id));
+  for (const key of [KEY, ownKey(call, "Mo"), call.fake.CHECK_KEY]) {
+    const r = await call.fake({ key, actor: "Mo", action: "linkPlanner", args: { id: PLANNER_ID } });
+    assert.equal(r.ok, false);
+    assert.equal(r.error, "bad_input");
   }
   assert.equal(call.fake.props.PLANNER_ID, undefined);
-  assert.equal((await call.fake({ key: "nope", action: "linkPlanner", args: { id: PLANNER_ID } })).error, "bad_key");
-  assert.equal(call.fake.props.PLANNER_ID, undefined);
-
   assert.equal((await call("load")).data.plannerLinked, false);
-  const r = await call.fake({ key: KEY, action: "linkPlanner", args: { id: PLANNER_ID } });
-  assert.deepEqual(r, { ok: true, rev: 0, data: { linked: true } });
-  assert.equal(call.fake.props.PLANNER_ID, PLANNER_ID);
-  assert.equal(call.fake.tables.Log.length, 0);
+  call.fake.props.PLANNER_ID = PLANNER_ID; // as the owner does in the script editor
   const load = await call("load");
   assert.equal(load.data.plannerLinked, true);
   assert.equal(JSON.stringify(load).includes(PLANNER_ID), false);
+  assert.equal(call.fake.tables.Log.length, 0);
 });
 
 test("the planner id is never in a reply, a Log row or a History sentence", async () => {
@@ -1486,7 +1492,7 @@ test("migrate adds People.photo to an older Sheet once; until then a picture is 
   const early = await call("setPerson", { name: "Mo", patch: { photo: JPEG } });
   assert.deepEqual([early.ok, early.error, early.message], [false, "needs_migrate", "The trip sheet needs updating first. Ask Mo to run migrate."]);
   assert.equal(call.fake.tables.Log.length, 0);
-  assert.equal((await call("setPerson", { name: "Mo", patch: { etransfer: "m@example.com" } })).ok, true, "other details still change");
+  assert.equal((await asOwn(call, "Mo")("setPerson", { name: "Mo", patch: { etransfer: "m@example.com" } })).ok, true, "other details still change");
   assert.deepEqual((await call.fake({ key: KEY, action: "migrate", args: {} })).data, { added: ["People.photo"] });
   assert.deepEqual((await call.fake({ key: KEY, action: "migrate", args: {} })).data, { added: [] });
   assert.equal((await call("setPerson", { name: "Mo", patch: { photo: JPEG } })).ok, true);
