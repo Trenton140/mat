@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createUpdater, RELOAD_GAP_MS, RETRY_MS } from "../js/update.js";
+import { createUpdater, otherVersionIn, RELOAD_GAP_MS, RETRY_MS } from "../js/update.js";
 
 function rig({ safe = true, stored = {} } = {}) {
   const r = { safe, nowMs: 1_000_000, reloads: 0, timers: [], map: new Map(Object.entries(stored)) };
@@ -71,4 +71,26 @@ test("isSafe that throws counts as not safe", () => {
   u.newVersion();
   assert.equal(n, 0);
   assert.equal(timers.length, 1);
+});
+
+const CONFIG = (v) => '/* Copyright */\nexport const API_URL = "https://example.test/exec";\nexport const APP_VERSION = "' + v + '";\n';
+
+test("otherVersionIn: a config.js with a different APP_VERSION gives that version", () => {
+  assert.equal(otherVersionIn("22", CONFIG("23")), "23");
+  assert.equal(otherVersionIn("22", CONFIG("22b")), "22b");
+  assert.equal(otherVersionIn("22", "export const APP_VERSION = '23';"), "23");
+  assert.equal(otherVersionIn("22", "export  const  APP_VERSION=\"21\""), "21", "older counts: a rollback is a different release too");
+});
+
+test("otherVersionIn: the same version, or anything that is not a config.js, gives nothing", () => {
+  assert.equal(otherVersionIn("22", CONFIG("22")), null);
+  assert.equal(otherVersionIn("22", ""), null);
+  assert.equal(otherVersionIn("22", "<html><body>Log in to the Wi-Fi</body></html>"), null);
+  assert.equal(otherVersionIn("22", "export const API_URL = \"x\";"), null);
+  assert.equal(otherVersionIn("22", CONFIG("")), null, "an empty version is odd");
+  assert.equal(otherVersionIn("22", CONFIG("a b")), null, "so is one with a space");
+  assert.equal(otherVersionIn("22", CONFIG("x".repeat(40))), null, "and a very long one");
+  for (const bad of [undefined, null, 22, {}, []]) assert.equal(otherVersionIn("22", bad), null);
+  for (const bad of [undefined, null, 22, ""]) assert.equal(otherVersionIn(bad, CONFIG("23")), null, "no running version to compare with");
+  assert.equal(otherVersionIn("22", "// export const APP_VERSION = \"23\";\nexport const APP_VERSION = \"22\";"), null, "the real line is the one that counts");
 });

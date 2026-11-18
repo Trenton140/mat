@@ -15,6 +15,12 @@
 //     as not safe.
 //   A page never reloads twice within RELOAD_GAP_MS (the time is kept in
 //   storage, which lasts across the reload).
+//
+// otherVersionIn(running, text): a second way to find out that a new version
+//   is out, for when the offline worker was stopped before it could say so.
+//   `text` is js/config.js as the server has it now; the answer is its
+//   APP_VERSION when that is a different string from `running`, else null
+//   (also for an answer that is not a config.js: a captive page, an error).
 
 export const RELOAD_GAP_MS = 60 * 1000;
 export const RETRY_MS = 3000;
@@ -70,4 +76,13 @@ export function createUpdater({ isSafe, reload, storage, now = () => Date.now(),
   }
 
   return { newVersion, check };
+}
+
+// The APP_VERSION line of a js/config.js, read as text (it is never run).
+const VERSION_LINE = /^\s*export\s+const\s+APP_VERSION\s*=\s*(["'])([^"'\s]{1,32})\1\s*;?\s*$/m;
+
+export function otherVersionIn(running, text) {
+  if (typeof running !== "string" || !running || typeof text !== "string") return null;
+  const m = VERSION_LINE.exec(text);
+  return m && m[2] !== running ? m[2] : null;
 }

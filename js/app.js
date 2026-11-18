@@ -23,7 +23,8 @@ import { mountTodos } from "./views/todos.js";
 import { mountStampBook } from "./views/stampbook.js";
 import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
-import { createUpdater } from "./update.js";
+import { createUpdater, otherVersionIn } from "./update.js";
+import { APP_VERSION } from "./config.js";
 import { isWide, onWide } from "./shape.js";
 
 // How often a visible phone asks the backend whether anything changed.
@@ -270,7 +271,8 @@ function start() {
   const you = mountYou(phone, store, {
     demo: clock,
     getKey: () => storage.getItem("mat.key"),
-    screen: () => (tabs.tab() === "days" ? "Days" : tabs.tab() === "before" ? "Before we go" : "Money"),
+    // A computer's window shows Days and Money side by side (Before takes the Days pane while it is the tab).
+    screen: () => (tabs.tab() === "before" ? "Before we go" : isWide() ? "Days and Money" : tabs.tab() === "days" ? "Days" : "Money"),
     // Try another day: Days follows the demo clock from the picked day's
     // 07:00. Nothing is stored, so a reload ends it.
     onDemo: (date) => {
@@ -516,6 +518,58 @@ const updater = createUpdater({
 // How often an open app asks whether a new release is out.
 const UPDATE_LOOK_MS = 10 * 60 * 1000;
 
+// A second way to find a new release, independent of the worker (which may be
+// stopped before it can say so, leaving a page on the old version until the
+// next launch): the page reads js/config.js itself. Only when the app comes
+// back on screen and at most every UPDATE_LOOK_MS. The address carries a
+// query, so the offline worker does not answer it from its kept copy and the
+// network is asked; no-store, so the browser's own copy is not used either.
+// A failed answer is tried again at the next return; an odd one (a captive
+// page) does nothing. A different APP_VERSION goes to the updater, which waits
+// until nothing would be lost and never reloads twice within a minute.
+let lastLook = 0;
+function lookForRelease() {
+  const now = Date.now();
+  if (now - lastLook < UPDATE_LOOK_MS) return;
+  const before = lastLook;
+  lastLook = now;
+  try {
+    Promise.resolve(fetch(new URL("./config.js", import.meta.url).href + "?look=" + now, { cache: "no-store" }))
+      .then((r) => (r && r.ok ? r.text() : Promise.reject(new Error("no answer"))))
+      .then((text) => {
+        if (otherVersionIn(APP_VERSION, text) !== null) updater.newVersion();
+      })
+      .catch(() => {
+        lastLook = before;
+      });
+  } catch {
+    lastLook = before;
+  }
+}
+
+// The worker's registration, once there is one (see registerWorker).
+let registration = null;
+function updateWorker() {
+  if (!registration || typeof registration.update !== "function") return;
+  try {
+    Promise.resolve(registration.update()).catch(() => {});
+  } catch {
+    // nothing to do: the next look asks again
+  }
+}
+
+// One listener for the app coming back on screen: a new version that was
+// waiting for a safe moment is tried again, and a new release is looked for,
+// by the worker and by the page.
+function watchForRelease() {
+  document.addEventListener("visibilitychange", () => {
+    updater.check();
+    if (document.visibilityState === "hidden") return;
+    lookForRelease();
+    updateWorker();
+  });
+}
+
 function registerWorker() {
   try {
     if (!("serviceWorker" in navigator)) return;
@@ -530,33 +584,19 @@ function registerWorker() {
       }
       updater.newVersion();
     });
-    document.addEventListener("visibilitychange", () => updater.check());
-    let registration = null;
     Promise.resolve(navigator.serviceWorker.register("sw.js"))
       .then((r) => {
         registration = r || null;
         setInterval(() => {
-          if (document.visibilityState === "hidden" || !registration || typeof registration.update !== "function") return;
-          try {
-            Promise.resolve(registration.update()).catch(() => {});
-          } catch {
-            // the next look asks again
-          }
+          if (document.visibilityState !== "hidden") updateWorker();
         }, UPDATE_LOOK_MS);
       })
       .catch(() => {});
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "hidden" || !registration || typeof registration.update !== "function") return;
-      try {
-        Promise.resolve(registration.update()).catch(() => {});
-      } catch {
-        // nothing to do: the next open looks again
-      }
-    });
   } catch {
     // not allowed here
   }
 }
 
+watchForRelease();
 registerWorker();
 start();
