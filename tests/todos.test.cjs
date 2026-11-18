@@ -1908,3 +1908,68 @@ test("fix2 C1: the record's Book Now read under the app's lock happens only for 
   await plain.call("undo", { logId: plain.logId }, "Ajen");
   assert.deepEqual(plain.call.fake.planner.calls.slice(s2).filter((c) => c.appLock), [], "a plain undo reads nothing under it");
 });
+
+// An owed row whose planner Status was set to Cancelled by hand, re-ticked by Mo
+// while the app's lock is busy for the record's first `busyFor` takings.
+async function reTickOverCancelled(busyFor) {
+  const { call } = await owed(); // planner Booked, the row owes "Not booked"
+  call.fake.planner.cellFails = false;
+  call.fake.planner.tabs["Book Now"][3][4] = "Cancelled";
+  const logRowsBefore = call.fake.planner.tabs["Change Log"].length;
+  const n0 = call.lock.n;
+  call.lock.busy = (n) => n >= n0 + 2 && n < n0 + 2 + busyFor; // free for the save
+  later(call, 1);
+  const t = await call("tickTodo", { id: "1" }, "Mo");
+  call.lock.busy = () => false;
+  return { call, t, logRowsBefore };
+}
+
+test("fix2 I1 (i): a busy record waits once more; when the lock comes, the row keeps yes with was Cancelled and undo restores Cancelled", async () => {
+  const { call, t, logRowsBefore } = await reTickOverCancelled(1);
+  assert.deepEqual([t.ok, t.data.planner], [true, "written"]);
+  assert.equal(bookStatus(call), "Booked");
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Cancelled", "Booked"]);
+  assert.equal(call.fake.planner.tabs["Change Log"].length, logRowsBefore + 1, "the tick's own row, nothing taken back out");
+  later(call, 1);
+  await call("undo", { logId: t.data.logId }, "Mo");
+  assert.equal(bookStatus(call), "Cancelled");
+  assert.equal(call.fake.planner.tabs["Change Log"].length, logRowsBefore + 2, "plus the undo's: no other row");
+});
+
+test("fix2 I1 (ii): both waits busy: Booked stays, the true was is kept aside; undo before any pull restores Cancelled", async () => {
+  const { call, t, logRowsBefore } = await reTickOverCancelled(2);
+  assert.deepEqual([t.ok, t.data.planner], [true, "written"]);
+  assert.equal(bookStatus(call), "Booked", "the write is not taken back out");
+  assert.equal(stored(call, "1").planner_was, "Not booked", "the row could not be told");
+  assert.equal(call.fake.props.TODO_WAS_1, "Cancelled");
+  assert.equal(call.fake.planner.tabs["Change Log"].length, logRowsBefore + 1, "no extra Change Log row");
+  later(call, 1);
+  await call("undo", { logId: t.data.logId }, "Mo");
+  assert.equal(bookStatus(call), "Cancelled");
+  assert.equal("TODO_WAS_1" in call.fake.props, false, "used and gone");
+  assert.equal(call.fake.planner.tabs["Change Log"].length, logRowsBefore + 2);
+});
+
+test("fix2 I1 (ii): both waits busy, then one pull copies the true was onto the row and the property is gone", async () => {
+  const { call, t, logRowsBefore } = await reTickOverCancelled(2);
+  await forced(call);
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Cancelled", "Booked"]);
+  assert.equal("TODO_WAS_1" in call.fake.props, false);
+  assert.equal(bookStatus(call), "Booked");
+  assert.equal(call.fake.planner.tabs["Change Log"].length, logRowsBefore + 1, "the pull writes nothing to the planner");
+  later(call, 1);
+  await call("undo", { logId: t.data.logId }, "Mo");
+  assert.equal(bookStatus(call), "Cancelled");
+});
+
+test("fix2 I1: a kept-aside was for a row no longer ticked, or gone, is just cleared by a pull", async () => {
+  const call = linked();
+  await call("syncTodos");
+  call.fake.props.TODO_WAS_2 = "Made-up status";
+  call.fake.props.TODO_WAS_3 = "Made-up status";
+  call.fake.planner.tabs["Book Now"] = bookNow(B1, B2); // #3 is gone
+  await forced(call);
+  assert.equal("TODO_WAS_2" in call.fake.props, false);
+  assert.equal("TODO_WAS_3" in call.fake.props, false);
+  assert.deepEqual(writes(call), []);
+});

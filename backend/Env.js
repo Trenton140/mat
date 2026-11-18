@@ -9,6 +9,10 @@ function setProp_(key, value) {
   PropertiesService.getScriptProperties().setProperty(key, String(value));
 }
 
+function delProp_(key) {
+  PropertiesService.getScriptProperties().deleteProperty(key);
+}
+
 // The trip key, from the script cache (six hours) so that a request does not
 // cost a Script Properties read; Script Properties on a miss. After changing
 // TRIP_KEY by hand, run showInvite() to drop the cached copy.

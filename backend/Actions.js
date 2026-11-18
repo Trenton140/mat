@@ -3,7 +3,7 @@
 // elsewhere (Sheets.js, Env.js, Rate.js on Apps Script; in memory in
 // tests/fake-backend.cjs):
 //   readTable_, appendObj_, updateById_, updateWhere_, ensureColumns_, hasColumn_,
-//   getProp_, setProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_,
+//   getProp_, setProp_, delProp_, withLock_, getRate_, getRateInfo_, tripKey_, nowIso_, sheetUrl_,
 //   claudeToken_, ensureClaudeToken_, newId_, plannerId_, setPlannerId_, plannerRows_,
 //   hasTab_, plannerTab_, plannerSetCell_, plannerAppendRow_, torontoNow_, withPlannerLock_
 // It also uses the pure helpers from Pure.js.
@@ -1029,10 +1029,23 @@ function pullTodos_(read, by) {
       ["ticked_item", "planner_written", "planner_was"].forEach(function (k) { patch[k] = ""; });
       if (it.status === "Booked") dropped = tickedItemOf_(r);
     }
-    if (Object.keys(patch).length) jobs.push({ id: it.id, patch: patch, takeoff: takeoff, dropped: dropped });
+    // A true was kept aside (todoWas_) goes onto a row still ticked as
+    // written; anywhere else it is just cleared.
+    var keptWas = todoWas_(it.id);
+    var dropWas = false;
+    if (keptWas !== null) {
+      if (!takeoff && cellText_(r.ticked_by) !== "" && cellText_(r.planner_written) === "yes") {
+        patch.planner_was = keptWas;
+        dropWas = true;
+      } else dropTodoWas_(it.id);
+    }
+    if (Object.keys(patch).length) jobs.push({ id: it.id, patch: patch, takeoff: takeoff, dropped: dropped, dropWas: dropWas });
   });
   Object.keys(byId).forEach(function (id) {
-    if (!inPlanner[id] && cellText_(byId[id].gone) !== "yes") jobs.push({ id: id, patch: { gone: "yes" } });
+    if (!inPlanner[id] && cellText_(byId[id].gone) !== "yes") {
+      dropTodoWas_(id);
+      jobs.push({ id: id, patch: { gone: "yes" } });
+    }
   });
 
   // One Sheet write per row (the app's Sheet helpers write a row at a time),
@@ -1050,6 +1063,7 @@ function pullTodos_(read, by) {
       var after = updateById_("Todos", job.id, job.patch);
       if (job.takeoff) logTakeoff_(job.takeoff, before, after);
       if (job.dropped !== null && job.dropped !== undefined) logDropped_(job.id, job.dropped);
+      if (job.dropWas) dropTodoWas_(job.id);
     }
     writes++;
   });
@@ -1191,6 +1205,19 @@ function plannerUntick_(id, item, was, actor, why) {
   return out || "pending";
 }
 
+// The status a tick's Booked replaced, kept aside in a Script Property
+// (TODO_WAS_<id>) when the app could not write it into the row: the app's
+// lock busy twice over while the row still held an older planner_was
+// (second fix round, I1). Needs no lock. Undo uses it before the row's
+// planner_was; the next pull (or that undo), under the lock, copies it onto
+// the row and clears it; a row no longer ticked or gone just has it cleared.
+function todoWas_(id) {
+  var v = getProp_("TODO_WAS_" + id);
+  return typeof v === "string" ? v : null;
+}
+function keepTodoWas_(id, was) { setProp_("TODO_WAS_" + id, was); }
+function dropTodoWas_(id) { if (todoWas_(id) !== null) delProp_("TODO_WAS_" + id); }
+
 // Records what the planner did with a tick, under the app's lock, only while
 // the tick is still there and bound to the same text. A Booked the app
 // cannot record (its lock busy, or the tick undone while the write was on
@@ -1212,6 +1239,7 @@ function settleTick_(id, item, by, out) {
         bumpRev_();
       } else if (out.result === "written") {
         updateById_("Todos", id, { planner_written: "yes", planner_was: out.was, status: "Booked" });
+        dropTodoWas_(id);
         bumpRev_();
       } else if (cellText_(row.status) !== out.status) {
         updateById_("Todos", id, { status: out.status });
@@ -1227,22 +1255,50 @@ function settleTick_(id, item, by, out) {
     // planner was written (it got that far, or a tick of an owed row said so
     // up front) with the very status this write replaced, the app knows of
     // the Booked: the planner is left as it is. A planner_was that differs
-    // (an owed row whose Status was changed by hand meanwhile) would put the
-    // wrong status back on undo: that write is taken back out instead.
+    // (an owed row whose Status was changed by hand meanwhile) is put right
+    // below (staleWas).
     var saved;
+    var staleWas = false;
     try {
       var again = findRow_("Todos", id);
       saved = again ? cellText_(again.planner_written) : "";
-      if (saved === "yes" && out.result === "written" && cellText_(again.planner_was) !== out.was) saved = "";
+      staleWas = saved === "yes" && out.result === "written" && cellText_(again.planner_was) !== out.was;
     } catch (e2) {
       saved = null; // not known: leave the planner alone rather than undo a recorded write
     }
-    if (out.result === "written" && saved !== null && saved !== "") return "written";
+    if (staleWas) {
+      // Second fix round, I1: the row says yes but with an older planner_was
+      // (an owed row whose Status was changed by hand meanwhile). Wait for
+      // the lock once more and record the true one; if it is still busy,
+      // keep the Booked and keep the true was aside (todoWas_), never take
+      // the write back out.
+      var second;
+      try {
+        second = withLock_(function () {
+          var row = findRow_("Todos", id);
+          var still = row && cellText_(row.ticked_by) !== "" && sameItem_(tickedItemOf_(row), item) && cellText_(row.gone) !== "yes" && cellText_(row.planner_written) === "yes";
+          if (!still) return { ok: true, done: false };
+          updateById_("Todos", id, { planner_was: out.was, status: "Booked" });
+          dropTodoWas_(id);
+          bumpRev_();
+          return { ok: true, done: true };
+        });
+      } catch (e5) {
+        second = { ok: false };
+      }
+      if (second && second.ok && second.done) return "written";
+      if (!second || !second.ok) {
+        keepTodoWas_(id, out.was);
+        return "written";
+      }
+      // No longer ticked as written: taken back out as for a tick undone meanwhile.
+      rec = { ok: true, revert: true };
+    } else if (out.result === "written" && saved !== null && saved !== "") return "written";
     if (out.result === "written" && saved === null) {
       try { logBookedLeft_(id, item, by); } catch (e3) { /* best effort */ }
       return "pending";
     }
-    rec = { ok: false };
+    if (!staleWas) rec = { ok: false };
   }
   if (out.result === "formula") {
     // The tick is settled either way: the History line is best effort, and
@@ -1392,7 +1448,9 @@ function undoTodo_(entry, rows, ctx) {
   var cur = todoFromRow(row);
   var written = cellText_(row.planner_written) === "yes";
   var owed = cellText_(row.planner_written) === "undo";
-  var was = cellText_(row.planner_was);
+  // A true was kept aside (todoWas_) comes before the row's own.
+  var keptWas = todoWas_(entry.ref);
+  var was = keptWas !== null && written ? keptWas : cellText_(row.planner_was);
   var boundItem = tickedItemOf_(row);
   var target = undoTarget(entry);
   var text = function (v) { return v === undefined || v === null ? "" : v; };
@@ -1408,6 +1466,7 @@ function undoTodo_(entry, rows, ctx) {
   if (untick && written) {
     patch.planner_written = "undo";
     patch.status = was;
+    patch.planner_was = was;
     patch.ticked_item = boundItem;
   } else if (untick) {
     patch.planner_written = "";
@@ -1417,6 +1476,7 @@ function undoTodo_(entry, rows, ctx) {
     patch.status = "Booked";
   }
   var savedRow = updateById_("Todos", entry.ref, patch);
+  if (untick && keptWas !== null) dropTodoWas_(entry.ref);
   var saved = todoFromRow(savedRow);
   var log = appendLog_(ctx, "undo", "todo", entry.ref, "undid: " + entry.summary, todoSnap_(cur, row), todoSnap_(saved, savedRow), entry.id);
   updateById_("Log", entry.id, { undone_by: log.id });

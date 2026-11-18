@@ -208,6 +208,9 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     setProp_(key, value) {
       props[key] = String(value);
     },
+    delProp_(key) {
+      delete props[key];
+    },
     // Test-only: lockFails() returning true plays a lock that never frees up
     // (same envelope as Env.js withLock_).
     // A lock that is not freed waits its 8 seconds first (lockWaited), as
