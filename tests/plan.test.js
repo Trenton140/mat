@@ -284,3 +284,9 @@ test("the stamp in the place: within 15 km of the day's coordinates", () => {
   assert.equal(inPlace({ lat: "35", lng: "139" }, null), false, "no usable position");
   assert.equal(inPlace(null, here), false, "no such day (the issue stamp)");
 });
+
+test("(b) lodging distance: nothing beyond 50 km", () => {
+  assert.equal(stayDistance({ lat: String(north(SKYAT, 49000).lat), lng: String(SKYAT.lng) }, SKYAT), "49 km from here");
+  assert.equal(stayDistance({ lat: String(north(SKYAT, 49900).lat), lng: String(SKYAT.lng) }, SKYAT), "50 km from here");
+  assert.equal(stayDistance({ lat: String(north(SKYAT, 51000).lat), lng: String(SKYAT.lng) }, SKYAT), "");
+});

@@ -4,7 +4,7 @@
 
 const assert = require("node:assert/strict");
 const fs = require("fs");
-const { WITH_PLAN, open, until, text } = require("./helpers.cjs");
+const { WITH_PLAN, open, advance, until, text } = require("./helpers.cjs");
 const { geoStub, leaks, HERE } = require("./geostub.cjs");
 
 const SHOTS = "/private/tmp/claude-501/mat-shots/loc";
@@ -89,6 +89,29 @@ module.exports = [
       await openCard(page);
       await until(async () => (await dist(page)) !== null, "the distance shows");
       assert.equal((await dist(page)).text, "33 km from here");
+    },
+  },
+  {
+    name: "(b) over 50 km: nothing said",
+    async run({ page }) {
+      await ready(page, { over: { lat: String(HERE.lat + 0.6), lng: String(HERE.lng) } });
+      await until(() => page.evaluate(() => window.__geoCalls.length > 0), "the phone was asked");
+      await openCard(page);
+      await new Promise((r) => setTimeout(r, 120));
+      assert.equal(await dist(page), null);
+    },
+  },
+  {
+    name: "(b) the card drops the distance once the position is no longer usable",
+    async run({ page }) {
+      const backend = await ready(page);
+      await until(() => page.evaluate(() => window.__geoCalls.length > 0), "the phone was asked");
+      await openCard(page);
+      await until(async () => (await dist(page)) !== null, "the distance shows");
+      await page.evaluate(() => window.__geoSet({ mode: "silent" }));
+      await advance(page, backend, 3 * 60000 + 20000);
+      await until(async () => (await dist(page)) === null, "the old distance goes");
+      assert.equal(await page.evaluate(() => document.getElementById("stay").classList.contains("is-open")), true);
     },
   },
   {

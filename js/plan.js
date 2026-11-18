@@ -175,11 +175,14 @@ export function nearStops(dayStops, here) {
   return out;
 }
 
+// Past this the card says nothing of how far (another city, another day's stay).
+export const STAY_FAR_M = 50000;
+
 // "2.4 km from here" for the stay card, or "".
 export function stayDistance(stay, here) {
   if (!here || !stay) return "";
   const m = metres(here, stay);
-  return Number.isFinite(m) ? distanceText(m) + " from here" : "";
+  return Number.isFinite(m) && m <= STAY_FAR_M ? distanceText(m) + " from here" : "";
 }
 
 // Whether a stamp for this day is pressed in the place: a usable position

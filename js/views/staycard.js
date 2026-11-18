@@ -23,7 +23,9 @@
 // opens in the Days pane. Closing the card closes it too.
 //
 // With a usable position (js/where.js) and the stay's coordinates, the card
-// also says how far: 現在地 2.4 km from here. Otherwise nothing is added.
+// also says how far (up to 50 km): 現在地 2.4 km from here. Otherwise nothing
+// is added. While the card is open it looks again every 15 seconds, so a
+// distance from a position no longer usable is taken off.
 
 import { safeHref, stayMapsUrl, stayDistance } from "../plan.js";
 
@@ -50,6 +52,8 @@ function link(cls, text, href) {
 
 // A photo address that failed to load is not drawn again (this visit).
 const failedPhotos = new Set();
+
+const RECHECK_MS = 15000;
 
 // The card's contents for one stay. far: "2.4 km from here", or "".
 function card(stay, far = "") {
@@ -168,6 +172,7 @@ export function mountStayCard(root, store, { where = null } = {}) {
   const done = sheet.querySelector("#stayDone");
   let stayId = null;
   let shown = ""; // what the card was last drawn from
+  let recheck = null; // while open: is the distance still from a usable position?
 
   // The driver's screen, over the card.
   const dScrim = el("div", "scrim");
@@ -341,6 +346,7 @@ export function mountStayCard(root, store, { where = null } = {}) {
     sheet.inert = false;
     scrim.hidden = false;
     root.classList.add("stay-open");
+    if (where && !recheck) recheck = setInterval(render, RECHECK_MS);
     sheet.scrollTop = 0;
     render();
     done.focus({ preventScroll: true });
@@ -351,6 +357,8 @@ export function mountStayCard(root, store, { where = null } = {}) {
   function close(restoreFocus = true) {
     if (!isOpen()) return;
     closeDriver(false);
+    clearInterval(recheck);
+    recheck = null;
     const id = stayId;
     stayId = null;
     sheet.classList.remove("is-open");
