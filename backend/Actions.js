@@ -292,7 +292,29 @@ function load_() {
     todos: todosShown_(),
     todosPulledAt: getProp_("TODOS_PULLED_AT") || "",
     paymentsPulledAt: getProp_("PAYMENTS_PULLED_AT") || "",
+    paymentProblems: paymentProblemsStored_(),
   }, rev);
+}
+
+// The last planner pull's problems as stored in PAYMENT_PROBLEMS, or the empty
+// shape when there are none yet or the property is not what we wrote.
+function paymentProblemsStored_() {
+  var none = { at: "", list: [], more: 0 };
+  var v;
+  try {
+    v = JSON.parse(getProp_("PAYMENT_PROBLEMS") || "");
+  } catch (e) {
+    return none;
+  }
+  if (!v || typeof v !== "object" || typeof v.at !== "string" || !Array.isArray(v.list) || typeof v.more !== "number") return none;
+  var list = [];
+  for (var i = 0; i < v.list.length; i++) {
+    var p = v.list[i];
+    if (!p || typeof p !== "object" || typeof p.id !== "string" || typeof p.message !== "string" || typeof p.what !== "string") return none;
+    if (p.row !== null && typeof p.row !== "number") return none;
+    list.push({ id: p.id, message: p.message, row: p.row, what: p.what });
+  }
+  return { at: v.at, list: list, more: v.more };
 }
 
 function history_(args) {
@@ -436,11 +458,21 @@ function syncPayments_(args, ctx) {
     var done = pullPayments_(read, pull);
     if (done && done.ok) {
       setProp_("PAYMENTS_READ_AT", started);
+      setProp_("PAYMENT_PROBLEMS", JSON.stringify(paymentProblemsToStore_(started, done.data.problems)));
       // A pull cut short (more to bring in) is not done: the next one carries on at once.
       if (!done.data.more) setProp_("PAYMENTS_PULLED_AT", started);
     }
     return done;
   });
+}
+
+// The problems of a pull as kept for load: at most 20, a message cut to 160,
+// and how many more there were.
+function paymentProblemsToStore_(at, problems) {
+  var list = problems.slice(0, 20).map(function (p) {
+    return { id: p.id, message: plannerCut_(p.message, 160), row: p.row, what: p.what };
+  });
+  return { at: at, list: list, more: Math.max(0, problems.length - 20) };
 }
 
 function pullPayments_(read, ctx) {
@@ -464,7 +496,7 @@ function pullPayments_(read, ctx) {
   // Not said when the planner was cut at 300: the rest were not read.
   if (!read.capped) {
     lines.forEach(function (l) {
-      if (l.pid !== "" && !l.e.deleted && !inPlanner[l.pid]) out.problems.push({ id: l.pid, message: MSG_.notInPlanner });
+      if (l.pid !== "" && !l.e.deleted && !inPlanner[l.pid]) out.problems.push({ id: l.pid, message: MSG_.notInPlanner, row: null, what: plannerWhat_(l.e.title) });
     });
   }
   var edits = [];
@@ -478,17 +510,17 @@ function pullPayments_(read, ctx) {
     }
     var x = expenseFromPayment(p, ctx.names, dayDates);
     if (!x.ok) {
-      out.problems.push({ id: p.id, message: x.message });
+      out.problems.push({ id: p.id, message: x.message, row: p.row, what: plannerWhat_(p.description) });
       return;
     }
     if (live.length > 1) {
-      out.problems.push({ id: p.id, message: MSG_.twoLines });
+      out.problems.push({ id: p.id, message: MSG_.twoLines, row: p.row, what: plannerWhat_(p.description) });
       return;
     }
     if (live.length === 1) {
       var patch = plannerPatch_(live[0].e, x.value);
       if (Object.keys(patch).length === 0) out.same++;
-      else edits.push({ id: p.id, line: live[0].e.id, patch: patch, who: x.value.paidBy });
+      else edits.push({ id: p.id, row: p.row, what: plannerWhat_(p.description), line: live[0].e.id, patch: patch, who: x.value.paidBy });
       return;
     }
     if (tied.length) {
@@ -497,12 +529,12 @@ function pullPayments_(read, ctx) {
     }
     var e = x.value;
     e.id = newId_();
-    adds.push({ id: p.id, expense: e });
+    adds.push({ id: p.id, row: p.row, what: plannerWhat_(p.description), expense: e });
   });
 
   var writes = 0;
   var tried = function (job, r, counted) {
-    if (!r.ok) out.problems.push({ id: job.id, message: r.message });
+    if (!r.ok) out.problems.push({ id: job.id, message: r.message, row: job.row, what: job.what });
     else if (r.data.logId === null) out.same++;
     else {
       out[counted]++;
