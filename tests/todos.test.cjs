@@ -1732,3 +1732,42 @@ test("wave A 4: an undo whose put-back was written but whose recording throws an
   assert.deepEqual(owedOf(call), ["", "", "", "Not booked"], "the pull finds it put back: nothing owed");
   assert.equal(writes(call).length, 4, "nothing written twice");
 });
+
+// ---------- wave A fix round ----------
+
+// Runs `first` once, just before the next put-back is recorded (settleUntick_).
+function beforeSettleUntick(call, first) {
+  const real = call.fake.world.settleUntick_;
+  call.fake.world.settleUntick_ = (...a) => {
+    call.fake.world.settleUntick_ = real;
+    first();
+    return real(...a);
+  };
+}
+
+test("fix C1: a re-tick that wrote Booked again before a late put-back record is not cleared by it", async () => {
+  const { call, logId } = await ticked();
+  later(call, 1);
+  beforeSettleUntick(call, () => {
+    // The put-back is in the planner; Mo ticks again before it is recorded.
+    assert.equal(bookStatus(call), "Not booked");
+    call.fake({ key: KEY, actor: "Mo", action: "tickTodo", args: { id: "1" } });
+  });
+  await call("undo", { logId }, "Ajen");
+  assert.equal(bookStatus(call), "Booked", "the re-tick wrote Booked again");
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Not booked", "Booked"], "still ticked, yes");
+});
+
+test("fix C1: a row ticked again (as yes) whose put-back did go through is still cleared to a stuck tick", async () => {
+  const { call, logId } = await ticked();
+  later(call, 1);
+  beforeSettleUntick(call, () => {
+    call.fake.primitives.updateById_("Todos", "1", { ticked_by: "Mo", ticked_at: call.at.now, ticked_item: "Rail pass reservation", planner_written: "yes", status: "Booked" });
+  });
+  await call("undo", { logId }, "Ajen");
+  assert.equal(bookStatus(call), "Not booked");
+  assert.deepEqual(owedOf(call), ["Mo", "", "", "Not booked"], "a stuck tick, retried by a pull");
+  await forced(call);
+  assert.equal(bookStatus(call), "Booked");
+  assert.equal(stored(call, "1").planner_written, "yes");
+});

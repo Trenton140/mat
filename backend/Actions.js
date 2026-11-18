@@ -977,7 +977,7 @@ function syncTodos_(args, ctx) {
   queue.forEach(function (job) {
     setProp_("TODOS_RETRY_AFTER", job.key);
     try {
-      if (job.was !== undefined) settleUntick_(job.id, plannerUntick_(job.id, job.item, job.was, job.by));
+      if (job.was !== undefined) settleUntick_(job.id, plannerUntick_(job.id, job.item, job.was, job.by), null, job.item);
       else settleTick_(job.id, job.item, job.by, plannerTick_(job.id, job.item, job.by));
     } catch (e) {
       // Best effort (R45): the tick stands and a later pull tries again.
@@ -1441,7 +1441,7 @@ function afterUntick_(env, id, item, was, by) {
   var said = plannerUntick_(id, item, was, by);
   // Recording it is best effort: a row left owed is settled by the next pull,
   // which finds the planner put back ("kept") or puts it back itself.
-  try { settleUntick_(id, said, { actor: by, via: "app" }); } catch (e) { /* best effort */ }
+  try { settleUntick_(id, said, { actor: by, via: "app" }, item); } catch (e) { /* best effort */ }
   env.data.planner = said;
   return withRowNow_(env, id);
 }
@@ -1451,16 +1451,28 @@ function afterUntick_(env, id, item, was, by) {
 // row ticked again while the put-back was on its way, which the put-back
 // reached: the planner no longer says Booked, so the tick is owed to it
 // instead (a stuck tick, retried by a pull). noteBy (the undo's ctx; not
-// for a retry): when it stays owed, History's one note says so.
+// for a retry): when it stays owed, History's one note says so. item: the
+// text the put-back was bound to. A row ticked again meanwhile is cleared
+// only when the planner's cell, read just before (outside both locks: no
+// planner call ever runs under the app's lock), is not exactly Booked: a
+// re-tick that has already written Booked again keeps its "yes". When that
+// read fails or no longer finds the item, the row is left alone.
 // -> "owed" | "settled" | "busy"
-function settleUntick_(id, said, noteBy) {
+function settleUntick_(id, said, noteBy, item) {
+  var plannerBooked = null; // null: not known
+  if (said === "written" && typeof item === "string") {
+    try {
+      var found = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), id, item);
+      if (found) plannerBooked = found.status === "Booked";
+    } catch (e) { /* not known: leave the row alone */ }
+  }
   var out = withLock_(function () {
     var row = findRow_("Todos", id);
     var pw = row ? cellText_(row.planner_written) : "";
     if (pw === "undo" && said !== "pending") {
       updateById_("Todos", id, { ticked_item: "", planner_written: "", planner_was: "" });
       bumpRev_();
-    } else if (pw === "yes" && said === "written") {
+    } else if (pw === "yes" && said === "written" && plannerBooked === false) {
       updateById_("Todos", id, { planner_written: "", planner_was: "", status: cellText_(row.planner_was) });
       bumpRev_();
     }
