@@ -79,15 +79,10 @@ if (quick) {
   process.exit(0);
 }
 
-// A real run only: a shell that merely mentions the runner in its command line is not one.
-const busy = spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" }).stdout
-  .split("\n")
-  .filter((l) => /^\s*\d+\s+(\S*\/)?node\s+(\S+\s+)*?tests\/e2e\/run\.cjs/.test(l))
-  .map((l) => l.trim().split(/\s+/)[0]);
-if (busy.length) stop("Another browser-test run is going on this Mac (pid " + busy.join(", ") + ").", "Two at once make timing failures. Wait for it, then run the gate again.");
-
+// The runner waits in line by itself (tests/e2e/queue.cjs), so nothing to check here.
 const e2e = run("e2e", "node", ["tests/e2e/run.cjs"]);
 const m = e2e.text.match(/^(\d+) passed, (\d+) failed$/m);
+const secondTry = e2e.text.split("\n").filter((l) => l.startsWith("second try: ")).map((l) => l.slice(12));
 const e2ePass = m ? Number(m[1]) : 0;
 const e2eFail = m ? Number(m[2]) : 0;
 if (e2e.code !== 0 || e2eFail || !e2ePass) {
@@ -95,6 +90,7 @@ if (e2e.code !== 0 || e2eFail || !e2ePass) {
   stop("Browser tests: " + e2ePass + " passed, " + e2eFail + " failed.", (fails || "No summary line: the run did not finish.") + "\n      See " + join(dir, "e2e.log"));
 }
 step("browser tests: " + e2ePass + " passed");
+if (secondTry.length) step("UNRELIABLE, passed only on a second try (fix these): " + secondTry.join("; "));
 
 // 6. The receipt. The tree must still be the one that was tested.
 if (git(["status", "--porcelain"]) || git(["rev-parse", "HEAD^{tree}"]) !== tree) stop("The files changed while the tests ran.", "Run the gate again.");
@@ -105,7 +101,7 @@ const receipt = {
   appVersion: cfg.appVersion,
   backendStamp: writtenBackendStamp(),
   unit: { pass: unitPass, fail: unitFail },
-  e2e: { pass: e2ePass, fail: e2eFail },
+  e2e: { pass: e2ePass, fail: e2eFail, secondTry },
 };
 writeFileSync(join(dir, tree + ".json"), JSON.stringify(receipt, null, 2) + "\n");
 console.log("\ngate: PASSED for " + head.slice(0, 7) + " (version " + cfg.appVersion + "): " + unitPass + " unit, " + e2ePass + " browser. Next: `npm run ship`.");

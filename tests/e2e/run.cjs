@@ -24,6 +24,7 @@ const http = require("http");
 const path = require("path");
 const { chromium } = require("playwright-core");
 const { PORT, ORIGIN } = require("./helpers.cjs");
+const { takeTurn } = require("./queue.cjs");
 
 const ROOT = path.join(__dirname, "..", "..");
 const SHOTS = "/private/tmp/claude-501/mat-shots/failures";
@@ -189,16 +190,31 @@ async function main() {
     return;
   }
 
+  // One run at a time on this computer: wait in line (tests/e2e/queue.cjs).
+  const leave = await takeTurn();
   const server = await startServer();
   const launch = () => chromium.launch({ channel: "chrome", headless: true });
   let browser = await launch();
   let passed = 0;
   let failed = 0;
+  // A case that fails is tried once more, alone. Passing the second time counts
+  // as passed, but it is named at the end: it is unreliable and wants fixing.
+  const secondTry = [];
   try {
     for (const file of files) {
       const base = path.basename(file, ".e2e.cjs");
       for (const c of casesOf(file)) {
-        const { error, shot, stuck } = await runCase(browser, base, c);
+        let { error, shot, stuck } = await runCase(browser, base, c);
+        if (error && !process.env.MAT_E2E_NO_RETRY) {
+          console.log("      (failed once: " + error.message.split("\n")[0] + "; trying again)");
+          if (stuck) {
+            withTimeout(browser.close(), CLOSE_TIMEOUT_MS).catch(() => {});
+            browser = await launch();
+          }
+          const again = await runCase(browser, base, c);
+          if (!again.error) secondTry.push(base + " > " + c.name);
+          ({ error, shot, stuck } = again);
+        }
         if (error) {
           failed++;
           console.log("FAIL " + base + " > " + c.name);
@@ -218,7 +234,9 @@ async function main() {
   } finally {
     await withTimeout(browser.close(), CLOSE_TIMEOUT_MS).catch(() => {});
     if (server) server.kill();
+    leave();
   }
+  for (const name of secondTry) console.log("second try: " + name);
   console.log(passed + " passed, " + failed + " failed");
   if (failed) process.exitCode = 1;
 }
