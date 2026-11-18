@@ -314,7 +314,7 @@ test("(c) a stay whose address, name or place changes loses its coordinates; oth
   at();
   let r = await call("saveStay", { stay: { ...(await base()), note: "Late check-in" } });
   assert.equal(r.data.stay.lat, "35.7119", "a note keeps them");
-  for (const change of [{ addressJp: "東京都台東区浅草2-2-2" }, { name: "Asakusa Inn" }, { place: "Asakusa Inn Tokyo" }]) {
+  for (const change of [{ addressJp: "東京都台東区浅草2-2-2" }, { place: "Asakusa Inn Tokyo" }]) {
     at();
     r = await call("saveStay", { stay: { ...(await base()), ...change } });
     assert.equal(r.ok, true, JSON.stringify(r));
@@ -326,6 +326,20 @@ test("(c) a stay whose address, name or place changes loses its coordinates; oth
   at();
   const m = await call("saveStay", { stay: { id: "planstay0001", addressJp: "別の住所" }, merge: true }, { via: "claude" });
   assert.equal(m.data.stay.lat, "");
+});
+
+test("(d) a stay's name-only change keeps its coordinates; an address change clears them", async () => {
+  const call = client();
+  const at = () => { const r = call.fake.tables.Stays.find((x) => x.id === "planstay0001"); r.lat = "35.7119"; r.lng = "139.7967"; };
+  const base = async () => { const s = (await call("load")).data.stays.find((x) => x.id === "planstay0001"); const { deleted, lat, lng, ...rest } = s; return rest; };
+  at();
+  let r = await call("saveStay", { stay: { ...(await base()), name: "Asakusa Inn" } });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual([r.data.stay.name, r.data.stay.lat, r.data.stay.lng], ["Asakusa Inn", "35.7119", "139.7967"]);
+  const u = await call("undo", { logId: r.data.logId });
+  assert.deepEqual([u.data.stay.name, u.data.stay.lat], ["Asakusa hotel", "35.7119"], "undoing a name change keeps them too");
+  r = await call("saveStay", { stay: { ...(await base()), addressJp: "東京都台東区浅草2-2-2" } });
+  assert.deepEqual([r.data.stay.lat, r.data.stay.lng], ["", ""]);
 });
 
 test("(c) a day whose city changes loses its coordinates; another change keeps them", async () => {

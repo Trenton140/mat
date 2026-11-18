@@ -953,8 +953,8 @@ function saveStay_(args, ctx) {
   if (!row) return addPlanItem_("stay", v.value, ctx);
   var cur = plan.fromRow(row);
   if (cur.deleted) return err_("bad_input", MSG_.editDeleted);
-  // A new address, name or place: the old coordinates were for the old one.
-  if (v.value.addressJp !== cur.addressJp || v.value.name !== cur.name || v.value.place !== cur.place) {
+  // A new address or place: the old coordinates were for the old one. A new name alone is no move.
+  if (v.value.addressJp !== cur.addressJp || v.value.place !== cur.place) {
     v.value.lat = "";
     v.value.lng = "";
   }
