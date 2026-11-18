@@ -4,6 +4,9 @@
 //   npm run ship                 backend first (when it changed), then the site
 //   npm run ship -- --migrate    also runs the backend's `migrate` (new tabs or columns)
 //   npm run ship -- --check      says what it would do and changes nothing
+//   npm run ship -- --backend-only   steps 1 to 3, then stops before the push
+//                                (to check something by hand against the new
+//                                backend; `npm run ship` again does the rest)
 //
 // 1. This commit is main, clean, and has the gate's receipt (npm run gate).
 // 2. If the live backend is not this commit's backend: clasp push, new version
@@ -27,6 +30,7 @@ import { shellList } from "./stamp-sw.mjs";
 
 const check = process.argv.includes("--check");
 const migrate = process.argv.includes("--migrate");
+const backendOnly = process.argv.includes("--backend-only");
 const step = (s) => console.log("ship: " + s);
 const stop = (why, fix) => {
   console.error("\nship: STOPPED. " + why + (fix ? "\n      " + fix : ""));
@@ -92,6 +96,10 @@ if (!load || load.ok !== true || !Array.isArray(load.data.days) || !load.data.da
 step("live trip loads: " + load.data.days.length + " days, " + load.data.stops.length + " stops, rev " + load.rev);
 
 // 4 ---------------------------------------------------------------------------
+if (backendOnly && !check) {
+  console.log("\nship: the backend is live and the trip loads. Stopped before the push, as asked. `npm run ship` does the rest.");
+  process.exit(0);
+}
 const ahead = git(["rev-list", "--count", "origin/main..HEAD"]);
 if (check) {
   step("--check: would push " + ahead + " commit(s) to origin/main, then check the live site. Nothing was changed.");
