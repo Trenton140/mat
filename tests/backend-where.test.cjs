@@ -341,3 +341,15 @@ test("(c) a day whose city changes loses its coordinates; another change keeps t
   const u = await call("undo", { logId: r.data.logId });
   assert.equal(u.data.day.lat, "35.68");
 });
+
+test("(d) an expense edit never runs the coordinates check nor answers with a stop's message", async () => {
+  const call = client();
+  const add = await call("addExpense", { expense: { id: "exp0000001", day: "2026-12-10", title: "Ramen", amount: 4200, currency: "JPY", paidBy: "Mo", split: ["Mo", "Ajen", "Trenton"] } });
+  assert.equal(add.ok, true, JSON.stringify(add));
+  for (const via of ["app", "claude"]) {
+    const e = await call("updateExpense", { id: "exp0000001", patch: { lat: "1", lng: "2" } }, { via });
+    assert.deepEqual([e.ok, e.message], [false, "Only a line’s details can be changed."], via);
+  }
+  const ok = await call("updateExpense", { id: "exp0000001", patch: { title: "Ramen bar" } }, { via: "claude" });
+  assert.equal(ok.ok, true);
+});

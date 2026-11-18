@@ -383,7 +383,6 @@ function updateExpense_(args, ctx) {
   if (!id) return err_("bad_input", MSG_.badId);
   var patch = args.patch;
   if (!isObj_(patch)) return err_("bad_input", MSG_.badPatch);
-  if (claudeCoords_(patch, ctx)) return err_("bad_input", MSG_.stopPatchKey);
   var keys = Object.keys(patch);
   for (var i = 0; i < keys.length; i++) {
     if (EXPENSE_PATCH_KEYS_.indexOf(keys[i]) === -1) return err_("bad_input", MSG_.patchKey);
