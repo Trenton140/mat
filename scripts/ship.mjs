@@ -19,6 +19,8 @@
 // 6. Open the live site in a headless browser with the key in the fragment
 //    (never in the query string): the trip loads and there is no script error.
 //
+// 7. dev is brought up to the release (or it says dev holds work not in it).
+//
 // It never prints a key. If a step fails it stops and says where things stand.
 
 import { spawnSync } from "node:child_process";
@@ -48,6 +50,10 @@ const receipt = readReceipt(git(["rev-parse", "HEAD^{tree}"]));
 if (!receipt) stop("This commit has not passed the gate.", "Run `npm run gate` (about 15 minutes).");
 git(["fetch", "origin", "main"]);
 if (!gitOk(["merge-base", "--is-ancestor", "origin/main", "HEAD"])) stop("origin/main has commits this one does not.", "Merge them, then `npm run gate` again.");
+git(["fetch", "origin", "dev"]);
+if (gitOk(["rev-parse", "--verify", "-q", "origin/dev"]) && !gitOk(["merge-base", "--is-ancestor", "origin/dev", "HEAD"])) {
+  step("note: dev holds " + git(["rev-list", "--count", "HEAD..origin/dev"]) + " merged commit(s) that are not in this commit. They will not go out with this release.");
+}
 const cfg = readConfig();
 const env = privateEnv();
 if (!env.MAT_KEY) stop("No trip key to check the live trip with.", "Put MAT_KEY=... in ~/.config/mat/env (never in the repository).");
@@ -172,5 +178,21 @@ try {
 }
 if (errors.length) stop("The live site started with " + errors.length + " error(s): " + errors.slice(0, 3).join(" | "), "This is live now. Fix forward or revert the commit and ship again.");
 step("live site starts with no script error");
+
+// 7 ---------------------------------------------------------------------------
+// dev (where reviewed pull requests wait) is brought up to what is now live,
+// so the next branch starts from it. If dev holds merged work that was not in
+// this release, it is left alone and said.
+git(["fetch", "origin", "dev"]);
+if (!gitOk(["rev-parse", "--verify", "-q", "origin/dev"])) {
+  step("dev: there is no dev branch on GitHub");
+} else if (git(["rev-parse", "origin/dev"]) === head) {
+  step("dev: already at this release");
+} else if (gitOk(["merge-base", "--is-ancestor", "origin/dev", "HEAD"])) {
+  const sync = spawnSync("git", ["push", "origin", "HEAD:refs/heads/dev"], { cwd: ROOT, encoding: "utf8" });
+  step(sync.status === 0 ? "dev: brought up to this release" : "dev: could NOT be brought up to this release (" + (sync.stderr || "").trim().split("\n").pop() + "). The release itself is live.");
+} else {
+  step("dev: holds " + git(["rev-list", "--count", "HEAD..origin/dev"]) + " merged commit(s) that are NOT in this release. Merge origin/dev into main for the next one.");
+}
 
 console.log("\nship: DONE. Version " + cfg.appVersion + " (" + head.slice(0, 7) + ") is live, backend " + want + ". Record it in the ledger and MEMORY.md.");
