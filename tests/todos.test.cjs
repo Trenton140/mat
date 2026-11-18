@@ -1771,3 +1771,33 @@ test("fix C1: a row ticked again (as yes) whose put-back did go through is still
   assert.equal(bookStatus(call), "Booked");
   assert.equal(stored(call, "1").planner_written, "yes");
 });
+
+const PAYHEAD = ["payment_id", "date_paid", "payer", "description", "category", "vendor", "booking_ref", "amount", "currency", "amount_cad", "cad_is_exact", "split_between", "split_type", "status", "include_in_split", "source", "added_by", "notes"];
+const payRow = (o) => PAYHEAD.map((h) => (o[h] === undefined ? "" : o[h]));
+
+test("fix C2: a filled-down checkbox column past the Payments header (S) changes nothing: same payments, no problems, not capped", () => {
+  const rows = [PAYHEAD, payRow({ payment_id: "X7", payer: "Mo", description: "Made-up inn", amount: 24750, currency: "JPY", split_between: "Mo", split_type: "equal", include_in_split: "yes" }), payRow({ payment_id: "X8", payer: "Mo", description: "Made-up bus", amount: 3000, currency: "JPY", split_between: "Mo", split_type: "equal", include_in_split: "yes" })];
+  const plain = P.paymentsFromRows(rows);
+  const boxes = [rows[0].concat([""]), ...rows.slice(1).map((r) => r.concat([true]))];
+  for (let i = 0; i < 350; i++) boxes.push(new Array(PAYHEAD.length).fill("").concat([false]));
+  const got = P.paymentsFromRows(boxes);
+  assert.deepEqual(got.payments, plain.payments);
+  assert.deepEqual([got.problems, got.capped, got.missing], [[], false, null]);
+});
+
+test("fix C2: a cell past Z on the blank row under Book Now does not turn the line below into a todo", () => {
+  const wide = (row) => { const r = row.slice(); while (r.length < 30) r.push(""); return r; };
+  const sep = wide([]);
+  sep[28] = "made-up side note";
+  const rows = [BHEAD, brow(B1), sep, brow({ "#": 7, Item: "Made-up line under the table" })];
+  assert.deepEqual(P.todosFromRows(rows, 2026).items.map((x) => x.id), ["1"]);
+  assert.deepEqual(P.todosFromRows([BHEAD, brow(B1), [], brow({ "#": 7, Item: "Made-up line under the table" })], 2026).items.map((x) => x.id), ["1"], "the same as a truly blank row");
+});
+
+test("fix C2: the Change Log row spans only the header's columns, whatever lies further right", () => {
+  const head = [...CHEAD, "", "", "made-up margin note"];
+  const row = P.changeLogRow([head, [5, "x"]], { Item: "I" });
+  assert.equal(row.values.length, CHEAD.length + 3, "a header cell further right is part of the header");
+  const clean = P.changeLogRow([CHEAD.concat(["", ""]), [5, "x", "", "", "", "", "", "", "", "", "", "", "far right"]], { Item: "I" });
+  assert.equal(clean.values.length, CHEAD.length);
+});

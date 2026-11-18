@@ -321,3 +321,11 @@ test("wave A 8: a Book Now column placed after Z is read, and every planner read
   const widePay = plannerWorld({ props: { PLANNER_ID }, get: gridGet([pad(60)]) });
   assert.equal(widePay.ctx.plannerRows_()[0].length, 52);
 });
+
+test("fix C2: checkPlanner counts payment rows within the header's columns only", () => {
+  const row = PHEAD.map((h) => ({ payment_id: "X7", payer: "Mo", description: "Made-up inn", amount: 100, currency: "JPY", split_between: "Mo", split_type: "equal", include_in_split: "yes" })[h] || "");
+  const boxes = [PHEAD.concat([""]), row.concat([true]), ...Array.from({ length: 5 }, () => PHEAD.map(() => "").concat([false]))];
+  const w = plannerWorld({ props: { PLANNER_ID }, tabs: ["Payments", "Book Now", "Change Log"], get: byRange(boxes) });
+  w.ctx.checkPlanner();
+  assert.equal(w.logged[0], "Planner: 1 payment rows, columns ok");
+});
