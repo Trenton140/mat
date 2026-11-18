@@ -3,7 +3,7 @@
 // line after its link was replaced; the release check's read-only key.
 
 const assert = require("node:assert/strict");
-const { SEED, WITH_PLAN, NOON12, open, until, text, expectText, visible } = require("./helpers.cjs");
+const { SEED, WITH_PLAN, NOON12, ORIGIN, open, until, text, expectText, visible } = require("./helpers.cjs");
 
 const matKeys = (page) => page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith("mat.")).sort());
 const drawsTrip = (page) => page.evaluate(() => document.body.innerText.includes("Niseko lodge") || document.body.innerText.includes("Rail passes"));
@@ -123,6 +123,50 @@ module.exports = [
       assert.equal(await store(page, () => globalThis.__matTest.store.state.me), null);
       const writes = backend.requests.filter((r) => !["load", "rev", "history"].includes(r.action));
       assert.deepEqual(writes.map((r) => r.action), [], "the start asks for nothing the check key may not have");
+    },
+  },
+  {
+    name: "fix round 1, C1: an old Home Screen icon carrying the shared key, on a phone that holds its own link, opened again and again before and after retirement, stays on its own link",
+    async run({ page }) {
+      const backend = await ready(page, { own: "Ajen", hash: "#k=test-key" });
+      const own = backend.ownKeys.Ajen;
+      const onOwn = async (why) => {
+        await until(() => page.evaluate(() => globalThis.__matTest && globalThis.__matTest.store.state.personal === true && globalThis.__matTest.store.state.me === "Ajen"), why);
+        assert.equal(await page.evaluate(() => localStorage.getItem("mat.key")), own, why + ": the stored key is unchanged");
+        assert.equal(await page.evaluate(() => location.hash), "", why + ": the address key is taken out");
+        assert.equal(await visible(page, "#gate"), false, why);
+        assert.ok((await matKeys(page)).includes("mat.cache"), why + ": nothing wiped");
+      };
+      await onOwn("first open");
+      for (let i = 0; i < 2; i++) {
+        await page.goto("about:blank"); // a cold launch: a new page load, not a hash change
+        await page.goto(ORIGIN + "/#k=test-key");
+        await onOwn("opened again " + (i + 1));
+      }
+      for (const n of ["Mo", "Trenton"]) backend.fake.personKey(n);
+      backend.fake.world.retireSharedLink();
+      for (let i = 0; i < 3; i++) {
+        await page.goto("about:blank"); // a cold launch: a new page load, not a hash change
+        await page.goto(ORIGIN + "/#k=test-key");
+        await onOwn("after retirement " + (i + 1));
+        await expectText(page, "#ubarT", "That link didn’t work. This phone stays on the link it already had.");
+        assert.equal(await drawsTrip(page), true);
+      }
+    },
+  },
+  {
+    name: "fix round 1: Forget this phone's second line says how many entries not sent yet will be lost",
+    async run({ page }) {
+      const backend = await ready(page, { own: "Mo" });
+      backend.failWith = "network";
+      await store(page, () => {
+        const s = globalThis.__matTest.store;
+        for (const title of ["One", "Two", "Three"]) s.addExpense({ day: "2026-12-12", title, amount: 1000, currency: "JPY", paidBy: "Mo", split: ["Mo", "Ajen"], splitMode: "equal", splitVals: [], note: "", kind: "" });
+        return s.idle();
+      });
+      await openYou(page);
+      await page.dispatchEvent("#setForget", "click");
+      assert.equal(await text(page, "#setForgetS"), "Tap again to take everything off this phone. 3 entries not sent yet will be lost.");
     },
   },
 ];

@@ -737,7 +737,9 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     if (forgetting) return;
     if (forgetArmed === null) {
       forget.classList.add("is-sure");
-      forgetS.textContent = FORGET_SURE;
+      // Say what would be lost: lines not sent yet go with everything else.
+      const unsent = typeof store.unsentCount === "function" ? store.unsentCount() : 0;
+      forgetS.textContent = FORGET_SURE + (unsent === 1 ? ". 1 entry not sent yet will be lost." : unsent > 1 ? ". " + unsent + " entries not sent yet will be lost." : "");
       forgetV.textContent = "Tap again";
       forgetArmed = setTimeout(disarmForget, FORGET_MS);
       return;

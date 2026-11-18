@@ -3341,3 +3341,137 @@ test("a wrong key on an empty phone says nothing was taken off", async () => {
   await p.store.boot();
   assert.deepEqual([p.store.state.status, p.store.state.keyRefused, p.store.state.cleared], ["nokey", true, null]);
 });
+
+// ---------- security fix round 1: a key in the address, refusals in a row, late replies ----------
+
+// A phone whose stored key is `stored`, opened from an address carrying `candidate`.
+async function opened(fake, stored, candidate, extra = {}) {
+  const storage = memStorage({ "mat.key": stored, ...extra });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  await p.store.idle();
+  const before = p.net.sent.length;
+  await p.store.boot({ candidate });
+  await p.store.idle();
+  return { ...p, before };
+}
+
+test("C1: a phone on its own link opened from the shared link (accepted) stays on its own link; the stored key is unchanged", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Ajen");
+  const p = await opened(fake, mine, KEY);
+  assert.equal(p.storage.getItem("mat.key"), mine);
+  assert.deepEqual([p.store.state.status, p.store.state.personal, p.store.state.me], ["ready", true, "Ajen"]);
+  assert.ok(p.storage.getItem("mat.cache"));
+});
+
+test("C1: a phone on its own link opened from a retired or made-up link: no wipe, still its own link, and it says the link didn't work", async () => {
+  for (const make of [(fake) => { for (const n of ["Mo", "Trenton"]) fake.personKey(n); fake.world.retireSharedLink(); return KEY; }, () => "made-up-key-123"]) {
+    const fake = createFakeBackend(SEED);
+    const mine = fake.personKey("Ajen");
+    const storage = memStorage({ "mat.key": mine });
+    const p = phone({ fake, storage });
+    await p.store.boot();
+    const candidate = make(fake);
+    await p.store.boot({ candidate });
+    await p.store.idle();
+    assert.equal(storage.getItem("mat.key"), mine);
+    assert.deepEqual([p.store.state.status, p.store.state.personal, p.store.state.me, p.store.state.keyRefused], ["ready", true, "Ajen", false]);
+    assert.ok(storage.getItem("mat.cache"), "nothing was wiped");
+    assert.equal(p.store.state.notice, "That link didn’t work. This phone stays on the link it already had.");
+  }
+});
+
+test("C1: a phone on the shared link opened from its own person's link switches to it", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Trenton");
+  const p = await opened(fake, KEY, mine, { "mat.me": "Mo" });
+  assert.equal(p.storage.getItem("mat.key"), mine);
+  assert.deepEqual([p.store.state.personal, p.store.state.me], [true, "Trenton"]);
+});
+
+test("C1: a personal link opened on a phone already on a personal link replaces it (the newer link this phone was given)", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Ajen");
+  const theirs = fake.personKey("Mo");
+  const p = await opened(fake, mine, theirs);
+  // A personal link replaces the stored one: it is the newer link this person was sent.
+  assert.equal(p.storage.getItem("mat.key"), theirs);
+  assert.equal(p.store.state.me, "Mo");
+});
+
+test("C1: the address key offline is not stored and the phone carries on with its own", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Ajen");
+  const storage = memStorage({ "mat.key": mine });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  p.net.offline = true;
+  await p.store.boot({ candidate: KEY });
+  assert.equal(storage.getItem("mat.key"), mine);
+  assert.equal(p.store.state.status, "ready");
+});
+
+test("C2: the unsent line a refusal kept survives a second refusal (and any number), until a key is accepted", async () => {
+  const fake = createFakeBackend(SEED);
+  const storage = memStorage({ "mat.key": KEY, "mat.me": "Mo" });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.addExpense(draft({ title: "Kept" }));
+  await p.store.idle();
+  for (const n of ["Mo", "Ajen", "Trenton"]) fake.personKey(n);
+  fake.world.retireSharedLink();
+  p.net.offline = false;
+  await p.store.checkRev();
+  assert.deepEqual(p.store.state.cleared, { kept: 1 });
+  for (let i = 0; i < 3; i++) {
+    storage.setItem("mat.key", KEY); // the old link opened again
+    const again = phone({ fake, storage });
+    await again.store.boot();
+    assert.equal(again.store.state.status, "nokey");
+    assert.deepEqual(queueOf(storage).map((q) => q.expense.title), ["Kept"], "refusal " + (i + 2));
+    assert.deepEqual(again.store.state.cleared, { kept: 1 });
+  }
+});
+
+test("I1: a reply already on its way when the trip is taken off is dropped, never drawn", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Ajen");
+  const p = phone({ fake, storage: memStorage({ "mat.key": mine }) });
+  await p.store.boot();
+  const release = p.net.hold("load");
+  const loading = p.store.refresh();
+  await until(() => p.net.sent.filter((b) => b.action === "load").length === 2);
+  fake.world.cancelLinkForPerson2();
+  await p.store.checkRev(); // a quicker rev is refused: the trip comes off
+  assert.equal(p.store.state.status, "nokey");
+  release();
+  await loading;
+  await p.store.idle();
+  assert.deepEqual([p.store.state.status, p.store.state.expenses.length, p.store.state.people.length], ["nokey", 0, 0]);
+});
+
+test("I1: a load in flight at Forget this phone is dropped too", async () => {
+  const p = phone();
+  await p.store.boot();
+  const release = p.net.hold("load");
+  const loading = p.store.refresh();
+  await until(() => p.net.sent.filter((b) => b.action === "load").length === 2);
+  p.store.forgot();
+  release();
+  await loading;
+  assert.deepEqual([p.store.state.status, p.store.state.expenses.length, p.store.state.keyRefused], ["nokey", 0, false]);
+  assert.deepEqual([...p.storage.map.keys()], []);
+});
+
+test("unsentCount: what Forget this phone would lose", async () => {
+  const p = phone();
+  await p.store.boot();
+  assert.equal(p.store.unsentCount(), 0);
+  p.net.offline = true;
+  p.store.addExpense(draft({ title: "a" }));
+  p.store.addExpense(draft({ title: "b" }));
+  await p.store.idle();
+  assert.equal(p.store.unsentCount(), 2);
+});
