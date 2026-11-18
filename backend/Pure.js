@@ -217,6 +217,8 @@ function optPhoto_(v, message) {
   if (v === undefined || v === null) return { ok: true, value: "" };
   if (typeof v !== "string") return fail_(message);
   if (v.trim() === "") return { ok: true, value: "" };
+  // safeUrl takes nothing over 500 letters: say so, not that it isn't https.
+  if (v.trim().length > 500) return fail_("That picture link is too long.");
   var u = safeHttpsUrl(v);
   return u ? { ok: true, value: u } : fail_(message);
 }
@@ -1056,9 +1058,10 @@ function headOf_(row) {
 // (a second table below is never read with the first one's columns). Item is
 // cut to 300 characters and Notes to 2,000.
 // -> { items: [{ id, item, bookBy, status, note, link, row, statusCol }],
-// problems: [{ id, message }], missing }: missing is why the tab can't be
-// read at all (else null); row is the item's 1-based row in the tab and
-// statusCol the 0-based column of Status, for writing back.
+// problems: [{ id, message, row, what }], missing }: missing is why the tab
+// can't be read at all (else null); row is the item's 1-based row in the tab
+// (the sheet's own row number) and statusCol the 0-based column of Status,
+// for writing back; a problem's what is a few words of its Item.
 function todosFromRows(rows, year) {
   var list = Array.isArray(rows) ? rows : [];
   var none = function (message) { return { items: [], problems: [], missing: message }; };
@@ -1083,7 +1086,7 @@ function todosFromRows(rows, year) {
     if (num === null) continue;
     var id = String(num);
     if (seen[id] === true) {
-      problems.push({ id: id, message: "That number is in the Book Now tab twice." });
+      problems.push({ id: id, message: "That number is in the Book Now tab twice.", row: r + 1, what: plannerWhat_(item) });
       continue;
     }
     seen[id] = true;

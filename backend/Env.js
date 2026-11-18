@@ -113,14 +113,20 @@ function plannerA1_(tab) {
   return "'" + String(tab).replace(/'/g, "''") + "'!";
 }
 
-// One range of the planner (tab: the tab it is on), through the Sheets
-// advanced service: values unformatted, dates as the sheet shows them.
-// null when the sheet opens but has no such tab; throws when it cannot read.
-function plannerRange_(tab, range) {
+// The most columns a planner read keeps (A to AZ).
+var PLANNER_MAX_COLS_ = 52;
+
+// A whole tab of the planner, from A1 to its last column (cut at
+// PLANNER_MAX_COLS_), through the Sheets advanced service: values
+// unformatted, dates as the sheet shows them. The range is the tab's name
+// alone, so a needed column after Z is read too and no column past the
+// sheet's grid is ever asked for. null when the sheet opens but has no such
+// tab; throws when it cannot read.
+function plannerRange_(tab) {
   var id = plannerId_();
   try {
-    var got = Sheets.Spreadsheets.Values.get(id, range, { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
-    return (got && got.values) || [];
+    var got = Sheets.Spreadsheets.Values.get(id, plannerA1_(tab).slice(0, -1), { valueRenderOption: "UNFORMATTED_VALUE", dateTimeRenderOption: "FORMATTED_STRING" });
+    return ((got && got.values) || []).map(function (row) { return Array.isArray(row) && row.length > PLANNER_MAX_COLS_ ? row.slice(0, PLANNER_MAX_COLS_) : row; });
   } catch (e) {
     var info = Sheets.Spreadsheets.get(id, { fields: "sheets.properties.title" });
     var titles = ((info && info.sheets) || []).map(function (sh) { return sh && sh.properties ? sh.properties.title : ""; });
@@ -131,13 +137,13 @@ function plannerRange_(tab, range) {
 
 // The planner's Payments tab, row 1 its column names.
 function plannerRows_() {
-  return plannerRange_("Payments", "Payments!A1:R");
+  return plannerRange_("Payments");
 }
 
 // Another planner tab (Book Now, Change Log) from A1, so row i of what comes
 // back is the sheet's row i + 1.
 function plannerTab_(tab) {
-  return plannerRange_(tab, plannerA1_(tab) + "A1:Z");
+  return plannerRange_(tab);
 }
 
 // Writes one cell ("E4") of a planner tab, as given (RAW: never a formula).

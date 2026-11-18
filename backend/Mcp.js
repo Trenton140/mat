@@ -437,7 +437,9 @@ function mcpUndo_(args, who) {
   // A picture's undo answers with the person: only whether they now have one.
   if (kind === "picture") value.person = { name: r.data.person.name, has_picture: !!r.data.person.photo };
   else value[kind] = r.data[kind];
-  // A "Before we go" undo through Claude never touches the planner (R49): "kept".
+  // A "Before we go" undo through Claude never touches the planner (R49):
+  // "pending" when it took off a tick the planner had taken (the put-back is
+  // left to the next pull), "kept" otherwise.
   if (kind === "todo") value.planner = r.data.planner;
   value.log_id = r.data.logId;
   return { ok: true, value: value };
