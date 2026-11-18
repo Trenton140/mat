@@ -153,6 +153,26 @@ export function hereLine(stop, minutes, here) {
   return { dist, lead: "About " + span(-spare) + " late. Leave now.", late: true };
 }
 
+// A loose day: each stop still to come with no time and coordinates within
+// NEAR_M gets its distance; the nearest is tagged 近い when two or more have
+// one. The order never changes. -> { [id]: { dist, near } }
+export function nearStops(dayStops, here) {
+  const out = {};
+  if (!here) return out;
+  let best = null;
+  for (const s of dayStops || []) {
+    if (!s || s.deleted || minutesOf(s.time) !== null) continue;
+    const m = metres(here, s);
+    if (!Number.isFinite(m) || m > NEAR_M) continue;
+    out[s.id] = { dist: distanceText(m) + " · " + walkMinutes(m) + " min on foot", near: false, m };
+    if (!best || m < out[best].m) best = s.id;
+  }
+  const ids = Object.keys(out);
+  if (ids.length > 1) out[best].near = true;
+  for (const id of ids) delete out[id].m;
+  return out;
+}
+
 export function stayFor(stays, date) {
   let best = null;
   for (const s of stays) {

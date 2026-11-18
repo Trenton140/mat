@@ -52,8 +52,9 @@ async function geoStub(page, cfg = {}) {
 
 // Every request body the fake backend received, and the page's storage, as
 // text: a position's digits must never be in any of them.
-async function leaks(page, backend, pos = HERE) {
-  const digits = [String(pos.lat).slice(0, 7), String(pos.lng).slice(0, 8)];
+// latOnly: for a test whose places share the phone's longitude on purpose.
+async function leaks(page, backend, pos = HERE, { latOnly = false } = {}) {
+  const digits = latOnly ? [String(pos.lat).slice(0, 7)] : [String(pos.lat).slice(0, 7), String(pos.lng).slice(0, 8)];
   const bodies = JSON.stringify(backend.requests);
   const stored = await page.evaluate(() => {
     const out = {};

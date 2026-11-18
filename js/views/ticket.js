@@ -27,6 +27,9 @@
 //   stop, or absent: a 現在地 line under its name (distance, minutes on
 //   foot) and the leave line from the walking minutes, in vermilion when late.
 //   Absent, the next stop reads exactly as it did.
+// - near: { [stopId]: { dist, near } } (plan.js nearStops) on today's
+//   ticket: each open stop gets its 現在地 distance, the nearest the 近い tag.
+//   The order is never changed.
 // - stay: the night's stay (stayShownFor: on today's ticket before 04:00,
 //   last night's), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
@@ -183,9 +186,11 @@ function row(stop, model) {
   body.tabIndex = 0;
   body.setAttribute("aria-expanded", "false");
   const title = str(stop.title);
+  const near = model.near && model.near[stop.id] ? model.near[stop.id] : null;
   if (title || next) {
     const n = el("div", "r-n");
     if (next) n.append(el("span", "tag", "こんど"));
+    else if (near && near.near) n.append(el("span", "tag near", "近い"));
     if (title) n.append(title);
     body.append(n);
   }
@@ -197,6 +202,7 @@ function row(stop, model) {
   }
   const here = next && model.hereNext ? model.hereNext : null;
   if (here) body.append(hereRow(here.dist));
+  else if (near) body.append(hereRow(near.dist));
   const lead = here ? here.lead : next ? nextLine(stop, minutes) : "";
   const detail = str(stop.detail);
   if (lead || detail) {

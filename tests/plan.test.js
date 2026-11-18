@@ -208,7 +208,7 @@ test("R37: other days' tickets are unchanged", () => {
 });
 
 // ---- where you are (location build, items 5 to 8) ----
-import { hereLine, NEAR_M } from "../js/plan.js";
+import { hereLine, nearStops, NEAR_M } from "../js/plan.js";
 import { metres, walkMinutes } from "../js/geo.js";
 
 const SKYAT = { lat: 35.6584421, lng: 139.7022205 };
@@ -245,5 +245,25 @@ test("leave-by falls back to today's line", () => {
   assert.ok(hereLine(skyStop(), 800, north(SKYAT, NEAR_M - 10)));
   // A stop the geocoder put in another city: far, so it falls back.
   assert.equal(hereLine(skyStop({ lat: "34.6937", lng: "135.5023" }), 800, near), null);
+});
+
+test("nearest stop: distances on open stops to come, the nearest tagged, the order kept", () => {
+  const here = SKYAT;
+  const stops = [
+    stop("Train", "09:10", { lat: "35.66", lng: "139.70" }),
+    stop("Bamboo", "", { id: "bam", lat: String(north(here, 900).lat), lng: String(here.lng) }),
+    stop("Tenryu", "", { id: "ten", lat: String(north(here, 650).lat), lng: String(here.lng) }),
+    stop("Far", "", { id: "far", lat: String(north(here, 5000).lat), lng: String(here.lng) }),
+    stop("Nowhere", "", { id: "now" }),
+    stop("Dinner", "18:30", { lat: String(north(here, 100).lat), lng: String(here.lng), fixed: true }),
+  ];
+  const out = nearStops(stops, here);
+  assert.deepEqual(Object.keys(out).sort(), ["bam", "ten"]);
+  assert.deepEqual(out.ten, { dist: "650 m · 11 min on foot", near: true });
+  assert.deepEqual(out.bam, { dist: "900 m · 15 min on foot", near: false });
+  // One alone is not "nearest".
+  assert.deepEqual(nearStops([stops[1]], here), { bam: { dist: "900 m · 15 min on foot", near: false } });
+  assert.deepEqual(nearStops(stops, null), {});
+  assert.deepEqual(nearStops(stops.map((s) => ({ ...s, deleted: true })), here), {});
 });
 

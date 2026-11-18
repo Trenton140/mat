@@ -43,7 +43,7 @@
 // ground under it), it goes back to the top. Never
 // on a minute tick, a sync or a redraw.
 
-import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor, hereLine } from "../plan.js";
+import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor, hereLine, nearStops } from "../plan.js";
 import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
 import { summary as bookSummary, countText } from "../stampbook.js";
@@ -75,7 +75,8 @@ const withoutLead = (html) => html.replace(LEAD, "$1$2$3").replace(DIST, "$1$2")
 
 // Puts the fresh rows into `rows` in order, keeping each old row that is
 // drawn the same. A row that differs only in its leave-by line's words (the
-// next stop, every minute) keeps its node, and only those words change, so
+// next stop, every minute) or its distances from where you are keeps its
+// node, and only those words change, so
 // focus, its photo, a height change under way and a screen reader are left
 // alone. Only rows that changed otherwise, or moved, are touched.
 function patchRows(rows, fresh) {
@@ -89,9 +90,11 @@ function patchRows(rows, fresh) {
     if (was === now) return keep;
     const lead = keep.querySelector(".r-lv");
     const next = r.querySelector(".r-lv");
-    if (lead && next && withoutLead(was) === withoutLead(now)) {
-      lead.textContent = next.textContent;
-      if (lead.className !== next.className) lead.className = next.className;
+    if (!!lead === !!next && withoutLead(was) === withoutLead(now)) {
+      if (lead) {
+        lead.textContent = next.textContent;
+        if (lead.className !== next.className) lead.className = next.className;
+      }
       const from = r.querySelectorAll(".dist");
       keep.querySelectorAll(".dist").forEach((d, i) => {
         if (from[i] && d.textContent !== from[i].textContent) d.textContent = from[i].textContent;
@@ -555,6 +558,11 @@ export function mountDays(root, store, { clock, where = null, onAllDays = () => 
       if (nextId && here) {
         const hl = hereLine(dayStops.find((x) => x.id === nextId), now.minutes, here);
         if (hl) model.hereNext = hl;
+      }
+      // A loose day: the open stops' distances and the nearest, order kept.
+      if (state === "today" && here) {
+        const near = nearStops(dayStops, here);
+        if (Object.keys(near).length) model.near = near;
       }
       // Asked once, on today's ticket, the first time a day has a next stop.
       if (nextId && where && where.supported() && where.state() === "unset") model.ask = true;
