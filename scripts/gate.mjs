@@ -79,8 +79,12 @@ if (quick) {
   process.exit(0);
 }
 
-const busy = spawnSync("pgrep", ["-f", "tests/e2e/run.cjs"], { encoding: "utf8" }).stdout.trim();
-if (busy) stop("Another browser-test run is going on this Mac (pid " + busy.split("\n").join(", ") + ").", "Two at once make timing failures. Wait for it, then run the gate again.");
+// A real run only: a shell that merely mentions the runner in its command line is not one.
+const busy = spawnSync("ps", ["-axo", "pid=,command="], { encoding: "utf8" }).stdout
+  .split("\n")
+  .filter((l) => /^\s*\d+\s+(\S*\/)?node\s+(\S+\s+)*?tests\/e2e\/run\.cjs/.test(l))
+  .map((l) => l.trim().split(/\s+/)[0]);
+if (busy.length) stop("Another browser-test run is going on this Mac (pid " + busy.join(", ") + ").", "Two at once make timing failures. Wait for it, then run the gate again.");
 
 const e2e = run("e2e", "node", ["tests/e2e/run.cjs"]);
 const m = e2e.text.match(/^(\d+) passed, (\d+) failed$/m);
