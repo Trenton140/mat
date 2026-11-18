@@ -831,8 +831,10 @@ function plannerBlank_(row) {
 
 // rows: the Payments tab as Sheets hands it back, row 1 the column names
 // (null or [] when there is no tab or it is empty).
-// -> { payments, problems: [{ id, message }], missing, capped }: missing is
-// why the tab can't be read at all (else null); capped: more than 300 rows.
+// -> { payments, problems: [{ id, message, row, what }], missing, capped }:
+// row is the sheet's own row number (the first data row is 2) and what a few
+// words of that row's description; missing is why the tab can't be read at
+// all (else null); capped: more than 300 rows.
 function paymentsFromRows(rows) {
   var list = Array.isArray(rows) ? rows : [];
   var none = function (message) { return { payments: [], problems: [], missing: message, capped: false }; };
@@ -859,17 +861,19 @@ function paymentsFromRows(rows) {
     }
     read++;
     var id = plannerText_(cell(row, "payment_id"));
+    var what = plannerWhat_(cell(row, "description"));
     if (!PAYMENT_ID_RE_.test(id)) {
-      problems.push({ id: "", message: "That payment’s id isn’t usable." });
+      problems.push({ id: "", message: "That payment’s id isn’t usable.", row: r + 1, what: what });
       continue;
     }
     if (seen[id] === true) {
-      problems.push({ id: id, message: "That payment id is in the planner twice." });
+      problems.push({ id: id, message: "That payment id is in the planner twice.", row: r + 1, what: what });
       continue;
     }
     seen[id] = true;
     payments.push({
       id: id,
+      row: r + 1,
       datePaid: plannerText_(cell(row, "date_paid")),
       payer: plannerText_(cell(row, "payer")),
       description: plannerText_(cell(row, "description")),
@@ -886,6 +890,11 @@ function paymentsFromRows(rows) {
     });
   }
   return { payments: payments, problems: problems, missing: null, capped: capped };
+}
+
+// A few words of a planner cell for a problem line: spaces collapsed, cut to 60.
+function plannerWhat_(v) {
+  return plannerCut_(plannerText_(v).replace(/\s+/g, " "), 60);
 }
 
 // s cut to max letters: at max - 1, less a trailing part-word, then "…".
@@ -1231,5 +1240,5 @@ function changeLogRow(rows, fields) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_ };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_, plannerWhat_ };
 }

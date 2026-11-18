@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { reportText, plannerWord } from "../js/views/you.js";
+import { reportText, plannerWord, problemHead } from "../js/views/you.js";
 import { freshText, historySentence, localDay } from "../js/format.js";
 
 const base = { me: "Ajen", screen: "Money", version: "7", when: "Sat Dec 12, 13:20" };
@@ -61,4 +61,19 @@ test("plannerWord: the few words the Planner payments row shows after a pull", (
   assert.equal(plannerWord(r({})), "Nothing new");
   assert.equal(plannerWord(null), "Not fetched");
   assert.equal(plannerWord(undefined), "Not fetched");
+});
+
+test("problemHead: id, row and description, each left out when missing; all three missing is A payment row", () => {
+  const cases = [
+    [{ id: "P011", row: 14, what: "Ryokan deposit" }, "P011 · row 14 · Ryokan deposit"],
+    [{ id: "P011", row: 14, what: "" }, "P011 · row 14"],
+    [{ id: "P011", row: null, what: "Ryokan deposit" }, "P011 · Ryokan deposit"],
+    [{ id: "P011", row: null, what: "" }, "P011"],
+    [{ id: "", row: 14, what: "Ryokan deposit" }, "row 14 · Ryokan deposit"],
+    [{ id: "", row: 14, what: "" }, "row 14"],
+    [{ id: "", row: null, what: "Ryokan deposit" }, "Ryokan deposit"],
+    [{ id: "", row: null, what: "" }, "A payment row"],
+  ];
+  for (const [p, said] of cases) assert.equal(problemHead(p), said, JSON.stringify(p));
+  assert.equal(problemHead({}), "A payment row", "fields that are not there at all");
 });

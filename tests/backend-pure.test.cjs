@@ -483,9 +483,29 @@ test("paymentsFromRows reads each payment by column name, trimmed, numbers as nu
   const r = P.paymentsFromRows([PLAN_HEAD, planRow({ ...X7, payer: "  Mo ", vendor: " North Rail ", notes: "x" })]);
   assert.deepEqual(r.problems, []);
   assert.deepEqual(r.payments, [{
-    id: "X7", datePaid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", bookingRef: "AB12",
+    id: "X7", row: 2, datePaid: "2026-12-11", payer: "Mo", description: "Rail pass", category: "transport", vendor: "North Rail", bookingRef: "AB12",
     amount: 24750, currency: "JPY", amountCad: 221.52, cadExact: "yes", splitBetween: ["Mo", "Ajen", "Trenton"], splitType: "equal", include: true,
   }]);
+});
+
+test("paymentsFromRows: row is the sheet's own row number (first data row 2, a blank row still counts); a problem carries row and what", () => {
+  const long = "Ryokan deposit for the   whole\nfamily stay in the mountains near the lake";
+  const r = P.paymentsFromRows([
+    PLAN_HEAD,
+    planRow(X7),
+    [],
+    planRow({ ...X9, payment_id: "bad id", description: "  Flight   north " }),
+    planRow({ ...X7, description: long }),
+    planRow({ ...X9, payment_id: "X9", description: "" }),
+    planRow({ ...X9, payment_id: "X9", description: "Again" }),
+  ]);
+  assert.deepEqual(r.payments.map((p) => [p.id, p.row]), [["X7", 2], ["X9", 6]]);
+  assert.deepEqual(r.problems, [
+    { id: "", message: "That payment’s id isn’t usable.", row: 4, what: "Flight north" },
+    { id: "X7", message: "That payment id is in the planner twice.", row: 5, what: "Ryokan deposit for the whole family stay in the mountains…" },
+    { id: "X9", message: "That payment id is in the planner twice.", row: 7, what: "Again" },
+  ]);
+  assert.ok(r.problems[1].what.length <= 60);
 });
 
 test("paymentsFromRows finds columns in any order", () => {
@@ -543,17 +563,17 @@ test("paymentsFromRows skips blank rows, leaves out unusable and repeated ids, a
   assert.deepEqual(r.payments.map((p) => p.id), ["X7", "X9"]);
   assert.equal(r.payments[0].description, "Rail pass", "the first of a repeated id is kept");
   assert.deepEqual(r.problems, [
-    { id: "", message: "That payment’s id isn’t usable." },
-    { id: "", message: "That payment’s id isn’t usable." },
-    { id: "", message: "That payment’s id isn’t usable." },
-    { id: "", message: "That payment’s id isn’t usable." },
-    { id: "X7", message: "That payment id is in the planner twice." },
+    { id: "", message: "That payment’s id isn’t usable.", row: 6, what: "Rail pass" },
+    { id: "", message: "That payment’s id isn’t usable.", row: 7, what: "Rail pass" },
+    { id: "", message: "That payment’s id isn’t usable.", row: 8, what: "Rail pass" },
+    { id: "", message: "That payment’s id isn’t usable.", row: 9, what: "Rail pass" },
+    { id: "X7", message: "That payment id is in the planner twice.", row: 10, what: "again" },
   ]);
   assert.equal(payOf({ ...X7, payment_id: "A_b-9" }).id, "A_b-9");
   assert.equal(payOf({ ...X7, payment_id: "P005" }).id, "P005");
   // Fix 7: an id holds a letter and a digit.
   for (const id of ["Taxi", "42", 42, "abc_def", "3"]) {
-    assert.deepEqual(P.paymentsFromRows([PLAN_HEAD, planRow({ ...X7, payment_id: id })]).problems, [{ id: "", message: "That payment’s id isn’t usable." }], String(id));
+    assert.deepEqual(P.paymentsFromRows([PLAN_HEAD, planRow({ ...X7, payment_id: id })]).problems, [{ id: "", message: "That payment’s id isn’t usable.", row: 2, what: "Rail pass" }], String(id));
   }
 
   const many = [PLAN_HEAD];

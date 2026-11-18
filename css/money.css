@@ -190,13 +190,39 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 @media (prefers-reduced-motion: reduce){ .nav button{transition:none !important} }
 .phone.reg-open .nav{opacity:0;pointer-events:none}
 
-/* Held sideways: the same five keys stand as a rail on the right of the column,
-   stacked in the same order, Ring up in the middle. */
-@media (orientation:landscape) and (max-height:520px){
+/* Held sideways, and in a computer's window (WIDE, css/base.css): the same
+   keys stand as a rail on the right of the column, stacked in the same order,
+   Ring up in the middle. */
+@media (orientation:landscape) and (max-height:520px), (min-width:1000px) and (min-height:521px){
   .nav{left:auto;top:0;width:var(--rail);height:auto;flex-direction:column;align-items:stretch;justify-content:center;gap:6px;
     padding:calc(8px + env(safe-area-inset-top, 0px)) 8px calc(8px + env(safe-area-inset-bottom, 0px));
     background:var(--ground);border-top:0;border-left:1.5px dashed var(--key-hi);box-shadow:none}
   .nav button{flex:1 1 0;min-height:44px;height:auto;max-height:64px}
   .nav .ring{flex:1.2 1 0;max-height:72px;height:auto}
   .nav #beforeBtn[hidden] ~ .ring{flex:1 1 0}
+}
+
+/* WIDE: both panes are always in view, so the rail holds only what is not a
+   pane: Before (when the list is there), Ring up and You. While Before stands
+   in the Days pane, the Days key is the way back. The register opens in the
+   Money pane, so the rail stays in reach beside it. */
+@media (min-width:1000px) and (min-height:521px){
+  .nav button[data-tab="days"],.nav button[data-tab="money"]{display:none}
+  .phone:has(#vBefore.is-active) .nav button[data-tab="days"]{display:grid}
+  .nav button{flex:0 1 64px}
+  .nav .ring{flex:0 1 76px}
+  .nav #beforeBtn[hidden] ~ .ring{flex:0 1 76px}
+  .phone.reg-open .nav{opacity:1;pointer-events:auto}
+}
+/* A mouse: keys answer the pointer before they are pressed, on screens that are neither phone shape. */
+@media (hover:hover) and (min-width:481px) and (min-height:521px), (hover:hover) and (min-width:481px) and (orientation:portrait){
+  .nav button:not(.ring):hover,.chip:not(.is-on):hover,.key:not(.go):not(:disabled):hover,.who-pick button:hover,.set-who button:not(.is-on):hover,.set-days button:hover,.ln-btns button:hover{background:var(--key-hi);color:var(--text)}
+  .nav .ring:hover,.key.go:not(:disabled):hover,.go-btn:hover{background:#fff}
+  .hist-btn:hover{border-color:var(--dim);background:rgba(255,255,255,.04)}
+  .sheet-top button:hover,.hist-top button:hover,.reg-top button:hover{color:var(--text)}
+  .stop .sheet-top button:hover,.stay .sheet-top button:hover{color:var(--print);text-decoration:underline}
+  .rc-row:hover{background:rgba(21,18,15,.05)}
+  .sq:hover::before{border-color:var(--text)}
+  .r-b:hover{background:rgba(21,18,15,.04)}
+  .tk-stay:hover{background:rgba(21,18,15,.04)}
 }

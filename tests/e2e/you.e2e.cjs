@@ -577,7 +577,7 @@ module.exports = [
       await expectText(page, "#setPlanner b", "Fetching…");
       await page.evaluate(() => document.getElementById("setPlanner").click());
       release();
-      await expectText(page, "#ubarT", "Added 2 payments from the planner. 1 payment needs a look in the planner.");
+      await expectText(page, "#ubarT", "Added 2 payments from the planner. 1 payment needs a look in the planner. See You for which.");
       await expectText(page, "#setPlanner b", "Added 2");
       assert.equal(backend.requests.filter((r) => r.action === "syncPayments").length, 1, "one pull for two taps");
       backend.handle = handle;
@@ -590,7 +590,7 @@ module.exports = [
       await page.evaluate(() => globalThis.__matTest.store.clearNotice());
       await openYou(page);
       await page.click("#setPlanner");
-      await expectText(page, "#ubarT", "Nothing new in the planner. 1 payment needs a look in the planner.");
+      await expectText(page, "#ubarT", "Nothing new in the planner. 1 payment needs a look in the planner. See You for which.");
       assert.equal(backend.fake.primitives.readTable_("Expenses").filter((e) => e.note.startsWith("X7 · ")).length, 1, "nothing added twice");
 
       await page.click("#youDone");
