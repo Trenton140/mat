@@ -8,7 +8,26 @@ import { findings } from "../scripts/scan.mjs";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { checkKey, ownerKey, withoutKeys } from "../scripts/release-lib.mjs";
+import { askUntil, checkKey, ownerKey, tripLoaded, withoutKeys } from "../scripts/release-lib.mjs";
+
+test("I4: the live load is asked again for about 30 seconds; ship never advises rolling the backend back", async () => {
+  const waits = [];
+  const answers = [{ ok: false, error: "bad_key" }, null, { ok: true, data: { days: [1], stops: [] } }];
+  let n = 0;
+  const r = await askUntil(async () => answers[n++], tripLoaded, { sleep: async (ms) => waits.push(ms) });
+  assert.equal(tripLoaded(r), true);
+  assert.deepEqual(waits, [5000, 5000], "asked three times, five seconds apart");
+  let m = 0;
+  const never = await askUntil(async () => { m++; return { ok: false }; }, tripLoaded, { sleep: async (ms) => waits.push(ms) });
+  assert.equal(m, 7, "seven tries, about 30 seconds of waiting");
+  assert.equal(tripLoaded(never), false);
+  const ship = readFileSync(join(ROOT, "scripts", "ship.mjs"), "utf8");
+  assert.equal(/roll back the backend first|go back to if this goes wrong/.test(ship), false);
+  assert.match(ship, /never roll the\s*\n?\/\/ backend back|never roll back past/);
+  assert.match(ship, /askUntil\(\(\) => call\(cfg\.apiUrl, KEY, "load"\), tripLoaded\)/);
+  const readme = readFileSync(join(ROOT, "README.md"), "utf8");
+  assert.match(readme, /never roll the backend back/i);
+});
 
 const ok = { unit: { pass: 10, fail: 0 }, e2e: { pass: 5, fail: 0 } };
 const push = (over) => judgePush({ remoteRef: "refs/heads/main", localSha: "a".repeat(40), receipt: ok, commitStamp: "abc", live: "abc", ...over });

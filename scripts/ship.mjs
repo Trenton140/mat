@@ -21,13 +21,18 @@
 //    (never in the query string): the trip loads and there is no script error.
 //
 // It never prints a key. If a step fails it stops and says where things stand.
+//
+// Once issueLinks has run (the security release, 2026-11-18), never roll the
+// backend back past that version: an older backend knows only the shared key,
+// refuses every personal key, and each phone that hears that clears itself.
+// Fix forward.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { ROOT, SITE, call, checkKey, git, gitOk, liveStamp, privateEnv, readConfig, readReceipt, withoutKeys, writtenBackendStamp } from "./release-lib.mjs";
+import { ROOT, SITE, askUntil, call, checkKey, tripLoaded, git, gitOk, liveStamp, privateEnv, readConfig, readReceipt, withoutKeys, writtenBackendStamp } from "./release-lib.mjs";
 import { shellList } from "./stamp-sw.mjs";
 
 const check = process.argv.includes("--check");
@@ -70,7 +75,7 @@ if (live === want) {
     const clasp = (args) => spawnSync("npx", ["clasp", ...args], { cwd: ROOT, encoding: "utf8" });
     const before = clasp(["list-deployments"]);
     const was = ((before.stdout || "").split("\n").find((l) => l.includes(cfg.deployId)) || "").match(/@(\d+)/);
-    step("backend: live deployment is at version " + (was ? was[1] : "unknown") + " (the one to go back to if this goes wrong)");
+    step("backend: live deployment was at version " + (was ? was[1] : "unknown") + " (fix forward: once issueLinks has run, never roll back past the security release)");
     const push = clasp(["push", "-f"]);
     if (push.status !== 0) stop("clasp push failed.", (push.stderr || push.stdout || "").trim().split("\n").slice(-3).join("\n      "));
     const dep = clasp(["create-deployment", "-i", cfg.deployId, "-d", "v" + cfg.appVersion + " " + head.slice(0, 7)]);
@@ -95,8 +100,9 @@ if (migrate && !check) {
   let added = [];
   let settled = false;
   for (let i = 0; i < 6 && !settled; i++) {
-    const r = await call(cfg.apiUrl, KEY, "migrate");
-    if (!r || r.ok !== true) stop("migrate did not succeed (" + withoutKeys((r && (r.message || r.error)) || "no answer", env) + ").", "The site was NOT published.");
+    // A request that lands on the old version refuses the check key: asked again.
+    const r = await askUntil(() => call(cfg.apiUrl, KEY, "migrate"), (x) => !!x && x.ok === true);
+    if (!r || r.ok !== true) stop("migrate did not succeed (" + withoutKeys((r && (r.message || r.error)) || "no answer", env) + ").", "The site was NOT published. Run `npm run ship` again in a minute; fix forward, do not roll the backend back.");
     const now = (r.data && r.data.added) || [];
     added = added.concat(now);
     settled = i > 0 && now.length === 0;
@@ -105,9 +111,12 @@ if (migrate && !check) {
   if (!settled) stop("migrate kept adding columns after six calls.", "Look at the Sheet. The site was NOT published.");
   step("backend: migrate ran" + (added.length ? ", added " + added.join(", ") : ", nothing to add"));
 }
-const load = await call(cfg.apiUrl, KEY, "load").catch(() => null);
-if (!load || load.ok !== true || !Array.isArray(load.data.days) || !load.data.days.length || !Array.isArray(load.data.stops)) {
-  stop("The live trip does not load (" + withoutKeys((load && (load.message || load.error)) || "no answer", env) + ").", "The site was NOT published. Fix or roll back the backend first.");
+// Asked for about 30 seconds: right after a deploy a request can still land
+// on the old version, which refuses the check key.
+const load = await askUntil(() => call(cfg.apiUrl, KEY, "load"), tripLoaded);
+if (!tripLoaded(load)) {
+  stop("The live trip does not load (" + withoutKeys((load && (load.message || load.error)) || "no answer", env) + ").",
+    "The site was NOT published. Run `npm run ship` again in a minute. If it still does not load, fix forward: do not roll the backend back once issueLinks has run (every phone on a personal link would clear itself).");
 }
 step("live trip loads: " + load.data.days.length + " days, " + load.data.stops.length + " stops, rev " + load.rev);
 

@@ -159,6 +159,24 @@ export async function call(apiUrl, key, action, args = {}) {
   return r.json();
 }
 
+// Whether a live load answered with the trip (days and stops).
+export function tripLoaded(r) {
+  return !!r && r.ok === true && !!r.data && Array.isArray(r.data.days) && r.data.days.length > 0 && Array.isArray(r.data.stops);
+}
+
+// Asks ask() until ok(answer), at most `tries` times, waiting `waitMs`
+// between: right after a deploy a request can still land on the old version
+// (which refuses the check key). Resolves with the last answer.
+export async function askUntil(ask, ok, { tries = 7, waitMs = 5000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    last = await ask().catch(() => null);
+    if (ok(last)) return last;
+    if (i < tries - 1) await sleep(waitMs);
+  }
+  return last;
+}
+
 // --- rules that are pure, so tests can pin them -----------------------------
 
 // A change the phones must fetch needs a new APP_VERSION, or they keep the old one.

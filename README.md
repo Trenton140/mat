@@ -186,13 +186,21 @@ Each person opens the app from their own link, `https://<site>/#k=<their key>`. 
 
 **The release check's key** (`MAT_CHECK_KEY` in the owner's private env file, never in this repo; `backend/CheckKey.js` holds only its hash) can `load`, `rev`, `history` and `migrate`, nothing else, and its `load` leaves out the e-Transfer addresses.
 
-**On the phone.** A phone on a personal link is that person: You shows who you are, with no choice. A key the backend refuses (a cancelled or replaced link) clears the trip off the phone (the saved trip, the key, the pictures in it, the unsent lines) and shows the no-key screen. You → Forget this phone does the same by hand, and also removes the app's offline copy.
+**On the phone.** A phone on a personal link is that person: You shows who you are, with no choice. A key the backend refuses (a cancelled or replaced link) clears the trip off the phone (the saved trip, the key, the pictures in it, every small setting) and shows the no-key screen; only that person's own unsent lines are kept, and they go out once their new link is opened (they survive any number of refusals until then). A key that comes in the address while the phone already holds another (an old Home Screen icon, an old invite link, any link someone sends) is tried for that visit only: it is kept only if the trip takes it and it is a personal key (or the phone's own key is the old shared one); refused, it is dropped and the phone stays on its own key, saying "That link didn’t work. This phone stays on the link it already had." It never clears the phone. You → Forget this phone clears everything by hand (it says first how many entries not sent yet would be lost), and also removes the app's offline copy.
+
+**People's names.** A link belongs to a name in the People tab. Renaming, blanking or removing a person there makes their link refused at once, and their phone clears itself; run `issueLinks` to make a link for the new name (it also removes the old name's link, and `linksStatus` lists such leftovers).
+
+**If `PERSON_KEYS` is broken** (edited by hand into something that is not what `issueLinks` writes): every request answers "Something went wrong on our side. Try again.", so nobody gets in but no phone clears itself, and `linksStatus` says so. To start again: delete `PERSON_KEYS` in Script Properties, run `issueLinks`, send everyone their new link.
+
+**Never roll the backend back past this version once `issueLinks` has run.** An older backend knows only the shared key: it refuses every personal key, and every phone on a personal link would clear itself. Fix forward. (`npm run ship` asks the live trip again for about 30 seconds after a deploy, since a request can still land on the old version for a moment.)
 
 **Errors.** A request that fails on the backend answers only "Something went wrong on our side. Try again."; the detail goes to the script's executions log (`console.error`), with every key, token and id blanked.
 
 **Cut-over, in order.**
 
+0. Check who can edit the Sheet (Share). Anyone who can edit it can open the script editor, read Script Properties and run these functions, so personal links only keep apart people who cannot edit it.
 1. Release as usual (`npm run gate`, then `npm run ship`): the backend goes first. From this moment the shared link still works for everyone, but nobody can change an e-Transfer address through it, and the Claude link row is gone for everyone (it comes back for the owner on his own link).
 2. In the script editor: set the Script Property `SITE_URL` to the app's address (optional), then run `issueLinks`. Copy each link from the run log and send each person theirs, privately. Open your own on your phone.
-3. When each person has opened their own link (You shows their name with no choice), run `linksStatus`, then `retireSharedLink`. From then on the old shared link is refused: a phone still on it clears the trip and asks for a link.
+3. After opening your own link: remove the old Home Screen icon and add it again from the app's You screen (Add to Home Screen); force-quit the app and open it again, and check You still says "This phone is". Ask the others to do the same. When each person has done that, run `linksStatus`, then `retireSharedLink`. From then on the old shared link is refused: a phone still on it clears the trip and asks for a link.
 4. Copy the Claude link again from You on your own link, if you use it (the token is the same; the old link keeps working).
+5. From step 2 on, never roll the backend back past this version (above): fix forward.
