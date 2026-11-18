@@ -126,12 +126,12 @@ function sizeCase(size, mobile, tag) {
 
 module.exports = [
   {
-    name: "the pad's form: a binding, 出発前 under a double rule in indigo, a counterfoil per slip with its number and seal, 予約するもの on each slip, torn-off slips below a dashed tear",
+    name: "the pad's form: a binding, 予約票 under a double rule in indigo, a counterfoil per slip with its number and seal, 予約するもの on each slip, torn-off slips below a dashed tear",
     async run({ page }) {
       await ready(page, { claims: { 5: "Ajen" } });
       assert.equal(await page.evaluate(() => document.getElementById("bwCard").classList.contains("rv")), true);
       assert.equal(await page.$$eval("#bwCard > .rv-bind > i", (n) => n.length), 6, "six holes in the binding");
-      await expectText(page, "#bwTitle", "出発前Before we go");
+      await expectText(page, "#bwTitle", "予約票Reservation slips · Before we go");
       const head = await page.evaluate(() => {
         const h = getComputedStyle(document.querySelector("#bwCard .bw-band"));
         const t = getComputedStyle(document.querySelector("#bwTitle span"));
@@ -165,7 +165,7 @@ module.exports = [
         return { line: p.borderTopStyle + " " + p.borderTopWidth, below: b.top >= rows.bottom - 0.5 };
       });
       assert.deepEqual(tear, { line: "dashed 2px", below: true });
-      await expectText(page, "#bwDoneB", "済 Done (3)");
+      await expectText(page, "#bwDoneB", "済 Torn off and done (3)");
     },
   },
   {

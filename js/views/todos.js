@@ -101,7 +101,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
   const band = el("div", "bw-band");
   const title = el("h2", "bw-title");
   title.id = "bwTitle";
-  title.append(el("span", "", "出発前"), el("i", "", "Before we go"));
+  title.append(el("span", "", "予約票"), el("i", "", "Reservation slips · Before we go"));
   const count = el("span", "num");
   band.append(title, count);
   const rows = el("div", "bw-rows");
@@ -416,7 +416,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     const done = doneTodos(todos.filter((t) => !landed.has(t.id)));
     doneB.hidden = !done.length;
     perf.hidden = !done.length;
-    doneB.textContent = "済 Done (" + done.length + ")";
+    doneB.textContent = "済 Torn off and done (" + done.length + ")";
     doneB.setAttribute("aria-expanded", String(doneOpen && done.length > 0));
     doneBox.hidden = !(doneOpen && done.length);
     patch(doneBox, done.map((t, i) => doneRow(t, i)));
