@@ -160,7 +160,7 @@ i{font-style:normal}
    so inside it the usual 16 px margins are enough. It is centred, so it
    keeps the larger inset's width clear on both sides (the notch side can
    change as the phone turns). Tablets and desktop
-   windows (taller than 520 px) keep the framed phone. */
+   windows (taller than 520 px) are the two shapes at the end of this file. */
 @media (orientation:landscape) and (max-height:520px){
   :root{--rail:104px}
   .phone{width:min(calc(100% - 2 * max(var(--inset-l), var(--inset-r))), calc(560px + var(--rail)));height:100%;
@@ -178,4 +178,47 @@ i{font-style:normal}
   /* A sheet waiting below the screen casts no shadow up into it: sideways
      there is no bar along the bottom to hide it. */
   .sheet:not(.is-open){box-shadow:none}
+}
+
+/* ---------- on a computer (Task 21) ----------
+   Two more shapes, for any screen that is neither a phone upright
+   (max-width:480px) nor a phone sideways (landscape, max-height:520px):
+   BETWEEN (a tablet upright, a narrow window) and WIDE (a computer's window,
+   at least 1000 by 521). Neither draws a phone on the table. This first
+   block is both shapes; the WIDE block after it sets out the two panes. */
+@media (min-width:481px) and (min-height:521px), (min-width:481px) and (orientation:portrait){
+  /* BETWEEN: one square column of at most 560 px, the window's height, the bar across its foot as on a phone. */
+  .phone{width:min(100%,560px);height:100%;border-radius:0;box-shadow:none}
+  /* A ring in the app's ink: the print colour on paper and ticket stock, the light ink on the dark ground. */
+  :is(.tk,.slip,.rc,.ln,.ubar,.un,.how,.bw-card,.tape,.lcd,.sheet.stay,.sheet.stop) :focus-visible{outline-color:var(--print)}
+}
+
+/* WIDE: a ticket counter. One block, centred, the window's height, at most
+   1120 px: the day's ticket (Days, or Before in its place) on the left, the
+   money receipt on the right, both in use at once, and the bar as a rail on
+   the right edge (css/money.css) holding what is not a pane. Each pane is
+   half of what the rail leaves, at most 500 px, with a perforation between
+   them. Every sheet opens inside its own pane: the Days sheets over the
+   ticket, the Money ones (the register, a line, History, You) over the
+   receipt. Notices span both panes, never the rail. */
+@media (min-width:1000px) and (min-height:521px){
+  :root{--rail:104px}
+  .phone{width:min(100%, calc(1000px + var(--rail)))}
+  .views{right:var(--rail)}
+  .view{padding-bottom:28px}
+  #vDays,#vBefore{right:50%}
+  #vMoney{left:50%}
+  /* The perforation between the two panes, like the rail's edge. */
+  .views::after{content:"";position:absolute;top:0;bottom:0;left:50%;border-left:1.5px dashed var(--key-hi);pointer-events:none}
+  /* The panes, for what stands on the block itself (the sheets and their scrims). */
+  #stay,#stayScrim,#allDays,#allDaysScrim,#stop,#stopScrim{left:0;right:calc(50% + var(--rail) / 2)}
+  #reg,#line,#lineScrim,#hist,#histScrim,#you,#youScrim{left:calc(50% - var(--rail) / 2);right:var(--rail)}
+  /* Done stays in reach while a long sheet scrolls under it (as held sideways). */
+  .sheet-top{position:sticky;top:-12px;z-index:1;margin:-12px calc(var(--gr) * -1) 8px calc(var(--gl) * -1);padding:12px var(--gr) 0 var(--gl);background:inherit}
+  .sheet.stop .sheet-top,.sheet.stay .sheet-top{top:-14px;margin-top:-14px;padding-top:14px}
+  /* Which one are you: a sheet of a phone's width in the middle of the block, over everything (it waits for an answer). */
+  .veil .sheet{right:0;left:0;margin:0 auto;width:min(100%,560px)}
+  /* Notices and the no-signal strip span the two panes. */
+  .net{right:var(--rail)}
+  .ubar{right:calc(var(--rail) + var(--gr));bottom:16px}
 }

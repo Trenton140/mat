@@ -23,6 +23,7 @@ import { mountTodos } from "./views/todos.js";
 import { tabName } from "./todos.js";
 import { rollingCount } from "./fx.js";
 import { createUpdater } from "./update.js";
+import { isWide, onWide } from "./shape.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -108,23 +109,33 @@ function mountTabs(store, storage) {
   let settled = false; // the opening screen has been decided with the trip known
   const shownHooks = []; // called with the tab's name each time a tab is shown
 
+  // A computer's window (WIDE) shows Money and Days side by side, Before over
+  // the Days pane while it is the tab. `tab` stays what a phone would show,
+  // so a narrower window goes back to it.
+  let wide = isWide();
+  let cameFrom = null; // WIDE: the tab Before was opened from
+  const shows = (name, t) => (wide ? name === "money" || name === (t === "before" ? "before" : "days") : name === t);
+
   function showTab(t, remember = true) {
     const changed = t !== tab;
     tab = t;
     for (const b of nav.querySelectorAll("button[data-tab]")) {
       const on = b.dataset.tab === t;
       b.classList.toggle("is-active", on);
-      if (on) b.setAttribute("aria-current", "page");
+      // WIDE hides the Days and Money keys (the panes are both there): only Before can be the current key.
+      if (on && !(wide && b.dataset.tab !== "before")) b.setAttribute("aria-current", "page");
       else b.removeAttribute("aria-current");
     }
     for (const [name, view] of Object.entries(views)) {
-      view.classList.toggle("is-active", name === t);
-      view.inert = name !== t;
+      const on = shows(name, t);
+      view.classList.toggle("is-active", on);
+      view.inert = !on;
     }
     // The hooks are for arriving: a tap on the tab already showing leaves it as it is.
     if (changed) for (const f of shownHooks) f(t);
     // The Before tab comes and goes with the list: it is never what the app opens on.
-    if (!remember || t === "before") return;
+    // In WIDE there is nothing to choose between, so what is remembered is left as it was.
+    if (!remember || wide || t === "before") return;
     const trip = store.state.trip;
     try {
       storage.setItem("mat.tab", t);
@@ -154,10 +165,20 @@ function mountTabs(store, storage) {
   showTab(opening(null), false);
   settle(store.state);
   store.subscribe(settle);
+  // Crossing into or out of WIDE lays the views out again; nothing else changes.
+  onWide((w) => {
+    wide = w;
+    if (tab) showTab(tab, false);
+  });
   nav.addEventListener("click", (ev) => {
     const b = ev.target.closest("button[data-tab]");
     if (!b) return;
     settled = true;
+    // WIDE: Before takes the Days pane and the Days key brings back the tab it
+    // was opened from (Money's pane never went away), so a narrower window
+    // shows what it showed before.
+    if (wide && b.dataset.tab === "before" && tab !== "before") cameFrom = tab;
+    else if (wide && b.dataset.tab === "days" && tab === "before") return showTab(cameFrom || "days");
     showTab(b.dataset.tab);
   });
   return { showTab, tab: () => tab, onShown: (f) => shownHooks.push(f) };
@@ -322,8 +343,11 @@ function start() {
       beforeBtn.setAttribute("aria-label", tabName(open));
       if (!show && tabs.tab() === "before") tabs.showTab("days", false);
       if (hadFocus) {
+        // The Days key, or in WIDE (where it is hidden) the rail's first key that shows.
+        const keys = [...document.querySelectorAll("#nav button")];
         const daysBtn = document.querySelector('#nav button[data-tab="days"]');
-        if (daysBtn) daysBtn.focus({ preventScroll: true });
+        const to = daysBtn && daysBtn.getClientRects().length ? daysBtn : keys.find((k) => k.getClientRects().length);
+        if (to) to.focus({ preventScroll: true });
       }
     },
   });
