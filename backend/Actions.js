@@ -86,10 +86,10 @@ function planKind_(kind) {
   if (kind === "stay") {
     return {
       tab: "Stays", key: "id", deletable: true, fromRow: stayFromRow, toRow: stayToRow, missing: MSG_.noStay,
-      fields: ["name", "nameJp", "addressJp", "firstNight", "lastNight", "note", "place", "link", "photo"],
+      fields: ["name", "nameJp", "addressJp", "firstNight", "lastNight", "note", "place", "link", "photo", "lat", "lng"],
     };
   }
-  if (kind === "day") return { tab: "Days", key: "date", deletable: false, fromRow: dayFromRow, toRow: dayToRow, missing: MSG_.noDay, fields: DAY_PATCH_KEYS };
+  if (kind === "day") return { tab: "Days", key: "date", deletable: false, fromRow: dayFromRow, toRow: dayToRow, missing: MSG_.noDay, fields: DAY_PATCH_KEYS.concat(["lat", "lng"]) };
   return null;
 }
 
@@ -954,6 +954,11 @@ function saveStay_(args, ctx) {
   if (!row) return addPlanItem_("stay", v.value, ctx);
   var cur = plan.fromRow(row);
   if (cur.deleted) return err_("bad_input", MSG_.editDeleted);
+  // A new address, name or place: the old coordinates were for the old one.
+  if (v.value.addressJp !== cur.addressJp || v.value.name !== cur.name || v.value.place !== cur.place) {
+    v.value.lat = "";
+    v.value.lng = "";
+  }
   return editPlanItem_("stay", cur.id, cur, v.value, ctx);
 }
 
@@ -981,6 +986,11 @@ function setDay_(args, ctx) {
   var cur = plan.fromRow(row);
   var next = planFields_(plan, cur);
   Object.keys(v.value).forEach(function (k) { next[k] = v.value[k]; });
+  // A new city: the old coordinates were for the old one.
+  if (next.city !== cur.city) {
+    next.lat = "";
+    next.lng = "";
+  }
   return editPlanItem_("day", cur.date, cur, next, ctx);
 }
 

@@ -305,3 +305,39 @@ test("I4: with the day not yet located, the answer is taken (nothing to check it
   await call.fake({ key: KEY, action: "locate", args: {} });
   assert.equal(stopById((await call("load")).data, "planstop1203").lat, "34.6937");
 });
+
+test("(c) a stay whose address, name or place changes loses its coordinates; other edits keep them; undo puts them back", async () => {
+  const call = client();
+  const at = () => { const r = call.fake.tables.Stays.find((x) => x.id === "planstay0001"); r.lat = "35.7119"; r.lng = "139.7967"; };
+  const stay = async () => (await call("load")).data.stays.find((x) => x.id === "planstay0001");
+  const base = async () => { const s = await stay(); const { deleted, lat, lng, ...rest } = s; return rest; };
+  at();
+  let r = await call("saveStay", { stay: { ...(await base()), note: "Late check-in" } });
+  assert.equal(r.data.stay.lat, "35.7119", "a note keeps them");
+  for (const change of [{ addressJp: "東京都台東区浅草2-2-2" }, { name: "Asakusa Inn" }, { place: "Asakusa Inn Tokyo" }]) {
+    at();
+    r = await call("saveStay", { stay: { ...(await base()), ...change } });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual([r.data.stay.lat, r.data.stay.lng], ["", ""], JSON.stringify(change));
+  }
+  const u = await call("undo", { logId: r.data.logId });
+  assert.equal(u.data.stay.lat, "35.7119", "undoing the change brings them back");
+  // Through the connector (merge) too.
+  at();
+  const m = await call("saveStay", { stay: { id: "planstay0001", addressJp: "別の住所" }, merge: true }, { via: "claude" });
+  assert.equal(m.data.stay.lat, "");
+});
+
+test("(c) a day whose city changes loses its coordinates; another change keeps them", async () => {
+  const call = client();
+  const at = () => { const r = call.fake.tables.Days.find((x) => x.date === "2026-12-12"); r.lat = "35.68"; r.lng = "139.77"; };
+  at();
+  let r = await call("setDay", { date: "2026-12-12", patch: { title: "Busy" } });
+  assert.equal(r.data.day.lat, "35.68");
+  r = await call("setDay", { date: "2026-12-12", patch: { city: "Tokyo" } });
+  assert.equal(r.data.day.lat, "35.68", "the same city is no change");
+  r = await call("setDay", { date: "2026-12-12", patch: { city: "Yokohama" } });
+  assert.deepEqual([r.data.day.lat, r.data.day.lng], ["", ""]);
+  const u = await call("undo", { logId: r.data.logId });
+  assert.equal(u.data.day.lat, "35.68");
+});
