@@ -403,7 +403,7 @@ module.exports = [
 module.exports.push({
   name: "a changed e-Transfer address shows on the tape as a sentence, without the address and with no Undo",
   async run({ page }) {
-    const backend = await ready(page);
+    const backend = await ready(page, { own: "Mo" });
     await page.click("#youBtn");
     await until(() => page.evaluate(() => document.getElementById("you").classList.contains("is-open")), "settings open");
     await page.fill("#setMail", "mo@example.test");

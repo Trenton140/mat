@@ -28,6 +28,9 @@ function memStorage(init = {}) {
     map,
     getItem: (k) => (map.has(k) ? map.get(k) : null),
     setItem: (k, v) => { map.set(k, String(v)); },
+    removeItem: (k) => { map.delete(k); },
+    key: (i) => [...map.keys()][i] ?? null,
+    get length() { return map.size; },
   };
 }
 
@@ -3219,4 +3222,116 @@ test("fix minor b: after a pull cut short (more), the problems carry this fetch'
   assert.ok(tp.list[0].message.length <= 160);
   assert.ok(tp.list[0].message.endsWith("…"));
   assert.equal(tp.list[0].message.includes("  "), false);
+});
+
+// ---------- security (2026-11-18): who you are, a refused key ----------
+
+test("a phone on its own link is that person: me from the backend, kept in mat.me, and no choice", async () => {
+  const fake = createFakeBackend(SEED);
+  const key = fake.personKey("Ajen");
+  const p = phone({ fake, storage: memStorage({ "mat.key": key, "mat.me": "Mo" }) });
+  await p.store.boot();
+  assert.deepEqual([p.store.state.me, p.store.state.personal], ["Ajen", true]);
+  assert.equal(p.storage.getItem("mat.me"), "Ajen");
+  p.store.setMe("Trenton");
+  assert.equal(p.store.state.me, "Ajen", "the choice cannot be changed");
+  // Offline from the saved trip, still that person.
+  const again = phone({ fake, storage: p.storage });
+  again.net.offline = true;
+  await again.store.boot();
+  assert.deepEqual([again.store.state.me, again.store.state.personal], ["Ajen", true]);
+});
+
+test("on the shared link nothing changes: personal is false and the choice is the phone's", async () => {
+  const p = phone({ me: "Mo" });
+  await p.store.boot();
+  assert.deepEqual([p.store.state.me, p.store.state.personal], ["Mo", false]);
+  p.store.setMe("Ajen");
+  assert.equal(p.store.state.me, "Ajen");
+});
+
+test("a refused key takes the trip off the phone, keeps only this person's own unsent lines, and sends nothing more", async () => {
+  const fake = createFakeBackend(SEED);
+  const key = fake.personKey("Ajen");
+  const storage = memStorage({ "mat.key": key, "mat.tab": "money", "mat.how": "1", "other.app": "x" });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  assert.equal(p.store.state.status, "ready");
+  assert.ok(storage.getItem("mat.cache"));
+  // One line of Ajen's waits without signal; an older one rung up as Mo is in the queue too.
+  p.net.offline = true;
+  p.store.addExpense(draft({ paidBy: "Ajen", title: "Mine" }));
+  await p.store.idle();
+  const q = queueOf(storage);
+  q.push({ expense: { ...q[0].expense, id: "exp9999999", title: "Not mine" }, addedAt: q[0].addedAt, rate: q[0].rate, addedBy: "Mo", failed: false, sent: false });
+  storage.setItem("mat.queue", JSON.stringify(q));
+  // The owner replaces Ajen's link; the phone comes back.
+  fake.world.newLinkForPerson2();
+  p.net.offline = false;
+  await p.store.checkRev();
+  await p.store.idle();
+  const s = p.store.state;
+  assert.deepEqual([s.status, s.keyRefused, s.me, s.personal, s.cleared], ["nokey", true, null, false, { kept: 1 }]);
+  assert.deepEqual([s.expenses.length, s.people.length, s.days.length, s.trip], [0, 0, 0, null]);
+  assert.deepEqual([...storage.map.keys()].sort(), ["mat.queue", "other.app"], "every other mat.* key is gone");
+  assert.deepEqual(queueOf(storage).map((x) => x.expense.title), ["Mine"]);
+  const before = p.net.sent.length;
+  await p.store.checkRev();
+  await p.store.flush();
+  p.store.markSeen();
+  assert.equal(p.net.sent.length, before, "nothing more goes out with the refused key");
+  assert.deepEqual([...storage.map.keys()].sort(), ["mat.queue", "other.app"], "and nothing more is written");
+  // A fresh phone on the same storage shows nothing of the trip until a link is given.
+  const next = phone({ fake, storage });
+  await next.store.boot();
+  assert.deepEqual([next.store.state.status, next.store.state.expenses.length], ["nokey", 0]);
+});
+
+test("an old phone's queued line, after its key was replaced, goes out on the new link as that person", async () => {
+  const fake = createFakeBackend(SEED);
+  const oldKey = fake.personKey("Ajen");
+  const storage = memStorage({ "mat.key": oldKey });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.addExpense(draft({ paidBy: "Ajen", title: "Kept line" }));
+  await p.store.idle();
+  fake.world.newLinkForPerson2();
+  const fresh = /#k=([0-9a-f]{64})$/.exec(fake.logged.find((l) => l.startsWith("Ajen’s link")))[1];
+  p.net.offline = false;
+  await p.store.checkRev();
+  await p.store.idle();
+  assert.equal(p.store.state.status, "nokey");
+  storage.setItem("mat.key", fresh); // the new link opened (first.js onKey keeps it and boots)
+  await p.store.boot();
+  await p.store.idle();
+  assert.equal(p.store.state.status, "ready");
+  const line = fake.tables.Expenses.find((e) => e.title === "Kept line");
+  assert.ok(line, "sent once the new link opened");
+  assert.equal(line.added_by, "Ajen");
+  assert.deepEqual(queueOf(storage), []);
+});
+
+test("a network failure or busy never takes the trip off", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.offline = true;
+  await p.store.checkRev();
+  p.net.offline = false;
+  p.net.override = (b) => (b.action === "rev" ? { ok: false, error: "busy", message: "busy" } : null);
+  await p.store.checkRev();
+  assert.equal(p.store.state.status, "ready");
+  assert.ok(p.storage.getItem("mat.cache"));
+  assert.ok(p.storage.getItem("mat.key"));
+});
+
+test("forgot() clears everything, keeps no queue, and shows the plain no-key screen", async () => {
+  const p = phone();
+  await p.store.boot();
+  p.net.offline = true;
+  p.store.addExpense(draft());
+  await p.store.idle();
+  p.store.forgot();
+  assert.deepEqual([p.store.state.status, p.store.state.keyRefused, p.store.state.cleared, p.store.state.expenses.length], ["nokey", false, null, 0]);
+  assert.deepEqual([...p.storage.map.keys()], []);
 });

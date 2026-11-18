@@ -122,7 +122,7 @@ module.exports = [
       assert.equal(await askShown(page), false);
       await openYou(page);
       assert.equal(await text(page, "#setWhereV"), "Off");
-      assert.equal(await text(page, "#setWhere > span"), "現在地Location" + "For leave-by, distances and the stamp. It stays on this phone, never sent to the Sheet.");
+      assert.equal(await text(page, "#setWhere > span"), "現在地Location" + "For leave-by, distances and the stamp. Your position stays on this phone. A stamp pressed in the day’s place gets a small mark the others can see.");
       await shot(page, "6-you-off");
       await page.click("#setWhere");
       await until(async () => (await text(page, "#setWhereV")) === "On", "On");

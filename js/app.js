@@ -27,6 +27,7 @@ import { createUpdater, otherVersionIn } from "./update.js";
 import { APP_VERSION } from "./config.js";
 import { isWide, onWide } from "./shape.js";
 import { createWhere } from "./where.js";
+import { clearTrip, forgetPhone } from "./forget.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -44,7 +45,15 @@ function phoneStorage() {
     return s;
   } catch {
     const mem = new Map();
-    return { getItem: (k) => (mem.has(k) ? mem.get(k) : null), setItem: (k, v) => mem.set(k, String(v)) };
+    return {
+      getItem: (k) => (mem.has(k) ? mem.get(k) : null),
+      setItem: (k, v) => mem.set(k, String(v)),
+      removeItem: (k) => mem.delete(k),
+      key: (i) => [...mem.keys()][i] ?? null,
+      get length() {
+        return mem.size;
+      },
+    };
   }
 }
 
@@ -90,6 +99,11 @@ function withKey(storage, keyHere) {
       return v === null && k === "mat.key" ? keyHere() : v;
     },
     setItem: (k, v) => storage.setItem(k, v),
+    removeItem: (k) => storage.removeItem(k),
+    key: (i) => storage.key(i),
+    get length() {
+      return storage.length;
+    },
   };
 }
 
@@ -197,9 +211,19 @@ function start() {
   const api = createApi({
     url: API_URL,
     getKey: () => storage.getItem("mat.key"),
-    getActor: () => (store && store.state.me) || storage.getItem("mat.me"),
+    // On its own link the backend knows who this is: no name is sent.
+    getActor: () => (store && store.state.personal ? undefined : (store && store.state.me) || storage.getItem("mat.me")),
   });
-  store = createStore({ api, storage });
+  // A refused key takes the trip off the phone (js/store.js): the stored
+  // keys, and the key this visit came with.
+  store = createStore({
+    api,
+    storage,
+    clear: (queue) => {
+      keyHere = null;
+      clearTrip(raw, { queue });
+    },
+  });
 
   // Where the phone is: kept in memory only, never sent or stored (js/where.js).
   const where = createWhere({ storage: raw, geolocation: navigator.geolocation, permissions: navigator.permissions });
@@ -296,6 +320,25 @@ function start() {
     onHistory: () => {
       you.close(false);
       history.open();
+    },
+    // Forget this phone: the trip, the key and every setting, the offline
+    // copy and the worker, then the no-key screen.
+    onForget: async () => {
+      keyHere = null;
+      let session = null;
+      try {
+        session = window.sessionStorage;
+      } catch {
+        session = null;
+      }
+      await forgetPhone({
+        storages: [raw, session].filter(Boolean),
+        indexedDB: globalThis.indexedDB || null,
+        caches: globalThis.caches || null,
+        serviceWorker: (navigator && navigator.serviceWorker) || null,
+      });
+      store.forgot();
+      you.close(false);
     },
   });
   const line = mountLine(phone, store, {

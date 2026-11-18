@@ -47,7 +47,7 @@ async function listBackend({ nowMs = BEFORE, items = ITEMS, ago = 5 * MIN, claim
 async function ready(page, opts = {}) {
   const { nowMs = BEFORE, backend, go = true } = opts;
   const be = backend || (await listBackend(opts));
-  await open(page, { backend: be, nowMs, tab: "days" });
+  await open(page, { backend: be, nowMs, tab: "days", own: opts.own || null });
   await until(() => page.evaluate(() => document.querySelectorAll("#rail .tk").length > 0), "the tickets draw");
   if (go) await goBefore(page);
   return be;
@@ -1042,5 +1042,21 @@ module.exports.push({
     await advance(page, backend, 1700);
     await until(async () => !(await tabIsIn(page)), "the tab goes");
     assert.equal(await page.evaluate(() => document.activeElement && document.activeElement.dataset.tab), "days", "focus is on Days, not the body");
+  },
+});
+
+// Security (2026-11-18): on your own link someone else's claim is theirs.
+module.exports.push({
+  name: "on your own link there is no Take it over on someone else's item; I'll do it and Tick it off stay",
+  async run({ page }) {
+    const backend = await ready(page, { claims: { 2: "Ajen" }, own: "Mo" });
+    await page.dispatchEvent(row(2) + " .bw-b", "click");
+    await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row(2)), "row 2 opens");
+    assert.equal(await page.$(row(2) + " .bw-claim"), null, "no Take it over");
+    assert.ok(await page.$(row(2) + " .bw-tick"), "Tick it off is still there");
+    await page.dispatchEvent(row(1) + " .bw-b", "click");
+    await expectText(page, row(1) + " .bw-claim", "I’ll do it");
+    const r = await backend.handle({ key: backend.ownKeys.Mo, action: "claimTodo", args: { id: "2", on: true } });
+    assert.equal(r.ok, false, "the backend refuses it too");
   },
 });

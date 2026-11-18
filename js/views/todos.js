@@ -131,6 +131,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
   root.replaceChildren(section);
 
   let me = null;
+  let personal = false; // on your own link nobody else's claim can be taken over (security, 2026-11-18)
   let people = [];
   let openId = null; // the row opened by hand
   let doneOpen = false;
@@ -218,11 +219,13 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     const spot = el("span", "bw-spot");
     spot.append(el("span", "ghost", "済"));
     tick.append(el("span", "bw-tick-t", "Tick it off"), spot);
-    ctl.append(claim, tick);
+    // On your own link someone else's claim is theirs: no Take it over.
+    if (personal && t.claimedBy && !mine) ctl.append(tick);
+    else ctl.append(claim, tick);
     inner.append(ctl);
     more.append(inner);
     r.append(stub(t.id, position, seal(t.claimedBy, !t.claimedBy)), head, more);
-    drawn.set(r, JSON.stringify(["o", t.id, slipNo(t.id, position), t.item, t.bookBy, today, t.note, href, t.claimedBy, me, picKey(t.claimedBy), !!t.pending]));
+    drawn.set(r, JSON.stringify(["o", t.id, slipNo(t.id, position), t.item, t.bookBy, today, t.note, href, t.claimedBy, me, personal, picKey(t.claimedBy), !!t.pending]));
     return r;
   }
 
@@ -369,6 +372,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
   function render() {
     const s = store.state;
     me = s.me;
+    personal = s.personal === true;
     people = list(s.people);
     const todos = list(s.todos).filter((t) => t && typeof t.id === "string" && t.id && typeof t.item === "string");
     // A row put back (a refused tick, an undo) is no longer stamped.
