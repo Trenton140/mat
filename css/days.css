@@ -43,7 +43,7 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 .tk-band>span:first-child:not(.num){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tk-band i{font-weight:700;font-size:12.5px;margin-left:6px}
 .num{display:flex;align-items:baseline;gap:3px;margin-left:auto;background:#fff;color:#15120F;border-radius:4px;padding:1px 7px 2px;font-size:15px;font-weight:900;white-space:nowrap}
-.num small{font-size:10px}
+.num small{font-size:10.5px}
 .tk-head{position:relative;padding:11px 14px 13px}
 .tk-kind{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px}
 .tk-kind i{font-weight:500;margin-left:4px}
