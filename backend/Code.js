@@ -3,8 +3,10 @@ function json_(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// A plain GET says which backend this is (Stamp.js, written by `npm run
+// stamp`), so a release can check the live backend before publishing.
 function doGet() {
-  return json_({ ok: true, rev: 0, data: { name: "mat" } });
+  return json_({ ok: true, rev: 0, data: { name: "mat", stamp: typeof BACKEND_STAMP === "string" ? BACKEND_STAMP : "" } });
 }
 
 // One endpoint: the body is { key, actor, via, action, args }; Actions.js does
