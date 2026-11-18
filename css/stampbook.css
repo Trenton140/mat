@@ -78,6 +78,17 @@
 .bk-card{display:block;width:min(100%,270px);padding:22px 22px 16px;border-radius:5px;color:var(--print);background:var(--grain), var(--paper);
   box-shadow:0 30px 50px -20px #000;transform:rotate(-1.2deg);text-align:left}
 .bk-card .bk-st{position:static;display:block;width:100%;height:auto;aspect-ratio:1}
+/* 2A: 現地, a second small chop pressed over the stamp's lower right: pressed in the place. */
+.chop{position:absolute;right:-5%;bottom:-5%;width:27%;aspect-ratio:1;display:grid;place-items:center;border:2px solid var(--shu);border-radius:3px;
+  color:var(--shu);font-family:var(--seal);font-size:10.5px;line-height:1.02;text-align:center;letter-spacing:0;transform:rotate(-8deg);mix-blend-mode:multiply;
+  background:rgba(242,243,239,.55);pointer-events:none}
+/* Its type follows the stamp's size, so the two characters always sit inside the square. */
+.bk-well:has(.chop){container-type:inline-size}
+.chop{font-size:min(10.5px, 9.5cqw)}
+.chop span{display:block;writing-mode:vertical-rl;text-orientation:upright}
+.bk-card .bk-well{display:block}
+.bk-card .chop{width:27%;font-size:21px;font-size:min(21px, 9.5cqw);border-width:3px;right:-6%;bottom:-6%}
+.bk-lt i.in{color:var(--shu)}
 .bk-lt{display:block;margin-top:10px;padding-top:9px;border-top:1.5px solid var(--print);font-weight:900;font-size:14px;overflow-wrap:anywhere}
 .bk-lt i{display:block;font-family:var(--dot);font-weight:400;font-size:12.5px;margin-top:2px}
 .bk-lx{color:var(--dim);font-size:13px;font-weight:700}

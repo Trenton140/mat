@@ -2,7 +2,7 @@
 // The hotel card: where you sleep, to hold up to a taxi driver. A sheet on
 // the ticket's own stock, opened from a ticket's stay row.
 //
-// mountStayCard(root, store) -> { open(stayId), close(restoreFocus), isOpen() }
+// mountStayCard(root, store, { where }) -> { open(stayId), close(restoreFocus), isOpen() }
 // root is the phone. The card draws from store.state.stays only, so it opens
 // with no signal; nothing is fetched. It redraws on every store change while
 // open, and closes itself when its stay is gone. The name and the address are
@@ -21,8 +21,13 @@
 // kept awake while it is up where the phone allows (Wake Lock); a refusal is
 // silent, and only a screen really kept awake says so. On a computer it
 // opens in the Days pane. Closing the card closes it too.
+//
+// With a usable position (js/where.js) and the stay's coordinates, the card
+// also says how far (up to 50 km): 現在地 2.4 km from here. Otherwise nothing
+// is added. While the card is open it looks again every 15 seconds, so a
+// distance from a position no longer usable is taken off.
 
-import { safeHref, stayMapsUrl } from "../plan.js";
+import { safeHref, stayMapsUrl, stayDistance } from "../plan.js";
 
 const MARKUP = `
 <div class="sheet-top"><span>Where you sleep<i>宿泊</i></span><button type="button" id="stayDone">Done</button></div>
@@ -48,8 +53,10 @@ function link(cls, text, href) {
 // A photo address that failed to load is not drawn again (this visit).
 const failedPhotos = new Set();
 
-// The card's contents for one stay.
-function card(stay) {
+const RECHECK_MS = 15000;
+
+// The card's contents for one stay. far: "2.4 km from here", or "".
+function card(stay, far = "") {
   const nodes = [];
   const photo = safeHref(stay.photo);
   if (photo && !failedPhotos.has(photo)) {
@@ -93,6 +100,11 @@ function card(stay) {
     drv.append(words, arrow);
     drv.setAttribute("aria-label", "運転手さんへ Show to driver");
     nodes.push(drv);
+  }
+  if (far) {
+    const d = el("div", "sy-dist");
+    d.append(el("span", "here", "現在地"), el("span", "dist", far));
+    nodes.push(d);
   }
   return nodes;
 }
@@ -143,7 +155,7 @@ function fitType(box) {
   }
 }
 
-export function mountStayCard(root, store) {
+export function mountStayCard(root, store, { where = null } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "stayScrim";
   scrim.hidden = true;
@@ -160,6 +172,7 @@ export function mountStayCard(root, store) {
   const done = sheet.querySelector("#stayDone");
   let stayId = null;
   let shown = ""; // what the card was last drawn from
+  let recheck = null; // while open: is the distance still from a usable position?
 
   // The driver's screen, over the card.
   const dScrim = el("div", "scrim");
@@ -309,12 +322,13 @@ export function mountStayCard(root, store) {
       if (str(stay.nameJp) || str(stay.addressJp)) drawDriver(stay);
       else closeDriver(false);
     }
-    const sig = JSON.stringify(stay);
+    const far = where ? stayDistance(stay, where.current()) : "";
+    const sig = JSON.stringify([stay, far]);
     if (sig === shown) return;
     shown = sig;
     // The key keeps focus across a redraw.
     const hadKey = document.activeElement && document.activeElement.classList.contains("drv") && sheet.contains(document.activeElement);
-    body.replaceChildren(...card(stay));
+    body.replaceChildren(...card(stay, far));
     if (hadKey) {
       const key = sheet.querySelector(".drv");
       if (key) key.focus({ preventScroll: true });
@@ -332,6 +346,7 @@ export function mountStayCard(root, store) {
     sheet.inert = false;
     scrim.hidden = false;
     root.classList.add("stay-open");
+    if (where && !recheck) recheck = setInterval(render, RECHECK_MS);
     sheet.scrollTop = 0;
     render();
     done.focus({ preventScroll: true });
@@ -342,6 +357,8 @@ export function mountStayCard(root, store) {
   function close(restoreFocus = true) {
     if (!isOpen()) return;
     closeDriver(false);
+    clearInterval(recheck);
+    recheck = null;
     const id = stayId;
     stayId = null;
     sheet.classList.remove("is-open");
@@ -366,6 +383,7 @@ export function mountStayCard(root, store) {
     if (ev.key === "Escape") close();
   });
   store.subscribe(render);
+  if (where) where.subscribe(render);
 
   return { open, close: (restoreFocus) => close(restoreFocus), isOpen };
 }

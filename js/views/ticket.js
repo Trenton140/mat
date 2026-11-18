@@ -20,6 +20,16 @@
 //   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1;
 //   stampOpen: today's stamp in the stamp book is open and not yet pressed,
 //   so the ticket carries a line, .tk-stampline, that opens the book.
+// - ask: today's ticket asks, once, whether to use where the phone is
+//   (.tk-ask under the date, with Use it and Not now; the Days view sees to
+//   the taps). Without it the ticket is exactly as it was.
+// - hereNext: leave-by from where you are (plan.js hereLine) for today's next
+//   stop, or absent: a 現在地 line under its name (distance, minutes on
+//   foot) and the leave line from the walking minutes, in vermilion when late.
+//   Absent, the next stop reads exactly as it did.
+// - near: { [stopId]: { dist, near } } (plan.js nearStops) on today's
+//   ticket: each open stop gets its 現在地 distance, the nearest the 近い tag.
+//   The order is never changed.
 // - stay: the night's stay (stayShownFor: on today's ticket before 04:00,
 //   last night's), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
@@ -176,9 +186,11 @@ function row(stop, model) {
   body.tabIndex = 0;
   body.setAttribute("aria-expanded", "false");
   const title = str(stop.title);
+  const near = model.near && model.near[stop.id] ? model.near[stop.id] : null;
   if (title || next) {
     const n = el("div", "r-n");
     if (next) n.append(el("span", "tag", "こんど"));
+    else if (near && near.near) n.append(el("span", "tag near", "近い"));
     if (title) n.append(title);
     body.append(n);
   }
@@ -188,11 +200,14 @@ function row(stop, model) {
     fx.append(el("b", "", "指定"), " ", el("span", "", "Fixed time"));
     body.append(fx);
   }
-  const lead = next ? nextLine(stop, minutes) : "";
+  const here = next && model.hereNext ? model.hereNext : null;
+  if (here) body.append(hereRow(here.dist));
+  else if (near) body.append(hereRow(near.dist));
+  const lead = here ? here.lead : next ? nextLine(stop, minutes) : "";
   const detail = str(stop.detail);
   if (lead || detail) {
     const s = el("div", "r-s");
-    if (lead) s.append(el("b", "r-lv", lead));
+    if (lead) s.append(el("b", here && here.late ? "r-lv is-late" : "r-lv", lead));
     if (lead && detail) s.append(" ");
     if (detail) s.append(detail);
     body.append(s);
@@ -241,6 +256,37 @@ function stampLine() {
   return b;
 }
 
+// 現在地, "you are here": the red box printed wherever the phone's position was used.
+export function hereBox() {
+  return el("span", "here", "現在地");
+}
+
+// 現在地 and a distance, boxed under a stop's name like 指定. Where it has to
+// wrap (a narrow phone), only after the dot: "1.2 km ·" / "20 min on foot".
+function hereRow(text) {
+  const fx = el("div", "r-fx at");
+  const kept = text.replace(/ /g, "\u00a0").replace("\u00a0·\u00a0", "\u00a0· ");
+  fx.append(hereBox(), el("span", "dist", kept));
+  return fx;
+}
+
+// The one-time line under the date on today's ticket: may MAT use where you are?
+function askLine() {
+  const d = el("div", "tk-ask");
+  const p = el("p");
+  const words = el("span", "", "Leave-by times from where you are?");
+  words.append(el("small", "", "Your location stays on this phone."));
+  p.append(hereBox(), words);
+  const yes = el("button", "yes", "Use it");
+  yes.type = "button";
+  const no = el("button", "no", "Not now");
+  no.type = "button";
+  const btns = el("div");
+  btns.append(yes, no);
+  d.append(p, btns);
+  return d;
+}
+
 // 宿泊 Tonight and the stay's name: a button that opens the hotel card.
 function stayRow(stay) {
   const b = el("button", "tk-stay");
@@ -277,6 +323,7 @@ export function ticketEl(model) {
   const dateRow = el("div", "tk-date");
   dateRow.append(when, validity(number, toGo));
   head.append(dateRow);
+  if (model.ask) head.append(askLine());
   if (model.stampOpen) head.append(stampLine());
   if (state === "used") head.append(gate(day, h, mark));
 

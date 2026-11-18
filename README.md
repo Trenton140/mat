@@ -62,6 +62,10 @@ unset MAT_KEY
 
 It answers `{"ok":true,...,"data":{"added":[...]}}` with the columns it added, for example `["Stays.deleted_at"]`.
 
+### locate (where things are)
+
+`Stops`, `Stays` and `Days` each have `lat` and `lng` (numbers kept as text, empty when not known); `migrate` adds the columns. `locate` fills them in with Apps Script's own geocoder (the Maps service: no key, no Cloud project), for every stop, stay and day that has none: a stop by its `place` (a Maps link with a position in it is read without asking), else its `title` with its day's `city`; a stay by its `address_jp`, else its `name` with its `place`; a day by its `city`. At most 40 lookups a call; it answers `{"found":n,"missing":n,"more":true|false}`. Run it after `migrate`, the same way, with `"action":"locate"`, and again while `more` is true. A lookup that finds nothing leaves the cells empty and is tried again on the next call. It writes no History; phones pick the positions up on their next check. A stop's position is cleared when its place changes, and can be set in the app (the stop's Edit sheet: paste a Google Maps link); the Claude connector shows positions but cannot set them. These are places' positions only: the phone's own position never leaves the phone.
+
 ## The Claude connector
 
 The backend is also an MCP server, so someone's Claude can read the trip and make changes in it.

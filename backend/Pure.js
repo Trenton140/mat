@@ -4,15 +4,15 @@
 var TABS = {
   Trip: ["key", "value"],
   People: ["name", "initials", "order", "etransfer", "simplify", "email", "photo"],
-  Days: ["date", "city", "title", "line_jp", "line_en", "line_colour", "from_jp", "from_en", "to_jp", "to_en"],
-  Stops: ["id", "date", "time", "title", "detail", "getting_there", "travel_min", "fixed", "place", "sign_jp", "booked", "link", "photo", "note", "deleted_at"],
-  Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "photo", "deleted_at"],
+  Days: ["date", "city", "title", "line_jp", "line_en", "line_colour", "from_jp", "from_en", "to_jp", "to_en", "lat", "lng"],
+  Stops: ["id", "date", "time", "title", "detail", "getting_there", "travel_min", "fixed", "place", "sign_jp", "booked", "link", "photo", "note", "deleted_at", "lat", "lng"],
+  Stays: ["id", "name", "name_jp", "address_jp", "first_night", "last_night", "note", "place", "link", "photo", "deleted_at", "lat", "lng"],
   Expenses: ["id", "day", "title", "amount", "currency", "rate", "paid_by", "split", "split_mode", "split_vals", "note", "kind", "receipt", "added_by", "added_at", "deleted_at", "planner_id"],
   Settlements: ["id", "from", "to", "cad", "stamped_by", "stamped_at", "seed", "rot", "removed_at"],
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
   Todos: ["id", "item", "book_by", "status", "note", "link", "claimed_by", "ticked_by", "ticked_at", "ticked_item", "planner_written", "planner_was", "gone"],
   StampDefs: ["id", "date", "name_ja", "name_en", "place", "motif", "ink", "shape"],
-  Stamps: ["id", "def", "who", "at", "seed", "gone"],
+  Stamps: ["id", "def", "who", "at", "seed", "gone", "here"],
 };
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
@@ -266,6 +266,63 @@ function optFlag_(v, message) {
   return { ok: true, value: v };
 }
 
+// ---- where things are (lat, lng: numbers kept as text, "" when unknown) ----
+
+var COORD_RE_ = /^-?\d{1,3}(\.\d+)?$/;
+var COORD_BAD_ = "That map position didn\u2019t come through properly.";
+
+// A coordinate as the Sheet keeps it: the number as text, else "".
+function coordText_(v, max) {
+  if (v === undefined || v === null || v === "") return "";
+  var t = String(v).trim();
+  if (!COORD_RE_.test(t)) return "";
+  var n = Number(t);
+  return isFinite(n) && Math.abs(n) <= max ? String(n) : "";
+}
+
+// { lat, lng } from a row: both or neither.
+function coordsOf_(o) {
+  var lat = coordText_(o.lat, 90);
+  var lng = coordText_(o.lng, 180);
+  return lat !== "" && lng !== "" ? { lat: lat, lng: lng } : { lat: "", lng: "" };
+}
+
+// Optional coordinates sent by the app (from a pasted Maps link): two
+// strings, both empty (not on the map) or both a coordinate.
+function optCoords_(lat, lng) {
+  if ((lat === undefined || lat === null) && (lng === undefined || lng === null)) return { ok: true, value: { lat: "", lng: "" } };
+  if (typeof lat !== "string" || typeof lng !== "string") return fail_(COORD_BAD_);
+  if (lat.trim() === "" && lng.trim() === "") return { ok: true, value: { lat: "", lng: "" } };
+  var c = { lat: coordText_(lat, 90), lng: coordText_(lng, 180) };
+  if (c.lat === "" || c.lng === "") return fail_(COORD_BAD_);
+  return { ok: true, value: c };
+}
+
+// Metres between two { lat, lng } (numbers or text), along the ground; NaN when either is not a coordinate.
+function metresBetween_(a, b) {
+  var p = coordsOf_(a || {}), q = coordsOf_(b || {});
+  if (p.lat === "" || q.lat === "") return NaN;
+  var rad = Math.PI / 180;
+  var dLat = (Number(q.lat) - Number(p.lat)) * rad, dLng = (Number(q.lng) - Number(p.lng)) * rad;
+  var h = Math.pow(Math.sin(dLat / 2), 2) + Math.cos(Number(p.lat) * rad) * Math.cos(Number(q.lat) * rad) * Math.pow(Math.sin(dLng / 2), 2);
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+// The position in a pasted Google Maps link (the place's pin !3d..!4d.., else,
+// only in a place or search link, the map's centre @lat,lng), or null. Never
+// from a directions link (its start may be where someone was) or a bare map
+// view. The same rule as js/geo.js pointFromLink.
+function pointFromLink(text) {
+  if (typeof text !== "string") return null;
+  var s = text.trim();
+  if (/\/dir\//i.test(s)) return null;
+  var m = /!3d(-?\d{1,2}(?:\.\d+)?)!4d(-?\d{1,3}(?:\.\d+)?)/.exec(s);
+  if (!m && /\/(?:place|search)\//i.test(s)) m = /@(-?\d{1,2}(?:\.\d+)?),(-?\d{1,3}(?:\.\d+)?)/.exec(s);
+  if (!m) return null;
+  var c = coordsOf_({ lat: m[1], lng: m[2] });
+  return c.lat === "" ? null : c;
+}
+
 function validateStop(input, dayDates) {
   if (!isObj_(input)) return fail_("That didn’t come through properly.");
   if (typeof input.id !== "string" || !ID_RE_.test(input.id)) return fail_("That stop has a bad id.");
@@ -295,9 +352,11 @@ function validateStop(input, dayDates) {
   if (!photo.ok) return photo;
   var note = optText_(input.note, 300, "Keep the note under 300 letters.");
   if (!note.ok) return note;
+  var at = optCoords_(input.lat, input.lng);
+  if (!at.ok) return at;
   return {
     ok: true,
-    value: { id: input.id, date: input.date, time: time, title: title, detail: detail.value, gettingThere: there.value, travelMin: travel, fixed: fixed.value, place: place.value, signJp: sign.value, booked: booked.value, link: link.value, photo: photo.value, note: note.value },
+    value: { id: input.id, date: input.date, time: time, title: title, detail: detail.value, gettingThere: there.value, travelMin: travel, fixed: fixed.value, place: place.value, signJp: sign.value, booked: booked.value, link: link.value, photo: photo.value, note: note.value, lat: at.value.lat, lng: at.value.lng },
   };
 }
 
@@ -469,6 +528,8 @@ function stopFromRow(o) {
     photo: safeUrl(cellText_(o.photo)),
     note: cellText_(o.note),
     deleted: cellSet_(o.deleted_at),
+    lat: coordsOf_(o).lat,
+    lng: coordsOf_(o).lng,
   };
 }
 
@@ -485,6 +546,8 @@ function stayFromRow(o) {
     link: safeUrl(cellText_(o.link)),
     photo: safeHttpsUrl(cellText_(o.photo)),
     deleted: cellSet_(o.deleted_at),
+    lat: coordsOf_(o).lat,
+    lng: coordsOf_(o).lng,
   };
 }
 
@@ -501,6 +564,8 @@ function dayFromRow(o) {
     fromEn: cellText_(o.from_en),
     toJp: cellText_(o.to_jp),
     toEn: cellText_(o.to_en),
+    lat: coordsOf_(o).lat,
+    lng: coordsOf_(o).lng,
   };
 }
 
@@ -557,6 +622,8 @@ function stopToRow(s) {
   put_(o, "link", s.link);
   put_(o, "photo", s.photo);
   put_(o, "note", s.note);
+  put_(o, "lat", s.lat);
+  put_(o, "lng", s.lng);
   return o;
 }
 
@@ -572,6 +639,8 @@ function stayToRow(s) {
   put_(o, "place", s.place);
   put_(o, "link", s.link);
   put_(o, "photo", s.photo);
+  put_(o, "lat", s.lat);
+  put_(o, "lng", s.lng);
   return o;
 }
 
@@ -587,6 +656,8 @@ function dayToRow(d) {
   put_(o, "from_en", d.fromEn);
   put_(o, "to_jp", d.toJp);
   put_(o, "to_en", d.toEn);
+  put_(o, "lat", d.lat);
+  put_(o, "lng", d.lng);
   return o;
 }
 
@@ -663,7 +734,7 @@ function expenseDiff_(before, after) {
   return "changed " + after.title + (changed.length ? ": " + changed.join(", ") : "");
 }
 
-var STOP_FIELD_LABELS_ = [["detail", "detail"], ["gettingThere", "directions"], ["travelMin", "travel time"], ["fixed", "fixed time"], ["place", "place"], ["signJp", "sign name"], ["booked", "booked"], ["link", "link"], ["photo", "photo"], ["note", "note"]];
+var STOP_FIELD_LABELS_ = [["detail", "detail"], ["gettingThere", "directions"], ["travelMin", "travel time"], ["fixed", "fixed time"], ["place", "place"], ["signJp", "sign name"], ["booked", "booked"], ["link", "link"], ["photo", "photo"], ["note", "note"], ["lat", "map"], ["lng", "map"]];
 
 function stopDiff_(before, after) {
   if (before.title !== after.title) return "renamed " + before.title + " to " + after.title;
@@ -672,7 +743,8 @@ function stopDiff_(before, after) {
   }
   var changed = [];
   for (var i = 0; i < STOP_FIELD_LABELS_.length; i++) {
-    if (before[STOP_FIELD_LABELS_[i][0]] !== after[STOP_FIELD_LABELS_[i][0]]) changed.push(STOP_FIELD_LABELS_[i][1]);
+    var label = STOP_FIELD_LABELS_[i][1];
+    if (before[STOP_FIELD_LABELS_[i][0]] !== after[STOP_FIELD_LABELS_[i][0]] && changed.indexOf(label) === -1) changed.push(label);
   }
   return "changed " + after.title + (changed.length ? ": " + changed.join(", ") : "");
 }
@@ -1207,6 +1279,8 @@ function stampDefFromRow(o) {
 function stampFromRow(o) {
   var s = { def: cellText_(o.def), who: cellText_(o.who), at: cellStamp_(o.at), seed: cellNum_(o.seed) };
   if (cellText_(o.gone) === "yes") s.gone = true;
+  // Pressed with the phone in the place: only this yes is ever kept, never where.
+  if (cellText_(o.here) === "yes") s.here = true;
   return s;
 }
 
@@ -1256,5 +1330,5 @@ function changeLogRow(rows, fields) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_, plannerWhat_ };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_, plannerWhat_, coordsOf_, pointFromLink, metresBetween_ };
 }

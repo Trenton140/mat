@@ -6,7 +6,11 @@
 // sheet is linked), the Google Sheet and "Report a problem".
 // One sheet, no sub-pages.
 //
-// mountYou(root, store, { onHistory(), onDemo(date), getKey(), screen() }) -> { open(), close(restoreFocus), isOpen() }
+// mountYou(root, store, { onHistory(), onDemo(date), getKey(), screen(), where }) -> { open(), close(restoreFocus), isOpen() }
+// where: the phone's position (js/where.js). Its row, 現在地 Location, says
+// On or Off and turns it on or off; when the phone said no, it says so and
+// where to change it. Only the choice is shown, never a position. A phone
+// with no geolocation has no row.
 // onDemo(date): a trip day was picked under "Try another day". demo: the trip's
 // clock (js/clock.js), so the row can say a demo is running.
 // screen(): the screen showing, "Days" or "Money", for Report a problem.
@@ -71,6 +75,7 @@ const MARKUP = `
     <input type="file" accept="image/*" id="setPicFile" tabindex="-1" aria-hidden="true" hidden>
   </div>
   <button type="button" class="set-r" id="setSound"><span>Stamp sound</span><b id="setSoundV">On</b></button>
+  <button type="button" class="set-r set-where" id="setWhere" hidden><span><span class="set-where-l"><span class="here">現在地</span>Location</span><small id="setWhereS"></small></span><b id="setWhereV" data-w="Phone said no"></b></button>
   <button type="button" class="set-r" id="setHist"><span>History<small>Every change, with undo</small></span><b>Open</b></button>
   <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh" data-w="Up to date 00:00"></b></button>
   <span class="set-vh" id="setFreshSay" role="status"></span>
@@ -135,7 +140,7 @@ function whenText(ms) {
   return dayHead(localDay(ms), []).en + ", " + clock(ms);
 }
 
-export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, demo = null, getKey = () => null, screen = () => "Money" } = {}) {
+export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {}, demo = null, getKey = () => null, screen = () => "Money", where = null } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "youScrim";
   scrim.hidden = true;
@@ -161,6 +166,9 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const picDel = $("setPicDel");
   const picFile = $("setPicFile");
   const soundV = $("setSoundV");
+  const whereRow = $("setWhere");
+  const whereS = $("setWhereS");
+  const whereV = $("setWhereV");
   const fresh = $("setFresh");
   const hear = $("setFreshSay");
   const how = $("setHow");
@@ -332,6 +340,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     drawMail(s);
     drawPic(s);
     soundV.textContent = soundOn() ? "On" : "Off";
+    drawWhere();
     drawDemoDays(s);
     setDemo(!demoDays.hidden);
     if (!fetching && !saying.has(fresh)) fresh.textContent = freshWord(s);
@@ -365,6 +374,19 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     demoDays.hidden = !show;
     demoRow.setAttribute("aria-expanded", show ? "true" : "false");
     demoV.textContent = show ? "Hide" : demo && demo.demoDay() ? "On" : "Pick";
+  }
+
+  const WHERE_FOR = "For leave-by, distances and the stamp. It stays on this phone, never sent to the Sheet.";
+  const WHERE_NO = "To change it: iPhone Settings, Apps, Safari, Location.";
+  function drawWhere() {
+    whereRow.hidden = !where || !where.supported();
+    if (whereRow.hidden) return;
+    const st = where.state();
+    const no = st === "refused";
+    whereV.textContent = no ? "Phone said no" : st === "on" ? "On" : "Off";
+    whereV.classList.toggle("on", st === "on");
+    whereV.classList.toggle("no", no);
+    whereS.textContent = no ? WHERE_NO : WHERE_FOR;
   }
 
   function setHow(show) {
@@ -479,6 +501,16 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     }
   });
 
+  // On: off. Off, not yet asked, or the phone said no: ask (the phone's own prompt, when it gives one).
+  whereRow.addEventListener("click", () => {
+    if (!where) return;
+    if (where.state() === "on") where.turnOff();
+    else where.ask();
+    drawWhere();
+  });
+  if (where) where.subscribe(() => {
+    if (opened) drawWhere();
+  });
   $("setSound").addEventListener("click", () => {
     setSound(!soundOn());
     soundV.textContent = soundOn() ? "On" : "Off";

@@ -318,7 +318,7 @@ const STOP = { id: "stopAAAA0001", date: "2026-12-12", title: " Shibuya Sky ", t
 
 test("validateStop fills the blanks and trims", () => {
   const v = P.validateStop(STOP, DATES);
-  assert.deepEqual(v.value, { id: "stopAAAA0001", date: "2026-12-12", time: "14:00", title: "Shibuya Sky", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "" });
+  assert.deepEqual(v.value, { id: "stopAAAA0001", date: "2026-12-12", time: "14:00", title: "Shibuya Sky", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "", lat: "", lng: "" });
 });
 test("validateStop refuses what it must", () => {
   const bad = (patch, message) => assert.deepEqual(P.validateStop({ ...STOP, ...patch }, DATES), { ok: false, message });
@@ -425,7 +425,8 @@ test("validateStay: an optional https photo, like a stop's", () => {
 test("stay photo: column after link, read through safeUrl, written by stayToRow", () => {
   const t = P.TABS.Stays;
   assert.equal(t[t.indexOf("link") + 1], "photo");
-  assert.equal(t[t.length - 1], "deleted_at");
+  // lat and lng came later: after deleted_at, where migrate adds them.
+  assert.deepEqual(t.slice(-3), ["deleted_at", "lat", "lng"]);
   assert.equal(P.isTextColumn("Stays", "photo"), P.isTextColumn("Stops", "photo"));
   assert.equal(P.stayFromRow({ id: "s", photo: "https://example.org/a.jpg" }).photo, "https://example.org/a.jpg");
   for (const bad of ["=HYPERLINK(\"https://example.org/a.jpg\")", "http://example.org/a.jpg", "javascript:x", undefined]) {
@@ -435,11 +436,11 @@ test("stay photo: column after link, read through safeUrl, written by stayToRow"
 });
 test("stay rows round-trip and read safely", () => {
   const stay = P.validateStay({ id: "stayAAAA0001", name: "Asakusa hotel", firstNight: "2026-12-10", lastNight: "2026-12-12", link: "https://x.test" }).value;
-  assert.deepEqual(P.stayFromRow(P.stayToRow(stay)), { ...stay, deleted: false });
+  assert.deepEqual(P.stayFromRow(P.stayToRow(stay)), { ...stay, deleted: false, lat: "", lng: "" });
   assert.equal("deleted_at" in P.stayToRow(stay), false);
   assert.equal(P.stayFromRow({ id: "s", name: "N", link: "javascript:x", deleted_at: "x" }).link, "");
   assert.equal(P.stayFromRow({ id: "s", deleted_at: "x" }).deleted, true);
-  assert.equal(P.TABS.Stays[P.TABS.Stays.length - 1], "deleted_at");
+  assert.deepEqual(P.TABS.Stays.slice(-3), ["deleted_at", "lat", "lng"]);
 });
 test("validateDayPatch", () => {
   assert.deepEqual(P.validateDayPatch({ city: " Tokyo ", lineColour: "#2fb6e8" }).value, { city: "Tokyo", lineColour: "#2fb6e8" });
@@ -452,7 +453,7 @@ test("validateDayPatch", () => {
   assert.deepEqual(P.validateDayPatch({ lineColour: "" }).value, { lineColour: "" });
 });
 test("day rows, labels and links", () => {
-  const d = { date: "2026-12-12", city: "Tokyo", title: "", lineJp: "山手線", lineEn: "Yamanote", lineColour: "#9ACD32", fromJp: "", fromEn: "", toJp: "", toEn: "" };
+  const d = { date: "2026-12-12", city: "Tokyo", title: "", lineJp: "山手線", lineEn: "Yamanote", lineColour: "#9ACD32", fromJp: "", fromEn: "", toJp: "", toEn: "", lat: "", lng: "" };
   assert.deepEqual(P.dayFromRow(P.dayToRow(d)), d);
   assert.equal(P.dayFromRow({ date: "2026-12-12", line_colour: "not a colour" }).lineColour, "");
   assert.equal(P.dayLabel("2026-12-12"), "Sat Dec 12");
@@ -719,4 +720,14 @@ test("wave A 9: a stay's photo link over 500 letters says it is too long, not th
   assert.equal(P.validateStay({ ...stay, photo: long }).message, "That picture link is too long.");
   assert.equal(P.validateStay({ ...stay, photo: "  " + long.slice(0, 498) + "  " }).ok, true, "500 letters once trimmed is fine");
   assert.equal(P.validateStay({ ...stay, photo: "http://photos.example.test/a.jpg" }).message, "That photo link has to start with https://.");
+});
+
+test("I3: the backend's pointFromLink never reads a directions link, and the map's centre only from a place or search link", () => {
+  const dir = "https://www.google.com/maps/dir/35.0036,135.7787/Kyoto+Station/@35.0,135.76,14z/data=!3d34.9858!4d135.7588";
+  assert.equal(P.pointFromLink(dir), null);
+  assert.equal(P.pointFromLink("https://www.google.com/maps/@34.9858,135.7588,15z"), null);
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/place/Kyoto+Station/@34.9858,135.7588,15z"), { lat: "34.9858", lng: "135.7588" });
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/search/ramen/@34.9858,135.7588,15z"), { lat: "34.9858", lng: "135.7588" });
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/place/x/@1,2,3z/data=!3d35.5!4d139.5"), { lat: "35.5", lng: "139.5" });
+  assert.deepEqual(P.pointFromLink("https://www.google.com/maps/@1,2,3z/data=!3d35.5!4d139.5"), { lat: "35.5", lng: "139.5" });
 });

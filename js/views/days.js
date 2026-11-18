@@ -4,10 +4,13 @@
 // 11", then "today", "used" or how long until that day) and a row of squares,
 // one per day, filled for used days, that jump to a day.
 //
-// mountDays(root, store, { clock, onStop, onAddStop, onStay, onAllDays })
+// mountDays(root, store, { clock, where, onStop, onAddStop, onStay, onAllDays })
 //   -> { goDay(index, smooth), day() }  (goDay is a deliberate jump)
 // - clock: the trip's clock (js/clock.js). Every "now" here comes from
 //   clock.now(), never Date.now(), and is judged in the trip's time zone.
+// - where: the phone's position (js/where.js), or null. While its choice is
+//   unset, today's ticket with a next stop asks once (.tk-ask): Use it asks
+//   the phone, Not now turns it off for good (You can turn it on).
 // - onAllDays(): the counter was tapped. onStay(stayId): a ticket's stay row
 //   was tapped. onAddStop(date): a ticket's ＋ Add a stop was tapped.
 //   onStop(stopId): an open stop's Edit was tapped.
@@ -40,7 +43,7 @@
 // ground under it), it goes back to the top. Never
 // on a minute tick, a sync or a redraw.
 
-import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor } from "../plan.js";
+import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor, hereLine, nearStops } from "../plan.js";
 import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
 import { summary as bookSummary, countText } from "../stampbook.js";
@@ -64,13 +67,16 @@ const calm = () => typeof matchMedia === "function" && matchMedia("(prefers-redu
 // whether a redrawn row is the same as the one on screen.
 const drawn = new WeakMap();
 
-// A row's markup without the text of its leave-by line.
-const LEAD = /(<b class="r-lv">)[^<]*(<\/b>)/;
-const withoutLead = (html) => html.replace(LEAD, "$1$2");
+// A row's markup without the text (and the late colour) of its leave-by
+// line, and without its distances (they move as the phone does).
+const LEAD = /(<b class="r-lv)(?: is-late)?(">)[^<]*(<\/b>)/;
+const DIST = /(<span class="dist">)[^<]*(<\/span>)/g;
+const withoutLead = (html) => html.replace(LEAD, "$1$2$3").replace(DIST, "$1$2");
 
 // Puts the fresh rows into `rows` in order, keeping each old row that is
 // drawn the same. A row that differs only in its leave-by line's words (the
-// next stop, every minute) keeps its node, and only those words change, so
+// next stop, every minute) or its distances from where you are keeps its
+// node, and only those words change, so
 // focus, its photo, a height change under way and a screen reader are left
 // alone. Only rows that changed otherwise, or moved, are touched.
 function patchRows(rows, fresh) {
@@ -84,8 +90,15 @@ function patchRows(rows, fresh) {
     if (was === now) return keep;
     const lead = keep.querySelector(".r-lv");
     const next = r.querySelector(".r-lv");
-    if (lead && next && withoutLead(was) === withoutLead(now)) {
-      lead.textContent = next.textContent;
+    if (!!lead === !!next && withoutLead(was) === withoutLead(now)) {
+      if (lead) {
+        lead.textContent = next.textContent;
+        if (lead.className !== next.className) lead.className = next.className;
+      }
+      const from = r.querySelectorAll(".dist");
+      keep.querySelectorAll(".dist").forEach((d, i) => {
+        if (from[i] && d.textContent !== from[i].textContent) d.textContent = from[i].textContent;
+      });
       drawn.set(keep, now);
       return keep;
     }
@@ -120,7 +133,7 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
+export function mountDays(root, store, { clock, where = null, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
@@ -380,6 +393,14 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     applyOpen();
   }
   rail.addEventListener("click", (ev) => {
+    if (where && ev.target.closest(".tk-ask .yes")) {
+      where.ask();
+      return;
+    }
+    if (where && ev.target.closest(".tk-ask .no")) {
+      where.turnOff();
+      return;
+    }
     if (ev.target.closest(".tk-stampline")) {
       onStampBook();
       return;
@@ -488,6 +509,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     const stays = list(s.stays).filter((x) => x && typeof x === "object");
     const expenses = list(s.expenses).filter((x) => x && typeof x === "object");
     const inView = cur >= 0 ? dates[cur] : null;
+    // Where the phone is, when usable (js/where.js): memory only.
+    const here = where ? where.current() : null;
     const left = rail.scrollLeft;
     const spot = focusSpot();
 
@@ -531,6 +554,18 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
         // Today's stamp is open and not yet pressed: the ticket says so.
         stampOpen: stampToday === day.date,
       };
+      // Leave by, from where you are: only with a usable position near the next stop.
+      if (nextId && here) {
+        const hl = hereLine(dayStops.find((x) => x.id === nextId), now.minutes, here);
+        if (hl) model.hereNext = hl;
+      }
+      // A loose day: the open stops' distances and the nearest, order kept.
+      if (state === "today" && here) {
+        const near = nearStops(dayStops, here);
+        if (Object.keys(near).length) model.near = near;
+      }
+      // Asked once, on today's ticket, the first time a day has a next stop.
+      if (nextId && where && where.supported() && where.state() === "unset") model.ask = true;
       const sig = JSON.stringify(model);
       if (sigs.get(day.date) === sig) return;
       sigs.set(day.date, sig);
@@ -615,6 +650,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
 
   render(store.state);
   store.subscribe(render);
+  if (where) where.subscribe(() => render(store.state));
   // Starting or stopping a demo is a deliberate jump: the rail goes to the
   // day the clock now says is today, whatever R32 would otherwise hold.
   let demoWas = clock.demoDay();

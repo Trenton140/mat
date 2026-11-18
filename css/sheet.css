@@ -73,6 +73,11 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:translateY
 .set-r b[data-w]{display:block;text-align:right}
 .set-r b[data-w]::after{content:attr(data-w);display:block;height:0;overflow:hidden;visibility:hidden}
 .set-col{flex-direction:column;align-items:stretch;gap:8px}
+/* 現在地 Location: the box before the word; On in the light ink, Phone said no in vermilion. */
+.set-where-l{white-space:nowrap}
+.set-where .here{margin-right:7px;vertical-align:2px}
+.set-r b.on{color:var(--text)}
+.set-r b.no{color:var(--shu)}
 /* Your picture: a tap on the row opens the phone's picker. With none, Add
    on the right like the other rows; with one, its seal on the right and
    Change / Remove on a line of their own under it, so the words keep the
@@ -144,6 +149,10 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:translateY
 .st-time{max-width:12em}
 .st-time input{font-variant-numeric:tabular-nums}
 /* The time can't slip: a switch, 指定 boxed as on the ticket. */
+/* On the map / Not on the map, and the field to paste a Maps link into. */
+.st-at-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px}
+.st-at-h b{font-size:15px;font-weight:900}
+.st-at-h i{font-size:12.5px;font-weight:500;overflow-wrap:anywhere}
 .st-sw{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:48px;font-size:15px;font-weight:900}
 .st-sw i{border:1.5px solid var(--print);border-radius:2px;padding:0 4px 1px;margin-left:8px;font-size:12.5px;font-weight:900}
 .st-sw input{flex:none;position:relative;width:50px;height:30px;margin:0;border:1.5px solid var(--print);border-radius:15px;background:var(--paper);

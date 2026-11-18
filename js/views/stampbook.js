@@ -17,6 +17,11 @@
 //   second. Under prefers-reduced-motion the stamp just appears.
 // - Every name, place and person's name goes in with textContent; the
 //   drawings come from bookStampSVG, which escapes its text.
+// - 現地: pressed with a usable position within 15 km of that day's
+//   coordinates (js/plan.js inPlace, js/where.js), the press carries here:
+//   true and the stamp gets a small square vermilion chop on its corner;
+//   held up it reads "pressed in <place>". No position, or elsewhere: no
+//   mark and no comment. It never stops a press.
 // - Redrawn only where something changed: a ring is replaced when its own
 //   state or stamp did, so a press landing keeps its landing and a person
 //   holding a stamp up is left alone.
@@ -25,6 +30,7 @@ import { bookStampSVG, countText, dayNumber, japanClock, japanDay, lockedLine, m
 import { calm, wetInk } from "../fx.js";
 import { thud, primeSound } from "../sound.js";
 import { fillSeal } from "../picture.js";
+import { inPlace } from "../plan.js";
 
 const RULE = "One stamp a day, pressed on the day, in the place.";
 const STAMPED = "Stamped.";
@@ -61,7 +67,15 @@ function el(tag, cls, text) {
 const list = (v) => (Array.isArray(v) ? v : []);
 const isoMs = (iso) => Date.parse(iso);
 
-export function mountStampBook(root, store, { now = () => Date.now() } = {}) {
+// 現地: the second, small square chop pressed over a stamp's corner.
+function chop() {
+  const c = el("span", "chop");
+  c.setAttribute("aria-hidden", "true");
+  c.append(el("span", "", "現地"));
+  return c;
+}
+
+export function mountStampBook(root, store, { now = () => Date.now(), where = null } = {}) {
   const scrim = el("div", "scrim");
   scrim.id = "bookScrim";
   scrim.hidden = true;
@@ -127,6 +141,7 @@ export function mountStampBook(root, store, { now = () => Date.now() } = {}) {
       well.style.setProperty("--rot", tiltOf(seed) + "deg");
       well.innerHTML = bookStampSVG(seed, d, defs); // escaped by bookStampSVG
       const svg = well.firstElementChild;
+      if (stamp.here === true) well.append(chop());
       if (hit && !calm()) {
         svg.classList.add("hit");
         wetInk(svg); // just landed: still wet (js/fx.js)
@@ -148,7 +163,7 @@ export function mountStampBook(root, store, { now = () => Date.now() } = {}) {
       const stamp = m.mine.get(d.id) || null;
       // Everything the ring prints: its state, its stamp and the definition. Not whether
       // the press is still on its way: the drawing is the same.
-      const sig = JSON.stringify([st, stamp ? [stamp.seed, stamp.at] : null, d.date, d.name_ja, d.name_en, d.place, d.motif, d.ink, d.shape]);
+      const sig = JSON.stringify([st, stamp ? [stamp.seed, stamp.at, stamp.here === true] : null, d.date, d.name_ja, d.name_en, d.place, d.motif, d.ink, d.shape]);
       let node = grid.querySelector('.bk-cell[data-def="' + CSS.escape(d.id) + '"]');
       if (node && sigs.get(d.id) === sig) {
         want.push(node);
@@ -220,7 +235,10 @@ export function mountStampBook(root, store, { now = () => Date.now() } = {}) {
   function press(d) {
     primeSound();
     hitId = d.id;
-    const token = store.pressStamp(d.id);
+    // In the place? Only a yes goes with the press, never where.
+    const day = d.date ? (store.state.days || []).find((x) => x && x.date === d.date) : null;
+    const here = !!(where && day && inPlace(day, where.current()));
+    const token = store.pressStamp(d.id, { here });
     if (!token) {
       hitId = null;
       return;
@@ -247,7 +265,10 @@ export function mountStampBook(root, store, { now = () => Date.now() } = {}) {
     b.type = "button";
     b.setAttribute("aria-label", "Put the stamp back");
     const card = el("span", "bk-card");
-    card.innerHTML = bookStampSVG(stamp.seed, d, usableDefs(store.state.stampDefs)); // escaped by bookStampSVG
+    const well = el("span", "bk-well");
+    well.innerHTML = bookStampSVG(stamp.seed, d, usableDefs(store.state.stampDefs)); // escaped by bookStampSVG
+    if (stamp.here === true) well.append(chop());
+    card.append(well);
     const t = el("span", "bk-lt");
     t.append([d.name_ja, d.name_en].filter(Boolean).join(" ") || "Stamp");
     if (d.place) t.append(el("i", "", d.place));
@@ -255,6 +276,7 @@ export function mountStampBook(root, store, { now = () => Date.now() } = {}) {
     const day = d.date || (isFinite(at) ? japanDay(at) : "");
     const when = (day ? weekdayOf(day) + " " + monthDay(day) : "") + (isFinite(at) ? (day ? " · " : "") + "stamped " + japanClock(at) : "");
     if (when) t.append(el("i", "", when));
+    if (stamp.here === true) t.append(el("i", "in", "pressed in " + (d.place || "the place")));
     card.append(t);
     b.append(card, el("span", "bk-lx", LOOK_BACK));
     b.addEventListener("click", () => closeLook(true));
