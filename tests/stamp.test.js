@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { rng, paidStampSVG, gateStampSVG, boxSealSVG } from "../js/stamp.js";
-import { remindText, sentCents, settledOf, filedText } from "../js/views/slip.js";
+import { remindText, sentCents, settledOf, filedText, purposeLine, voucherNo } from "../js/views/slip.js";
 
 test("a stamp is drawn from its seed: the same seed, the same stamp", () => {
   assert.equal(paidStampSVG(42), paidStampSVG(42));
@@ -106,4 +106,17 @@ test("the working: paid, share, sent, and received only when not zero", async ()
   const other = workingLines("Ajen", { ...w, received: 400 }, "Mo");
   assert.deepEqual(other.map((l) => [l.label, l.cents]), [["Ajen paid", 0], ["Ajen’s share came to", 1000], ["Already sent", 0], ["Already received", 400]]);
   assert.equal(other[0].paid, true);
+});
+
+test("the voucher's 但 line: the trip, its dates and year, and how many people", () => {
+  const P3 = [{ name: "Mo" }, { name: "Ajen" }, { name: "Trenton" }];
+  assert.equal(purposeLine({ name: "Japan", start: "2026-12-10", end: "2026-12-20" }, P3), "Japan, Dec 10 to 20, 2026. Three people.");
+  assert.equal(purposeLine({ name: "Japan 2026", start: "2026-12-10", end: "2026-12-20" }, P3), "Japan 2026, Dec 10 to 20. Three people.", "the year once");
+  assert.equal(purposeLine({ name: "", start: "2026-12-30", end: "2027-01-02" }, P3.slice(0, 1)), "Dec 30 to Jan 2, 2027. One person.");
+  assert.equal(purposeLine({ name: "<b>x</b>", start: "2026-12-10", end: "2026-12-20" }, Array(12).fill({ name: "a" })), "<b>x</b>, Dec 10 to 20, 2026. 12 people.", "plain text, set with textContent");
+});
+
+test("the voucher's number counts the stamped payments, this one included", () => {
+  assert.equal(voucherNo(0), "No.0001");
+  assert.equal(voucherNo(6), "No.0007");
 });

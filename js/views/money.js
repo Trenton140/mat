@@ -168,7 +168,7 @@ export function mountMoney(root, store, { onRing = () => {}, onLine = () => {}, 
   asideNote.setAttribute("role", "status");
   asideNote.hidden = true;
   top.append(say, sayP, rateNote, asideNote, histBtn);
-  const slip = el("div", "slip");
+  const slip = el("div", "slip cf");
   slip.id = "slip";
   const rc = el("div", "rc");
   rc.id = "rc";

@@ -13,7 +13,7 @@
 // import time, so tests import this module in Node.
 
 import { owedList, direct, routedVia, balances } from "../money.js";
-import { dollars, pt, dayHead, localDay } from "../format.js";
+import { dollars, pt, dayHead, localDay, tripSpan, issuer } from "../format.js";
 import { paidStampSVG, boxSealSVG } from "../stamp.js";
 import { wetInk, WET_MS } from "../fx.js";
 import { thud } from "../sound.js";
@@ -86,6 +86,24 @@ export function filedText(st) {
   };
 }
 
+const COUNT = ["", "One person", "Two people", "Three people", "Four people", "Five people", "Six people", "Seven people", "Eight people", "Nine people", "Ten people"];
+
+// The voucher's 但 line (what it is for): "Japan, Dec 10 to 20, 2026. Three people."
+// Text from the Sheet: it goes on the page with textContent only.
+export function purposeLine(trip, people) {
+  const n = people.length;
+  const name = trip && trip.name ? String(trip.name) : "";
+  const year = trip && trip.end ? trip.end.slice(0, 4) : "";
+  // The year once: after the dates, unless the trip's name already has it.
+  const when = trip && trip.start && trip.end ? tripSpan(trip) + (name.includes(year) ? "" : ", " + year) : "";
+  const what = [name, when].filter(Boolean).join(", ");
+  const who = COUNT[n] || n + " people";
+  return (what ? what + ". " : "") + who + ".";
+}
+
+// The voucher's number: the payments stamped so far, and this one.
+export const voucherNo = (stamps) => "No." + String(stamps + 1).padStart(4, "0");
+
 const keyOf = (t) => t.from + ">" + t.to;
 const centsOf = (p) => Math.round(p.cad * 100);
 const calm = () => !!(globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -110,7 +128,7 @@ function read(s) {
   const open = list.map((t) => ({ ...t, key: keyOf(t), via: simplify ? routedVia(t, directList, names) : null }));
   const stamps = s.payments.filter((p) => !p.removed).sort(newestFirst);
   const address = Object.fromEntries(s.people.map((p) => [p.name, p.etransfer ? String(p.etransfer).trim() : ""]));
-  return { me: s.me, simplify, people: s.people, live, payments: s.payments, open, stamps, address };
+  return { me: s.me, simplify, people: s.people, live, payments: s.payments, open, stamps, address, purpose: purposeLine(s.trip, s.people), mark: issuer(s.people) };
 }
 
 export function mountSlip(slip, store) {
@@ -330,6 +348,29 @@ export function mountSlip(slip, store) {
 
   // The settled slip (mock-up 2B): everything under the head in a fold, the
   // filed line with Open, the binder holes and the square seal.
+  // The voucher (mock-up 1A): the carbon copy (控) of a 精算書 torn from a
+  // pad, its form printed in indigo: a revenue-stamp box, the title, the copy
+  // mark and its number, then the column heads.
+  function voucherHead(v) {
+    const h = el("div", "cf-h");
+    const inshi = el("div", "cf-inshi");
+    inshi.setAttribute("aria-hidden", "true");
+    inshi.append(el("b", "", "収入"), el("b", "", "印紙"));
+    const t = el("div", "slip-t cf-t");
+    t.append(el("b", "", "旅費精算書"), el("span", "", "Trip settlement · " + v.mark));
+    const no = el("div", "cf-no");
+    no.append(el("b", "", "控"), el("i", "", voucherNo(v.stamps.length)));
+    h.append(inshi, t, no);
+    return h;
+  }
+
+  function cols() {
+    const c = el("div", "cf-cols");
+    c.setAttribute("aria-hidden", "true");
+    c.append(el("span", "", "支払 → 受取\u3000From → to, amount"), el("span", "", "済 Paid"));
+    return c;
+  }
+
   function holes() {
     const h = el("div", "holes");
     h.setAttribute("aria-hidden", "true");
@@ -402,7 +443,7 @@ export function mountSlip(slip, store) {
 
     const hits = calm() ? new Set() : fresh;
     const sig = JSON.stringify([
-      v.me, v.simplify, v.open, v.address,
+      v.me, v.simplify, v.open, v.address, v.purpose, v.mark,
       v.stamps.map((p) => [p.id, p.from, p.to, p.cad, p.seed, p.rot, paidDay(v, p)]),
       ui.work ? [v.live.map((e) => [e.id, e.title, e.amount, e.currency, e.rate, e.paidBy, e.split, e.splitMode, e.splitVals, e.day]), v.payments.map((p) => [p.id, p.removed])] : 0,
       { ...ui, amt: undefined },
@@ -419,8 +460,7 @@ export function mountSlip(slip, store) {
     const focus = focusTarget();
     const caret = focus && focus.a.id === "stampAmt" ? [focus.a.selectionStart, focus.a.selectionEnd] : null;
 
-    const head = el("div", "slip-t");
-    head.append(el("b", "", "旅費精算書"), el("span", "", "Trip settlement"));
+    const head = voucherHead(v);
     const rows = v.open.map((t) => openRow(v, t));
     const stamps = ui.older ? v.stamps : v.stamps.slice(0, FOLD);
     if (!rows.length && !v.stamps.length) rows.push(el("div", "s-row s-none", "Nobody owes anybody."));
@@ -432,7 +472,9 @@ export function mountSlip(slip, store) {
       rows.push(older);
     }
     const foot = el("div", "slip-f", "Stamp it the moment you send. What’s left is always what’s shown here.");
-    const body = [...rows, foot, ...(v.me ? [simpBlock(v)] : [])];
+    const but = el("div", "cf-but");
+    but.append(el("b", "", "但"), el("span", "", v.purpose));
+    const body = [cols(), ...rows, but, foot, ...(v.me ? [simpBlock(v)] : [])];
     const st = seal.phase === "sealed" || seal.phase === "filed" ? settledOf(v.open, v.stamps) : null;
     if (st) slip.replaceChildren(holes(), head, foldOf(body), stubOf(st), sealOf(st));
     else slip.replaceChildren(head, ...body);
