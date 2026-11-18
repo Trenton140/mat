@@ -3475,3 +3475,18 @@ test("unsentCount: what Forget this phone would lose", async () => {
   await p.store.idle();
   assert.equal(p.store.unsentCount(), 2);
 });
+
+test("I3: a broken PERSON_KEYS (the plain server sentence) never takes the trip off a phone", async () => {
+  const fake = createFakeBackend(SEED);
+  const mine = fake.personKey("Ajen");
+  const storage = memStorage({ "mat.key": mine });
+  const p = phone({ fake, storage });
+  await p.store.boot();
+  fake.props.PERSON_KEYS = "{broken";
+  await p.store.checkRev();
+  await p.store.refresh();
+  await p.store.idle();
+  assert.deepEqual([p.store.state.status, p.store.state.keyRefused, p.store.state.me], ["ready", false, "Ajen"]);
+  assert.equal(storage.getItem("mat.key"), mine);
+  assert.ok(storage.getItem("mat.cache"));
+});
