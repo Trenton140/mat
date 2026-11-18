@@ -525,19 +525,33 @@ const UPDATE_LOOK_MS = 10 * 60 * 1000;
 // query, so the offline worker does not answer it from its kept copy and the
 // network is asked; no-store, so the browser's own copy is not used either.
 // A failed answer is tried again at the next return; an odd one (a captive
-// page) does nothing. A different APP_VERSION goes to the updater, which waits
-// until nothing would be lost and never reloads twice within a minute.
+// page) does nothing.
+//
+// A different APP_VERSION on the server is not yet a reason to reload: a
+// reload is answered from the worker's kept copy, and until the worker has
+// fetched the release that copy is still this version (the reload would land
+// where it started, and the real one would follow a minute later). So the
+// page then reads js/config.js once more WITHOUT the query, which is what a
+// reload would get. Only when that is another version too does it go to the
+// updater (which waits until nothing would be lost and never reloads twice
+// within a minute). Otherwise the worker, asked to look in the same return to
+// the screen, says so itself when it has taken over.
 let lastLook = 0;
 function lookForRelease() {
   const now = Date.now();
   if (now - lastLook < UPDATE_LOOK_MS) return;
   const before = lastLook;
   lastLook = now;
+  const config = new URL("./config.js", import.meta.url).href;
+  const read = (url, cache) =>
+    Promise.resolve(fetch(url, { cache })).then((r) => (r && r.ok ? r.text() : Promise.reject(new Error("no answer"))));
   try {
-    Promise.resolve(fetch(new URL("./config.js", import.meta.url).href + "?look=" + now, { cache: "no-store" }))
-      .then((r) => (r && r.ok ? r.text() : Promise.reject(new Error("no answer"))))
+    read(config + "?look=" + now, "no-store")
       .then((text) => {
-        if (otherVersionIn(APP_VERSION, text) !== null) updater.newVersion();
+        if (otherVersionIn(APP_VERSION, text) === null) return null;
+        return read(config, "no-cache").then((kept) => {
+          if (otherVersionIn(APP_VERSION, kept) !== null) updater.newVersion();
+        });
       })
       .catch(() => {
         lastLook = before;

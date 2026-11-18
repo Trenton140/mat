@@ -361,6 +361,26 @@ cases.push({
   },
 });
 cases.push({
+  name: "a new version on the server that a reload would not reach yet (the worker still keeps this one) does not reload the page",
+  async run({ page }) {
+    await money(page);
+    await mark(page);
+    const running = await page.evaluate(async () => (await import("/js/config.js")).APP_VERSION);
+    const asked = [];
+    // The server has 9999; what a reload would be answered with is still the running version.
+    await page.route("**/js/config.js*", (route) => {
+      const url = route.request().url();
+      asked.push(url);
+      return route.fulfill({ status: 200, contentType: "text/javascript", body: CONFIG(/\?look=/.test(url) ? "9999" : running) });
+    });
+    await comeBack(page);
+    await until(() => asked.filter((u) => !/\?look=/.test(u)).length >= 1, "the page asks what a reload would get");
+    await page.waitForTimeout(600);
+    assert.equal(await reloaded(page), false, "no reload that would land on the same version");
+    assert.equal(asked.filter((u) => /\?look=/.test(u)).length, 1, "one look: " + asked);
+  },
+});
+cases.push({
   name: "the same APP_VERSION, a failed answer or an odd one change nothing, and looks are at least 10 minutes apart",
   async run({ page }) {
     const backend = await money(page);
