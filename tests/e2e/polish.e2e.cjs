@@ -341,6 +341,8 @@ const comeBack = (page) => page.evaluate(() => {
   document.dispatchEvent(new Event("visibilitychange"));
 });
 const mark = (page) => page.evaluate(() => { window.__notReloaded = true; });
+// The app is drawn again after the reload (a case that ends mid-reload leaves the browser closing a page that is loading).
+const backAgain = (page) => until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0).catch(() => false), "the app is back");
 const reloaded = (page) => page.evaluate(() => window.__notReloaded !== true).catch(() => true);
 cases.push({
   name: "coming back on screen looks at js/config.js: a different APP_VERSION reloads the page once",
@@ -351,8 +353,11 @@ cases.push({
     await serveVersion(page, "9999", asked);
     await comeBack(page);
     await until(() => reloaded(page), "the page reloads itself");
-    assert.equal(asked.length, 1, "one look");
-    assert.ok(/config\.js\?/.test(asked[0]), "asked in a way the offline worker does not answer from its kept copy: " + asked[0]);
+    await backAgain(page);
+    // (The reloaded page then loads js/config.js itself, without a query: not a look.)
+    const looks = asked.filter((u) => /config\.js\?look=/.test(u));
+    assert.equal(looks.length, 1, "one look: " + asked);
+    assert.ok(/config\.js\?/.test(looks[0]), "asked in a way the offline worker does not answer from its kept copy: " + looks[0]);
   },
 });
 cases.push({
@@ -409,6 +414,7 @@ cases.push({
     await comeBack(page);
     await until(async () => (await looks()) === 4, "the fourth look");
     await until(() => reloaded(page), "a different version reloads");
+    await backAgain(page);
   },
 });
 cases.push({
@@ -429,6 +435,7 @@ cases.push({
     // Not awaited: the reload it sets off happens inside this call, which then never answers.
     page.clock.fastForward(4000).catch(() => {});
     await until(() => reloaded(page), "then it reloads");
+    await backAgain(page);
   },
 });
 
@@ -474,6 +481,17 @@ cases.push({
     await page.keyboard.press("ArrowRight");
     await page.waitForTimeout(250);
     assert.equal(await dayText(page), "Day 3 of 11", "not while a sheet is open");
+  },
+});
+cases.push({
+  name: "on a computer a key that is not an arrow still does what the browser does with it: Tab moves focus off the page",
+  viewport: WIDE,
+  mobile: false,
+  async run({ page }) {
+    await both(page);
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    await page.keyboard.press("Tab");
+    assert.equal(await page.evaluate(() => document.activeElement !== document.body), true, "Tab focused a control");
   },
 });
 cases.push({
@@ -629,12 +647,14 @@ const walk = {
   async "days-stop-open"(page) {
     await days(page);
     const row = '#rail .pg[data-date="' + D12 + '"] .r[data-id="' + DINNER + '"]';
-    await page.click(row + " .r-b");
+    await page.evaluate((sel) => document.querySelector(sel + " .r-b").click(), row);
     await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row), "the stop opens");
   },
   async "stop-sheet"(page) {
     await walk["days-stop-open"](page);
-    await page.click('#rail .pg[data-date="' + D12 + '"] .r[data-id="' + DINNER + '"] .r-edit');
+    const edit = '#rail .pg[data-date="' + D12 + '"] .r[data-id="' + DINNER + '"] .r-edit';
+    await until(() => page.evaluate((sel) => { const e = document.querySelector(sel); return !!e && e.getBoundingClientRect().height > 0; }, edit), "Edit shows");
+    await page.evaluate((sel) => document.querySelector(sel).click(), edit);
     await waitOpen(page, "stop");
   },
   async "all-days"(page) {
