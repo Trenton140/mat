@@ -360,7 +360,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     if (!root.classList.contains("is-active")) return;
     const phone = root.closest(".phone");
     if (phone && /(^|\s)[a-z]+-open(\s|$)/.test(phone.className)) return;
-    ev.preventDefault(); // the browser's own arrow scrolling would move the strip a second time
+    if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return; // Tab and the rest are the browser's
+    ev.preventDefault(); // its own arrow scrolling would move the strip a second time
     arrow(ev);
   });
 
