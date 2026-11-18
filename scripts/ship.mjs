@@ -16,7 +16,8 @@
 // 4. git push origin main (the push check runs again there).
 // 5. Wait until the site serves this version, then compare every file the
 //    phones cache, byte for byte, with this commit.
-// 6. Open the live site in a headless browser: it starts with no script error.
+// 6. Open the live site in a headless browser with the key in the fragment
+//    (never in the query string): the trip loads and there is no script error.
 //
 // It never prints a key. If a step fails it stops and says where things stand.
 
@@ -156,9 +157,14 @@ const errors = [];
 try {
   const page = await browser.newPage({ viewport: { width: 393, height: 852 } });
   page.on("pageerror", (e) => errors.push(String(e.message || e)));
-  await page.goto(SITE + "?k=" + env.MAT_KEY, { waitUntil: "load", timeout: 45000 });
+  // The key goes in the fragment, as an invite link has it: a fragment is never
+  // sent to the site's server (a query string is, and until 2026-11-18 this
+  // step put the key in one). The app reads it there, so this is also the only
+  // way the check really signs in: it waits for the trip's own day count.
+  await page.goto(SITE + "#k=" + encodeURIComponent(env.MAT_KEY), { waitUntil: "load", timeout: 45000 });
   await page.waitForSelector("#phone", { timeout: 20000 });
-  await sleep(4000);
+  await page.waitForSelector("#dayCount", { state: "visible", timeout: 30000 });
+  await sleep(2000);
 } catch (e) {
   errors.push("the page did not start: " + String(e.message || e).split("\n")[0].replace(env.MAT_KEY, "(key)"));
 } finally {
