@@ -15,7 +15,8 @@ const waitHist = (page) =>
   until(
     () => page.evaluate(() => {
       const s = document.getElementById("hist");
-      return s.classList.contains("is-open") && Math.abs(s.getBoundingClientRect().bottom - innerHeight) < 1;
+      // Risen and done sliding: measured mid-slide, a 40 px key reads 39.99998 px.
+      return s.classList.contains("is-open") && Math.abs(s.getBoundingClientRect().bottom - innerHeight) < 1 && getComputedStyle(s).transform === "none";
     }),
     "the history sheet opens",
   );
