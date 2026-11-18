@@ -112,10 +112,13 @@ test("locate: a stop's place first, then its title with the day's city; a stay's
   const call = client();
   const asked = geocoder(call, { "Lunch in Harajuku Tokyo": { lat: 35.67, lng: 139.70 }, "Niseko lodge": null });
   await call.fake({ key: KEY, action: "locate", args: {} });
+  const first = asked.map((a) => a.q);
+  // Meiji: its place this call, its title with the day's city the next (one lookup a row a call).
+  assert.ok(first.includes("Meiji Jingu") && !first.includes("Meiji Shrine Tokyo"), first.join(" | "));
+  await call.fake({ key: KEY, action: "locate", args: {} });
   const qs = asked.map((a) => a.q);
+  assert.ok(qs.includes("Meiji Shrine Tokyo"), qs.join(" | "));
   assert.ok(qs.includes("Lunch in Harajuku Tokyo"), qs.join(" | "));
-  // Meiji: place, then title + city.
-  assert.ok(qs.indexOf("Meiji Jingu") < qs.indexOf("Meiji Shrine Tokyo"), qs.join(" | "));
   // Niseko lodge has no address and no place: its name alone.
   assert.ok(qs.includes("Niseko lodge"), qs.join(" | "));
   // A deleted stop is not looked up.
@@ -233,4 +236,47 @@ test("I1: the same for a day's edit made before locate", async () => {
   const u = await call("undo", { logId: e.data.logId });
   assert.equal(u.ok, true);
   assert.equal(u.data.day.lat, "35.68");
+});
+
+function withSpots(n, good = true) {
+  const seed = JSON.parse(JSON.stringify(WITH_PLAN));
+  for (let i = 0; i < n; i++) seed.stops.push({ id: "nowhere" + String(i).padStart(5, "0"), date: "2026-12-14", time: "", title: "Nowhere " + i, place: "Nowhere place " + i });
+  if (good) seed.stops.push({ id: "goodstop0001", date: "2026-12-14", time: "", title: "Good", place: "Good place" });
+  return seed;
+}
+
+test("I2: failed lookups do not starve the rest: one lookup a row a call, untried rows first", async () => {
+  const call = client(withSpots(25));
+  const asked = geocoder(call, { "Good place": { lat: 35.1, lng: 139.1 } });
+  const r = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(stopById((await call("load")).data, "goodstop0001").lat, "35.1", "the good one on the first call");
+  assert.equal(r.data.more, false, "every row was tried once");
+  // Each row cost one lookup at most.
+  const byStop = asked.filter((a) => /^Nowhere/.test(a.q));
+  assert.equal(byStop.length, 25, byStop.map((a) => a.q).join(" | "));
+  // The next call tries their other form (title with the day's city).
+  const before = asked.length;
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const next = asked.slice(before).map((a) => a.q);
+  assert.ok(next.includes("Nowhere 0"), "its title (Dec 14 has no city): " + next.join(" | "));
+  assert.equal(next.includes("Nowhere place 0"), false);
+  // What was tried is kept in one Script Property, only for rows still there.
+  const tried = JSON.parse(call.fake.props.LOCATE_TRIED);
+  assert.ok(Object.keys(tried).length > 0 && !Object.keys(tried).some((k) => k.includes("goodstop0001")));
+});
+
+test("I2: more is true only while untried rows remain; the next call takes those first", async () => {
+  const call = client(withSpots(45));
+  geocoder(call, { "Good place": { lat: 35.1, lng: 139.1 } });
+  const r1 = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(r1.data.more, true);
+  assert.equal(stopById((await call("load")).data, "goodstop0001").lat, "");
+  const r2 = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(stopById((await call("load")).data, "goodstop0001").lat, "35.1", "untried rows go before rows tried already");
+  assert.equal(r2.data.more, false);
+  // A row that is gone is pruned from the tried list.
+  call.fake.tables.Stops.find((x) => x.id === "nowhere00000").deleted_at = "2026-12-01T00:00:00Z";
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal("stop:nowhere00000" in JSON.parse(call.fake.props.LOCATE_TRIED), false);
 });

@@ -803,34 +803,95 @@ function updateStop_(args, ctx) {
 
 // ---- where things are: locate ----
 // For each stop, stay and day with no coordinates, asks Apps Script's own
-// geocoder (Env.js geocode_, region jp): a stop by its place (a Maps link
-// with a position is read without asking), then its title with its day's
-// city; a stay by its Japanese address, then its name with its place; a day
-// by its city. At most LOCATE_MAX_ lookups a call (the same question twice in
-// a call is asked once); a lookup that fails or finds nothing leaves "" and
-// is asked again next call. No History line; rev moves when something was
-// found, so phones fetch it. -> { found, missing, more }
+// geocoder (Env.js geocode_, region jp). Each row has its forms of question:
+// a stop its place, then its title with its day's city; a stay its Japanese
+// address, then its name with its place; a day its city. A stop whose place
+// is a Maps link with a position is read without asking.
+// Fair to every row: a row costs at most one lookup a call; rows never tried
+// go first, rows tried before go last (the longest ago first), each trying
+// its next form. Which rows found nothing, and how often, is kept in one
+// Script Property, LOCATE_TRIED ({ "stop:<id>": { d: day, n: tries } }),
+// pruned to rows still without coordinates. At most LOCATE_MAX_ lookups a
+// call (the same question twice in a call is asked once). No History line;
+// rev moves when something was found, so phones fetch it.
+// -> { found, missing, more } (more: rows never tried remain).
 
 var LOCATE_MAX_ = 40;
+var LOCATE_KEY_ = "LOCATE_TRIED";
 
 function locate_() {
   var tabs = ["Stops", "Stays", "Days"];
   for (var t = 0; t < tabs.length; t++) {
     if (!hasColumn_(tabs[t], "lat") || !hasColumn_(tabs[t], "lng")) return err_("needs_migrate", MSG_.needsMigrate);
   }
+  var tried = {};
+  try {
+    var kept = JSON.parse(getProp_(LOCATE_KEY_) || "{}");
+    if (kept && typeof kept === "object" && !Array.isArray(kept)) tried = kept;
+  } catch (e) {
+    tried = {};
+  }
+  var placeText = function (v) { var s = cellText_(v).trim(); return safeUrl(s) ? "" : s; };
+  var clean = function (list) {
+    var out = [];
+    list.forEach(function (q) {
+      q = String(q || "").replace(/\s+/g, " ").trim();
+      if (q !== "" && out.indexOf(q) === -1) out.push(q);
+    });
+    return out;
+  };
+  // Every row still without coordinates: { key, tab, col, ref, queries, pin }.
+  var rows = [];
+  var days = readTable_("Days");
+  var cityOf = {};
+  days.forEach(function (r) { cityOf[cellDate_(r.date)] = cellText_(r.city).trim(); });
+  days.forEach(function (r) {
+    var date = cellDate_(r.date);
+    if (date === "" || coordsOf_(r).lat !== "") return;
+    rows.push({ key: "day:" + date, tab: "Days", col: "date", ref: date, queries: clean([cityOf[date]]) });
+  });
+  readTable_("Stays").forEach(function (r) {
+    var id = cellText_(r.id);
+    if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
+    rows.push({ key: "stay:" + id, tab: "Stays", col: "id", ref: id, queries: clean([r.address_jp, cellText_(r.name) + " " + placeText(r.place)]) });
+  });
+  readTable_("Stops").forEach(function (r) {
+    var id = cellText_(r.id);
+    if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
+    var city = cityOf[cellDate_(r.date)] || "";
+    rows.push({
+      key: "stop:" + id, tab: "Stops", col: "id", ref: id, pin: pointFromLink(cellText_(r.place)),
+      queries: clean([placeText(r.place), cellText_(r.title).trim() + " " + city]),
+    });
+  });
+  // Keep only rows still waiting; untried first (in sheet order), then the longest ago.
+  var still = {};
+  rows.forEach(function (row) { if (tried[row.key]) still[row.key] = tried[row.key]; });
+  tried = still;
+  var order = rows.map(function (row, i) { return { row: row, i: i, t: tried[row.key] || null }; });
+  order.sort(function (x, y) {
+    if (!x.t !== !y.t) return x.t ? 1 : -1;
+    if (x.t && y.t && x.t.d !== y.t.d) return x.t.d < y.t.d ? -1 : 1;
+    return x.i - y.i;
+  });
   var left = LOCATE_MAX_;
-  var more = false;
+  var asked = {};
   var found = 0;
   var missing = 0;
-  var asked = {};
-  // A point for the first query that finds one; null when none does;
-  // undefined when the lookups ran out first.
-  function look(queries) {
-    for (var i = 0; i < queries.length; i++) {
-      var q = String(queries[i] || "").replace(/\s+/g, " ").trim();
-      if (q === "") continue;
+  var more = false;
+  var day = today_();
+  order.forEach(function (o) {
+    var row = o.row;
+    var p = row.pin || null;
+    if (!p) {
+      if (!row.queries.length) return;
+      var n = o.t ? Number(o.t.n) || 0 : 0;
+      var q = row.queries[n % row.queries.length];
       if (!Object.prototype.hasOwnProperty.call(asked, q)) {
-        if (left <= 0) return undefined;
+        if (left <= 0) {
+          if (!o.t) more = true;
+          return;
+        }
         left--;
         var got = null;
         try {
@@ -841,46 +902,18 @@ function locate_() {
         asked[q] = got ? coordsOf_(got) : null;
         if (asked[q] && asked[q].lat === "") asked[q] = null;
       }
-      if (asked[q]) return asked[q];
+      p = asked[q];
     }
-    return null;
-  }
-  function put(tab, key, ref, p) {
-    if (p === undefined) {
-      more = true;
-      return;
-    }
-    if (p === null) {
+    if (!p) {
       missing++;
+      tried[row.key] = { d: day, n: (o.t ? Number(o.t.n) || 0 : 0) + 1 };
       return;
     }
-    updateWhere_(tab, key, ref, { lat: p.lat, lng: p.lng });
+    updateWhere_(row.tab, row.col, row.ref, { lat: p.lat, lng: p.lng });
+    delete tried[row.key];
     found++;
-  }
-  var placeText = function (v) { var s = cellText_(v).trim(); return safeUrl(s) ? "" : s; };
-  var days = readTable_("Days");
-  var cityOf = {};
-  days.forEach(function (r) { cityOf[cellDate_(r.date)] = cellText_(r.city).trim(); });
-  days.forEach(function (r) {
-    var date = cellDate_(r.date);
-    if (date === "" || coordsOf_(r).lat !== "" || cityOf[date] === "") return;
-    put("Days", "date", date, look([cityOf[date]]));
   });
-  readTable_("Stays").forEach(function (r) {
-    var id = cellText_(r.id);
-    if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
-    put("Stays", "id", id, look([r.address_jp, cellText_(r.name) + " " + placeText(r.place)]));
-  });
-  readTable_("Stops").forEach(function (r) {
-    var id = cellText_(r.id);
-    if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
-    var pin = pointFromLink(cellText_(r.place));
-    if (pin) {
-      put("Stops", "id", id, pin);
-      return;
-    }
-    put("Stops", "id", id, look([placeText(r.place), cellText_(r.title).trim() + " " + (cityOf[cellDate_(r.date)] || "")]));
-  });
+  setProp_(LOCATE_KEY_, JSON.stringify(tried));
   return ok_({ found: found, missing: missing, more: more }, found > 0 ? bumpRev_() : rev_());
 }
 
