@@ -83,7 +83,7 @@ const MARKUP = `
     <input type="file" accept="image/*" id="setPicFile" tabindex="-1" aria-hidden="true" hidden>
   </div>
   <button type="button" class="set-r" id="setSound"><span>Stamp sound</span><b id="setSoundV">On</b></button>
-  <button type="button" class="set-r set-where" id="setWhere" hidden><span><span class="set-where-l"><span class="here">現在地</span>Location</span><small id="setWhereS"></small></span><b id="setWhereV" data-w="Phone said no"></b></button>
+  <button type="button" class="set-r set-where" id="setWhere" hidden><span><span class="set-where-l"><span class="here">現在地</span>Location</span><small id="setWhereS"></small><small id="setWhereWhy" hidden></small></span><b id="setWhereV" data-w="Phone said no"></b></button>
   <button type="button" class="set-r" id="setHist"><span>History<small>Every change, with undo</small></span><b>Open</b></button>
   <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh" data-w="Up to date 00:00"></b></button>
   <span class="set-vh" id="setFreshSay" role="status"></span>
@@ -190,6 +190,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const soundV = $("setSoundV");
   const whereRow = $("setWhere");
   const whereS = $("setWhereS");
+  const whereWhy = $("setWhereWhy");
   const whereV = $("setWhereV");
   const fresh = $("setFresh");
   const hear = $("setFreshSay");
@@ -411,7 +412,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   }
 
   const WHERE_FOR = "For leave-by, distances and the stamp. Your position stays on this phone. A stamp pressed in the day’s place gets a small mark the others can see.";
-  const WHERE_NO = "To change it: iPhone Settings, Apps, Safari, Location.";
+  const WHERE_NO = "To change it: iPhone Settings, Apps, Safari, Location. Then tap here to try again.";
   function drawWhere() {
     whereRow.hidden = !where || !where.supported();
     if (whereRow.hidden) return;
@@ -421,6 +422,10 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     whereV.classList.toggle("on", st === "on");
     whereV.classList.toggle("no", no);
     whereS.textContent = no ? WHERE_NO : WHERE_FOR;
+    // The phone's own answer to the last refusal (memory only, js/where.js), as text.
+    const why = no && typeof where.why === "function" ? where.why() : null;
+    whereWhy.hidden = !why;
+    whereWhy.textContent = why ? (why.message ? "Phone’s answer: " + why.message + " " : "") + "(code " + why.code + ")" : "";
   }
 
   function setHow(show) {
