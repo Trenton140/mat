@@ -38,8 +38,6 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    env:
-      MAT_SHOTS: ${{ runner.temp }}/mat-shots
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,6 +60,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p "$RUNNER_TEMP/log"
+          export MAT_SHOTS="$RUNNER_TEMP/mat-shots"
           status=0
           node tests/e2e/run.cjs --shard ${{ matrix.shard }}/4 2>&1 | tee "$RUNNER_TEMP/log/e2e-${{ matrix.shard }}.log" || status=$?
           # A case that failed and then passed is a fault here, not a pass.
