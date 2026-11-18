@@ -15,6 +15,7 @@ import { yen, dollars, pt, dayShort } from "../format.js";
 import { mountUneven, splitOf, toUnits, fromUnits } from "./uneven.js";
 import { isWide } from "../shape.js";
 import { fillSeal } from "../picture.js";
+import { paidMost, lineNames, reasonText, shareCard } from "../turn.js";
 
 // Each quick pick carries a kind, stored with the line and never shown.
 export const CHIPS = [
@@ -32,6 +33,11 @@ const MAX_DIGITS = 8;
 export const MAX_UNITS = { JPY: 10000000, CAD: 1000000000 };
 const HOLD_MS = 500;
 const DAY_MS = 86400000;
+// Below this much room above the register, the reasoning lies over the seals
+// and keys instead of pushing the register up (a small phone, a Safari tab).
+const WHY_MIN_ROOM = 200;
+const SIDEWAYS = "(orientation:landscape) and (max-height:520px)";
+const WHY_NOTE = "Each box is a tenth of a share. Counts what each of you paid for the group, plus what was sent on the slip. A hint, not a rule: whoever pays, the slip sorts it out.";
 const FIELDS = ["title", "amount", "currency", "paidBy", "day", "kind"]; // split, splitMode, splitVals go together
 
 // Fixed markup only: names and titles go in later with textContent.
@@ -45,6 +51,8 @@ const MARKUP = `
   </div>
 </div>
 <div class="chips" id="xQuick"></div>
+<button type="button" class="turn" id="xTurn" aria-expanded="false" aria-controls="xWhy" hidden><span><u id="xTurnL"></u></span></button>
+<div class="why-slip" id="xWhy" hidden></div>
 <div class="who">
   <div><span class="who-l">paid</span><span class="seals" id="xPayer"></span></div>
   <div><span class="who-l who-split">split<button type="button" id="xUneven">Uneven</button></span><span class="seals" id="xSplit"></span></div>
@@ -143,6 +151,8 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
   let draft = { ...blank(), editId: null, orig: null, cur: "CAD", payer: "", day: "pre", rate: null };
   let opened = false;
   let peopleShown = "";
+  let whyOpen = false; // the reasoning under the whose-turn line
+  let turnShown = null; // signature of the last drawing of the line
 
   const uneven = mountUneven(reg, { onChange: render });
 
@@ -177,6 +187,81 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     splitSeals.replaceChildren(...seals((n) => "Split with " + n));
   }
 
+  // The whose-turn line (js/turn.js): who has paid the most so far against
+  // their share, and on a tap the reasoning. Names go in as textContent.
+  function drawTurn() {
+    const s = store.state;
+    const res = paidMost(names(), s.expenses, s.payments);
+    const line = $("xTurn");
+    const why = $("xWhy");
+    if (!res) whyOpen = false;
+    const sig = JSON.stringify([res, s.me, s.people.map((p) => [p.name, p.initials, p.photo || ""]), whyOpen]);
+    if (sig === turnShown) return;
+    turnShown = sig;
+    line.hidden = !res;
+    line.setAttribute("aria-expanded", String(whyOpen));
+    why.hidden = !whyOpen;
+    if (!res) {
+      $("xTurnL").replaceChildren();
+      why.replaceChildren();
+      return;
+    }
+    const shown = lineNames(res, s.me);
+    const label = $("xTurnL");
+    label.replaceChildren("Paid the most so far: ");
+    shown.forEach((n, i) => label.append(...(i ? [" and "] : []), el("b", "", n)));
+    if (!whyOpen) {
+      why.replaceChildren();
+      return;
+    }
+    const top = el("div", "ws-t");
+    const close = el("button", "", "Close");
+    close.type = "button";
+    close.id = "xWhyX";
+    top.append(el("span", "", "Paid so far, against each share"), close);
+    const rows = res.rows.map((r, i) => {
+      const row = el("div", "ws-r");
+      const person = s.people.find((p) => p.name === r.name);
+      const t = reasonText(r, s.me, i === 0, dollars);
+      const body = el("div");
+      body.append(el("div", "ws-n", t.head));
+      if (t.sub) body.append(el("div", "ws-s", t.sub));
+      const c = shareCard(r.put, r.share);
+      if (c) {
+        const card = el("div", "ws-card");
+        card.setAttribute("aria-hidden", "true");
+        for (let k = 0; k < 10; k++) card.append(el("i", k < c.full ? "f" : k === c.full && c.half ? "h" : ""));
+        if (c.more) card.append(el("em", "", "+" + c.more));
+        body.append(card);
+      }
+      row.append(fillSeal(el("span", "mini"), person, r.name, { named: true }), body);
+      return row;
+    });
+    why.replaceChildren(top, ...rows, el("p", "ws-x", WHY_NOTE));
+    fitWhy();
+  }
+
+  // The reasoning sits under the line and pushes the register up, as far as
+  // there is room above it; its rows scroll past that. With too little room
+  // it lies over the seals and keys instead. Held sideways it always takes
+  // the keys' column (css/register.css).
+  function fitWhy() {
+    const why = $("xWhy");
+    const phone = reg.parentElement;
+    reg.classList.remove("why-over");
+    why.style.removeProperty("--why-room");
+    if (why.hidden || !phone || (globalThis.matchMedia && globalThis.matchMedia(SIDEWAYS).matches)) return;
+    const base = reg.offsetHeight - why.offsetHeight - 8; // 8: its margin above
+    const room = phone.clientHeight - base - 16;
+    if (room >= WHY_MIN_ROOM) {
+      why.style.setProperty("--why-room", room + "px");
+      return;
+    }
+    const line = $("xTurn");
+    reg.classList.add("why-over");
+    reg.style.setProperty("--why-top", line.offsetTop + line.offsetHeight + 8 + "px");
+  }
+
   function canGo() {
     const units = toUnits(draft.amt, draft.cur);
     return units > 0 && units <= MAX_UNITS[draft.cur] && what.value.trim() !== "" && splitOf(draft).ok;
@@ -184,6 +269,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
 
   function render() {
     drawSeals();
+    drawTurn();
     draft.rate = rate();
     const units = toUnits(draft.amt, draft.cur);
     const sym = draft.cur === "JPY" ? "¥" : "$";
@@ -365,6 +451,8 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     stopHold();
     if (draft.editId) startFresh();
     uneven.close();
+    whyOpen = false;
+    drawTurn();
     reg.classList.remove("is-open");
     reg.inert = true;
     root.classList.remove("reg-open");
@@ -381,6 +469,16 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     if (b && !b.disabled) press(b.dataset.k);
   });
   $("regDone").addEventListener("click", close);
+  $("xTurn").addEventListener("click", () => {
+    whyOpen = !whyOpen;
+    drawTurn();
+  });
+  $("xWhy").addEventListener("click", (ev) => {
+    if (!ev.target.closest("#xWhyX")) return;
+    whyOpen = false;
+    drawTurn();
+    $("xTurn").focus({ preventScroll: true });
+  });
   document.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape" || !opened) return;
     // WIDE: Escape is the top-most panel's Done, so the uneven panel's own first.
