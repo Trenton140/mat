@@ -90,6 +90,15 @@ const fateUnknown = (err) => noReply(err) && !neverSent(err);
 const transient = (err) => noReply(err) || codeOf(err) === "busy";
 const refusedAsStale = (err) => codeOf(err) === "stale" || codeOf(err) === "not_found";
 
+// s cut to max letters as the backend's plannerCut_ does: at max - 1, less a
+// trailing part-word, then "…".
+function cutText(s, max) {
+  if (s.length <= max) return s;
+  let t = s.slice(0, max - 1);
+  if (s.charAt(max - 1) !== " " && t.charAt(t.length - 1) !== " " && t.lastIndexOf(" ") > 0) t = t.slice(0, t.lastIndexOf(" "));
+  return t.replace(/\s+$/, "") + "…";
+}
+
 function bare(item) {
   if (!item) return item;
   const out = { ...item };
@@ -1223,7 +1232,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       const pulledAt = typeof d.pulledAt === "string" && d.pulledAt ? d.pulledAt : base.todosPulledAt || "";
       base = { ...base, todos: copy(d.todos), todosPulledAt: pulledAt };
       if (!d.stored && Array.isArray(d.problems)) {
-        base.todoProblems = { at: pulledAt || new Date(now()).toISOString(), list: copy(d.problems.slice(0, 20)), more: Math.max(0, d.problems.length - 20) };
+        // This fetch's time (a pull cut short keeps the old pulledAt), each message cut to 160 as the backend stores it.
+        const list = copy(d.problems.slice(0, 20)).map((p) => (p && typeof p.message === "string" ? { ...p, message: cutText(p.message, 160) } : p));
+        base.todoProblems = { at: (typeof d.pulledAt === "string" && d.pulledAt) || new Date(now()).toISOString(), list, more: Math.max(0, d.problems.length - 20) };
       }
       saveCache();
     };

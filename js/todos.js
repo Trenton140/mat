@@ -112,7 +112,8 @@ export function tickedLine(t) {
 // What an undone tick left in the planner, worth saying on the undo bar,
 // from the item as shown before the undo and the backend's reply to it
 // ({ planner, todo }): "pending" (the app's Booked could not be taken back
-// out yet), "kept" (the app had written Booked, and the planner's Status was
+// out: a pull retries it, or drops it when the # holds another item now),
+// "kept" (the app had written Booked, and the planner's Status was
 // changed there since, so it was left alone), or null (put back, never
 // written, or not an undone tick: nothing more to say).
 export function untickOutcome(before, data) {

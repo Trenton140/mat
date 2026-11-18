@@ -3150,7 +3150,7 @@ test("wave A 5: undoing a tick says what became of the planner: put back, still 
   b.fake.planner.cellFails = true;
   await b.store.undo(tb);
   await b.store.idle();
-  assert.equal(changeText(b.store.state.lastChange), "Undone. The planner couldn’t be changed back yet, so it may still say Booked.");
+  assert.equal(changeText(b.store.state.lastChange), "Undone. The planner couldn’t be changed back, so it may still say Booked.");
   // Written, then someone changed the planner's Status: kept.
   const c = phone({ seed: bookSeed(2) });
   await c.store.boot();
@@ -3185,5 +3185,38 @@ test("wave A 5: an undo from History says the same", async () => {
   p.fake.planner.cellFails = true;
   await p.store.undoEntry(tick.id);
   await p.store.idle();
-  assert.equal(changeText(p.store.state.lastChange), "Undone. The planner couldn’t be changed back yet, so it may still say Booked.");
+  assert.equal(changeText(p.store.state.lastChange), "Undone. The planner couldn’t be changed back, so it may still say Booked.");
+});
+
+test("fix minor a: an undo whose put-back can't find the item (its # holds another one now) says nothing that promises a later put-back", async () => {
+  const { changeText } = await import("../js/format.js");
+  const p = phone({ seed: bookSeed(2) });
+  await p.store.boot();
+  await p.store.syncTodos();
+  const t = p.store.tickTodo("1");
+  await p.store.idle();
+  p.fake.planner.tabs["Book Now"][1][1] = "Made-up other booking";
+  await p.store.undo(t);
+  await p.store.idle();
+  const said = changeText(p.store.state.lastChange);
+  assert.equal(said, "Undone. The planner couldn’t be changed back, so it may still say Booked.");
+  assert.equal(/\byet\b|next|later|will/.test(said), false);
+});
+
+test("fix minor b: after a pull cut short (more), the problems carry this fetch's time and messages cut to 160 as the backend keeps them", async () => {
+  const at = { ms: NOW };
+  const p = phone({ seed: bookSeed(2), clock: () => at.ms });
+  await p.store.boot();
+  await p.store.syncTodos();
+  const old = p.store.state.todosPulledAt;
+  at.ms += 5 * 60 * 1000;
+  const long = "Made-up reason " + "word ".repeat(60);
+  p.net.override = (b) => (b.action === "syncTodos" ? { ok: true, rev: 0, data: { todos: [], pulledAt: "", more: true, problems: [{ id: "4", message: long, row: 9, what: "Made-up item" }] } } : null);
+  await p.store.syncTodos({ force: true });
+  const tp = p.store.state.todoProblems;
+  assert.equal(p.store.state.todosPulledAt, old, "an unfinished pull keeps the last fetched time");
+  assert.equal(tp.at, new Date(at.ms).toISOString(), "the problems carry this fetch's time");
+  assert.ok(tp.list[0].message.length <= 160);
+  assert.ok(tp.list[0].message.endsWith("…"));
+  assert.equal(tp.list[0].message.includes("  "), false);
 });

@@ -121,7 +121,7 @@ export function changeText(c) {
       case "unclaim": return "Handed back " + item.item + ".";
       // An undone tick, with what it left in the planner (js/todos.js untickOutcome).
       default:
-        if (c.planner === "pending") return "Undone. The planner couldn’t be changed back yet, so it may still say Booked.";
+        if (c.planner === "pending") return "Undone. The planner couldn’t be changed back, so it may still say Booked.";
         if (c.planner === "kept") return "Undone. The planner’s Status was changed there since, so it was left as it is.";
         return "Undone.";
     }
