@@ -99,6 +99,102 @@ button.s-wl > span{text-decoration:underline dotted rgba(21,18,15,.5) 1.5px;text
 .simp-b button{flex:1;height:44px}
 .simp-b .simp-keep{background:var(--print);color:var(--paper)}
 
+/* ---------- the slip as a 精算書 voucher (mock-up 1A) ----------
+   The carbon copy (控) of a settlement form torn from a pad. The form is
+   printed in one indigo ink, as Japanese receipt pads are; what is written on
+   it is the app's black heavy gothic, with a faint carbon haze around it.
+   The title block keeps .slip-t (旅費精算書, as before). */
+.slip.cf{padding:12px 12px 8px;border-radius:2px;background:var(--grain), #F4F1E8}
+/* The carbon haze, on a layer of its own over the paper (the slip's own
+   background carries no gradient light: the lamp belongs to the table). */
+.slip.cf::after{content:"";position:absolute;inset:0;pointer-events:none;border-radius:2px;
+  background:radial-gradient(70% 22% at 62% 38%, rgba(40,64,143,.055), transparent 70%), radial-gradient(60% 18% at 40% 66%, rgba(40,64,143,.05), transparent 70%)}
+/* The pad's glued edge it was torn from. */
+.slip.cf::before{content:"";position:absolute;left:0;right:0;top:0;height:5px;background:repeating-linear-gradient(90deg, rgba(21,18,15,.18) 0 2px, transparent 2px 6px);border-radius:2px 2px 0 0}
+.cf-h{display:grid;grid-template-columns:52px minmax(0,1fr) 62px;align-items:center;gap:8px;padding:6px 0 9px;border-bottom:3px double var(--ai)}
+.cf-inshi{width:48px;height:56px;border:1.5px dashed rgba(40,64,143,.6);display:grid;place-items:center;align-content:center;color:var(--ai);font-size:10px;font-weight:700;line-height:1.25;text-align:center}
+.cf-inshi b{font-family:var(--seal);font-weight:400;font-size:13px}
+.slip.cf .cf-t{text-align:center;color:var(--ai);padding-bottom:0;border-bottom:0}
+.slip.cf .cf-t b{display:block;font-size:22px;font-weight:900;letter-spacing:.45em;margin-right:-.45em;line-height:1.2}
+.slip.cf .cf-t span{font-size:12px;font-weight:700}
+.cf-no{justify-self:end;text-align:right;color:var(--ai);font-size:10.5px;font-weight:700;line-height:1.3}
+.cf-no b{display:inline-grid;place-items:center;width:26px;height:26px;border:1.5px solid var(--ai);border-radius:2px;font-family:var(--seal);font-weight:400;font-size:15px;margin-bottom:3px}
+.cf-no i{display:block;font-family:var(--dot);font-weight:400;font-size:12px;font-style:normal;color:var(--print)}
+.cf-cols{display:grid;grid-template-columns:minmax(0,1fr) 84px;margin-top:6px;background:rgba(40,64,143,.08);color:var(--ai);font-size:10.5px;font-weight:700;line-height:1.2}
+.cf-cols span{padding:4px 6px}
+.cf-cols span+span{border-left:1px solid rgba(40,64,143,.45);text-align:center}
+.cf .s-row{border-bottom:1px solid rgba(40,64,143,.4)}
+.cf .s-row:last-child{border-bottom:1px solid rgba(40,64,143,.4)}
+.cf .s-row>.spot{height:100%;min-height:98px;width:84px;border-left:1px solid rgba(40,64,143,.45)}
+.cf .s-l{padding:10px 8px 10px 6px}
+.cf .s-send,.cf .s-work,.cf .s-rm,.cf .s-none{padding-left:6px;padding-right:6px}
+.cf .s-work{margin-left:6px;margin-right:6px;padding-left:0;padding-right:0}
+.cf .s-older{border-bottom-color:rgba(40,64,143,.4)}
+.cf-but{display:flex;gap:8px;align-items:baseline;padding:9px 6px 0;font-size:13px;font-weight:700;border-bottom:1px solid rgba(40,64,143,.4);padding-bottom:8px}
+.cf-but b{color:var(--ai);font-family:var(--seal);font-weight:400;font-size:15px}
+.cf-but span{min-width:0;overflow-wrap:anywhere}
+.cf .slip-f{padding:8px 6px 0}
+.cf .simp{border-top-color:rgba(40,64,143,.6)}
+.cf .simp-sw{padding:0 6px}
+.cf .simp-ask{padding-left:6px;padding-right:6px}
+/* A narrow phone: the title keeps one line between the stamp box and the copy mark. */
+@media (max-width:370px){
+  .cf-h{grid-template-columns:46px minmax(0,1fr) 54px;gap:6px}
+  .cf-inshi{width:44px}
+  .slip.cf .cf-t b{font-size:20px;letter-spacing:.12em;margin-right:-.12em}
+  .cf-cols,.cf .s-row{grid-template-columns:minmax(0,1fr) 76px}
+  .cf .s-row>.spot{width:76px}
+  .cf .s-l{padding-right:4px}
+  .cf .s-amt,.cf #stampAmt{font-size:min(31px,8.8vw)}
+}
+
+/* ---------- settled: the square seal, then filed (mock-up 2B) ----------
+   When the last open payment is stamped, a square 精算済 seal lands on the
+   head and the slip folds to one line with two binder holes, as if filed.
+   Open shows the payments again. js/views/slip.js plays it. */
+.big{position:absolute;z-index:4;pointer-events:none;mix-blend-mode:multiply}
+.big.boxs{right:18px;top:6px;width:168px;transform:rotate(var(--rot))}
+.big svg{display:block}
+.big.land{animation:land .3s backwards}
+@keyframes land{
+  0%{transform:rotate(var(--rot)) scale(2.2);opacity:0;animation-timing-function:cubic-bezier(.7,0,1,.7)}
+  60%{transform:rotate(var(--rot)) scale(.94);opacity:1}
+  100%{transform:rotate(var(--rot)) scale(1);opacity:1}}
+.big.wet{filter:saturate(1.35) brightness(1.1) drop-shadow(0 0 3px rgba(214,60,30,.5))}
+.big.dry{filter:none;transition:filter 2s ease-out}
+.fold{display:grid;grid-template-rows:1fr;transition:grid-template-rows .45s cubic-bezier(.32,.72,0,1)}
+.fold>div{overflow:hidden;min-height:0}
+.slip.is-filed .fold{grid-template-rows:0fr}
+.stub{display:none;align-items:center;justify-content:space-between;gap:10px;padding:12px 0 4px 26px;font-size:13.5px;font-weight:500}
+.stub b{display:block;font-size:15.5px;font-weight:900}
+.stub button{flex:none;min-height:40px;padding:0 12px;border:1.5px solid var(--print);border-radius:3px;background:none;color:var(--print);font-weight:900;font-size:13.5px}
+.stub button:active{transform:scale(.97)}
+.slip.is-filed .stub{display:flex}
+.holes{position:absolute;left:9px;top:0;bottom:0;display:none;flex-direction:column;justify-content:center;gap:26px}
+.holes i{width:11px;height:11px;border-radius:50%;background:var(--ground);box-shadow:inset 0 1px 2px #000}
+.slip.is-filed .holes{display:flex}
+.slip.is-filed{padding-left:30px}
+.slip.is-filed .slip-t{text-align:left;padding-right:150px}
+.slip.is-filed .slip-t b{letter-spacing:.2em}
+/* A narrow phone: the seal is a little smaller, so the title keeps one line. */
+@media (max-width:370px){
+  .big.boxs{width:120px;right:10px}
+  .slip.is-filed .slip-t{padding-right:118px}
+  .slip.is-filed .slip-t b{letter-spacing:.04em}
+  .stub{padding-left:2px}
+}
+/* Filed, the voucher's head is its title alone, left, with room for the seal. */
+.slip.cf.is-filed{padding-left:30px}
+.slip.cf.is-filed .cf-h{grid-template-columns:minmax(0,1fr)}
+.slip.cf.is-filed .cf-inshi,.slip.cf.is-filed .cf-no{display:none}
+.slip.cf.is-filed .cf-t{text-align:left;padding-right:150px}
+.slip.cf.is-filed .cf-t b{letter-spacing:.2em;margin-right:0}
+@media (max-width:370px){
+  .slip.cf.is-filed .cf-t{padding-right:118px}
+  .slip.cf.is-filed .cf-t b{letter-spacing:.04em}
+}
+@media (prefers-reduced-motion: reduce){ .big.land{animation:none} .fold{transition:none} }
+
 /* ---------- the till receipt ---------- */
 .rc{position:relative;margin:26px var(--gr) 10px var(--gl);padding:16px 14px 14px;background:var(--grain), var(--paper);color:var(--print);box-shadow:var(--lift);
   font-weight:700;font-size:15.5px;line-height:1.3}

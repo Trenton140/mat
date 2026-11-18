@@ -50,6 +50,34 @@
 .key.go:disabled{opacity:.3}
 .key.go:disabled:active{transform:none;box-shadow:var(--paper-edge)}
 
+/* ---------- whose turn: one quiet line under the quick chips (mock-up 3A) ----------
+   "Paid the most so far: <name>". A tap shows the reasoning on a paper slip,
+   like the uneven-split slip. js/turn.js decides who and when. */
+.turn{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;margin-top:8px;padding:0;border:0;background:none;color:var(--dim);text-align:left;font-size:13.5px;font-weight:700}
+.turn[hidden]{display:none}
+.turn b{color:var(--text);font-weight:900}
+.turn u{text-decoration:underline dotted rgba(161,150,142,.8) 1.5px;text-underline-offset:4px}
+.turn::before{content:"";flex:none;width:9px;height:9px;border-radius:50%;border:1.7px dashed var(--dim)}
+.why-slip{margin:8px 0 0;padding:10px 12px 10px;border-radius:8px;background:var(--grain), var(--paper);color:var(--print);box-shadow:0 14px 28px -8px #000;animation:roll .22s ease-out}
+.why-slip{max-height:calc(var(--why-room, 100vh) - env(safe-area-inset-top, 0px));overflow-y:auto;overscroll-behavior:contain}
+.why-slip[hidden]{display:none}
+/* Little room above the register: the slip lies over the seals and keys, under the line. */
+.reg.why-over .why-slip{position:absolute;z-index:2;left:var(--gl);right:var(--gr);top:var(--why-top);bottom:calc(14px + env(safe-area-inset-bottom, 0px));margin:0;max-height:none}
+.ws-t{display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding-bottom:6px;border-bottom:1.5px dashed rgba(21,18,15,.6);font-weight:900;font-size:14.5px}
+.ws-t button{border:0;background:none;padding:0 2px;min-height:32px;color:var(--print);font-weight:900;font-size:14px}
+.ws-r{display:grid;grid-template-columns:30px minmax(0,1fr);column-gap:10px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(21,18,15,.12)}
+.ws-r:last-of-type{border-bottom:0}
+.ws-r>div{min-width:0}
+.ws-n{font-size:15px;font-weight:900;line-height:1.25;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.ws-s{font-size:12.5px;font-weight:500;overflow-wrap:anywhere}
+.ws-card{display:flex;gap:3px;margin-top:4px}
+.ws-card i{width:13px;height:13px;border:1.2px solid rgba(21,18,15,.45);border-radius:2px}
+.ws-card i.f{background:var(--print);border-color:var(--print)}
+.ws-card i.h{background:linear-gradient(90deg,var(--print) 50%,transparent 50%)}
+.ws-card em{font-style:normal;font-size:11.5px;font-weight:900;margin-left:4px;line-height:13px}
+.why-slip .ws-x{color:var(--print);margin:6px 0 0;font-size:12.5px;font-weight:500;line-height:1.35}
+@media (prefers-reduced-motion: reduce){ .why-slip{animation:none} }
+
 /* ---------- uneven split: a paper slip that stands above the register ---------- */
 .un{position:absolute;left:var(--gl);right:var(--gr);bottom:calc(100% + 8px);padding:8px 12px 10px;border-radius:8px;
   background:var(--paper);color:var(--print);box-shadow:0 14px 28px -8px #000;animation:roll .22s ease-out;
@@ -116,13 +144,16 @@ input.un-val:focus{box-shadow:inset 0 2px 5px rgba(0,0,0,.3),0 0 0 2px var(--pri
    without scrolling at 375 px high: the display, the quick chips and the
    seals on the left, the keys on the right. The undo bar sits clear of the rail. */
 @media (orientation:landscape) and (max-height:520px){
-  .reg{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-rows:auto auto auto 1fr;column-gap:14px;
-    grid-template-areas:"top pad" "lcd pad" "chips pad" "who pad";padding-top:8px;padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px))}
+  .reg{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);grid-template-rows:auto auto auto auto 1fr;column-gap:14px;
+    grid-template-areas:"top pad" "lcd pad" "chips pad" "turn pad" "who pad";padding-top:8px;padding-bottom:calc(10px + env(safe-area-inset-bottom, 0px))}
   .reg-top{grid-area:top}
   .lcd{grid-area:lcd}
   .chips{grid-area:chips;margin:8px 0 0;padding:0}
   .who{grid-area:who;align-self:start;margin-top:8px}
   .pad{grid-area:pad;margin-top:4px;align-self:end}
+  /* Whose turn: the line under the chips; its reasoning takes the keys' column. */
+  .turn{grid-area:turn;min-height:34px;margin-top:4px}
+  .why-slip{grid-area:pad;z-index:2;align-self:stretch;margin:4px 0 0;max-height:none;contain:size}
   .reg:not(.is-open){box-shadow:none}
   .ubar{right:calc(var(--rail) + var(--gr));bottom:calc(12px + env(safe-area-inset-bottom, 0px))}
 }
