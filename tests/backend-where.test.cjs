@@ -353,3 +353,65 @@ test("(d) an expense edit never runs the coordinates check nor answers with a st
   const ok = await call("updateExpense", { id: "exp0000001", patch: { title: "Ramen bar" } }, { via: "claude" });
   assert.equal(ok.ok, true);
 });
+
+// ---- undo of a position edit that locate has answered since ----
+
+test("undo: a stop's place changed with no coordinates, located at the new place, then undone: coordinates cleared, the old place found again", async () => {
+  const call = client();
+  geocoder(call, { "Shibuya Sky Tokyo": { lat: 35.6585, lng: 139.7023 }, "New spot Tokyo": { lat: 35.1, lng: 139.1 } });
+  const e = await call("updateStop", { id: "planstop1203", patch: { place: "New spot" } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(stopById((await call("load")).data, "planstop1203").lat, "35.1");
+  const u = await call("undo", { logId: e.data.logId });
+  assert.equal(u.ok, true, JSON.stringify(u));
+  assert.equal(u.data.stop.place, "Shibuya Sky");
+  assert.deepEqual([u.data.stop.lat, u.data.stop.lng], ["", ""]);
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const s = stopById((await call("load")).data, "planstop1203");
+  assert.deepEqual([s.lat, s.lng], ["35.6585", "139.7023"]);
+});
+
+test("undo: the same for a stay's address and a stay's place; a stay's name is not a position", async () => {
+  const call = client();
+  const asked = geocoder(call, { "別の住所": { lat: 35.1, lng: 139.1 }, "東京都台東区浅草1-1-1": { lat: 35.7119, lng: 139.7967 } });
+  const stay = async () => (await call("load")).data.stays.find((x) => x.id === "planstay0001");
+  const base = async () => { const s = await stay(); const { deleted, lat, lng, ...rest } = s; return rest; };
+  const e = await call("saveStay", { stay: { ...(await base()), addressJp: "別の住所" } });
+  assert.equal(e.ok, true, JSON.stringify(e));
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal((await stay()).lat, "35.1", asked.map((a) => a.q).join(" | "));
+  const u = await call("undo", { logId: e.data.logId });
+  assert.equal(u.data.stay.addressJp, "東京都台東区浅草1-1-1");
+  assert.deepEqual([u.data.stay.lat, u.data.stay.lng], ["", ""]);
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal((await stay()).lat, "35.7119");
+  // A place (the address is blank, so locate asks for the place).
+  const call2 = client();
+  const row = call2.fake.tables.Stays.find((x) => x.id === "planstay0001");
+  row.addressJp = ""; row.address_jp = "";
+  geocoder(call2, { "Asakusa hotel Other inn": { lat: 35.2, lng: 139.2 }, "Asakusa hotel Asakusa hotel Tokyo": { lat: 35.7, lng: 139.8 } });
+  const stay2 = async () => (await call2("load")).data.stays.find((x) => x.id === "planstay0001");
+  const b2 = async () => { const s = await stay2(); const { deleted, lat, lng, ...rest } = s; return rest; };
+  const e2 = await call2("saveStay", { stay: { ...(await b2()), place: "Other inn" } });
+  await call2.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal((await stay2()).lat, "35.2");
+  const u2 = await call2("undo", { logId: e2.data.logId });
+  assert.equal(u2.data.stay.place, "Asakusa hotel Tokyo");
+  assert.deepEqual([u2.data.stay.lat, u2.data.stay.lng], ["", ""]);
+  await call2.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal((await stay2()).lat, "35.7");
+});
+
+test("undo: the same for a day's city", async () => {
+  const call = client();
+  geocoder(call, { Yokohama: { lat: 35.44, lng: 139.64 }, Tokyo: { lat: 35.68, lng: 139.77 } });
+  const e = await call("setDay", { date: "2026-12-12", patch: { city: "Yokohama" } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const day = async () => (await call("load")).data.days.find((x) => x.date === "2026-12-12");
+  assert.equal((await day()).lat, "35.44");
+  const u = await call("undo", { logId: e.data.logId });
+  assert.equal(u.data.day.city, "Tokyo");
+  assert.deepEqual([u.data.day.lat, u.data.day.lng], ["", ""]);
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal((await day()).lat, "35.68");
+});

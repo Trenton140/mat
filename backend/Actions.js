@@ -1882,6 +1882,13 @@ function undo_(args, ctx) {
     if (!movedCoords_(entry)) {
       delete patch.lat;
       delete patch.lng;
+      // But a restored place, address or city is not where the coordinates now
+      // are (locate may have found the new one since): clear them so locate asks again.
+      var posCols = { stop: ["place"], stay: ["address_jp", "place"], day: ["city"] }[entry.kind] || [];
+      if (posCols.some(function (c) { return patch[c] !== undefined; })) {
+        patch.lat = "";
+        patch.lng = "";
+      }
     }
     if (plan.deletable) patch.deleted_at = target.deleted ? (cur.deleted ? undefined : nowIso_()) : "";
     saved = writePlan_(plan, entry.ref, patch);
