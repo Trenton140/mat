@@ -79,9 +79,12 @@ function siteUrl_() {
 }
 
 function logLink_(name, key) {
-  var site = siteUrl_();
-  Logger.log(name + "’s link: " + site + "#k=" + key);
-  if (!site) Logger.log("(Put the app’s address in front of it, or set the Script Property SITE_URL to that address for next time.)");
+  Logger.log(name + "’s link: " + siteUrl_() + "#k=" + key);
+}
+
+// Once, after the links, when they lack the app's address.
+function logSiteHint_() {
+  if (!siteUrl_()) Logger.log("(Put the app’s address in front of each link, or set the Script Property SITE_URL to that address for next time.)");
 }
 
 function dayOf_(iso) {
@@ -113,7 +116,8 @@ function issueLinks() {
   }
   had.forEach(function (line) { Logger.log(line); });
   made.forEach(function (m) { logLink_(m.name, m.key); });
-  if (!made.length) Logger.log("Nobody needed a new link.");
+  if (made.length) logSiteHint_();
+  else Logger.log("Nobody needed a new link.");
 }
 
 // The person at this place in the People tab's order (1 = the first), or null.
@@ -142,6 +146,7 @@ function newLinkFor_(n) {
   }
   Logger.log(name + "’s old link no longer works.");
   logLink_(name, key);
+  logSiteHint_();
 }
 
 // Cancels person n's link: it stops working on the next request.

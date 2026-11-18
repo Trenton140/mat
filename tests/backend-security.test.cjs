@@ -317,7 +317,8 @@ test("issueLinks without SITE_URL prints #k=<key> and says where to put it", () 
   const fake = createFakeBackend({ ...SEED });
   fake.world.issueLinks();
   assert.match(fake.logged[0], /^Mo’s link: #k=[0-9a-f]{64}$/);
-  assert.match(fake.logged[1], /Put the app’s address in front of it/);
+  assert.equal(fake.logged.length, 4, "three links and one hint");
+  assert.match(fake.logged[3], /Put the app’s address in front of each link/);
 });
 
 test("linksStatus says who has a link and whether the shared link works; never a key", () => {
