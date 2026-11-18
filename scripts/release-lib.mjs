@@ -142,8 +142,18 @@ export function needsBump(changed, shell) {
 //   receipt: the gate's receipt for that commit's tree, or null
 //   commitStamp: BACKEND_STAMP in that commit ("" before the stamp existed)
 //   live: the stamp the live backend answers with
-export function judgePush({ remoteRef, localSha, receipt, commitStamp, live }) {
+export function judgePush({ remoteRef, localSha, receipt, commitStamp, live, ci = null }) {
   if (/refs\/original\//.test(remoteRef)) return "refs/original is never pushed: it holds history that was removed on purpose.";
+  // ci/<name>: a branch that only exists to try the checks on GitHub. It can
+  // reach no phone (the site is served from main, which GitHub lets only the
+  // owner change), so it needs no receipt; but the repository is public, so
+  // exactly what is pushed must have passed the private-data scan.
+  if (/^refs\/heads\/ci\/[\w.-]+$/.test(remoteRef)) {
+    if (/^0+$/.test(localSha)) return null;
+    if (!ci || !ci.atHead || !ci.clean) return "A ci/ branch is pushed from its own clean checkout, at the commit being pushed.";
+    if (ci.found) return "The private-data scan found " + ci.found + " thing(s) in this commit. Nothing was pushed.";
+    return null;
+  }
   // main is production (the site is served from it). dev is where reviewed work
   // waits for a release; from this Mac it is only ever set to a commit that
   // could be released, so the same checks apply to it.
