@@ -19,9 +19,18 @@
 // removes, the sheet says so and keeps what was typed. The fields are
 // words, so the phone's own keyboard is used; the field being typed in is
 // kept in view above it. Nothing here depends on the time.
+//
+// On the map: one row says whether the stop is On the map or Not on the map
+// (its lat and lng, which the backend's locate fills in), with a field to
+// paste a Google Maps link; the position is read from the link
+// (js/geo.js pointFromLink) and sent as the stop's lat and lng. That is how a
+// stop the geocoder put in the wrong city is put right. A new place with no
+// link pasted takes the old position off (lat and lng sent empty). This is a
+// place's position, never the phone's.
 
 import { dayHead } from "../format.js";
 import { newId } from "../time.js";
+import { pointFromLink } from "../geo.js";
 
 const NO_SIGNAL = "No signal. Stops need a connection.";
 const GONE = "Someone removed this stop, so it can’t be saved.";
@@ -45,6 +54,7 @@ const MARKUP = `
   <label class="st-f st-time"><span>Minutes to get there</span><input id="stMin" inputmode="numeric" maxlength="3" autocomplete="off" enterkeyhint="next"></label>
   <label class="st-sw"><span>The time can’t slip<i>指定</i></span><input id="stFixed" type="checkbox" role="switch"></label>
   <label class="st-f"><span>Place name or pasted Maps link</span><input id="stPlace" maxlength="200" autocomplete="off" enterkeyhint="next"></label>
+  <label class="st-f st-at"><span class="st-at-h"><b id="stAtW">Not on the map</b><i id="stAtS"></i></span><input id="stPin" type="url" inputmode="url" maxlength="2000" autocomplete="off" enterkeyhint="next" placeholder="Paste a Google Maps link"></label>
   <label class="st-f"><span>Link to a ticket or confirmation</span><input id="stLink" type="url" inputmode="url" maxlength="500" autocomplete="off" enterkeyhint="next"></label>
   <label class="st-f"><span>Japanese name on signs</span><input id="stSign" maxlength="20" lang="ja" autocomplete="off" enterkeyhint="done"></label>
   <p class="st-msg" id="stMsg" role="status"></p>
@@ -107,6 +117,10 @@ export function mountStopSheet(root, store) {
     title: $("stWhat"), time: $("stTime"), detail: $("stDetail"), gettingThere: $("stGo"), travelMin: $("stMin"),
     fixed: $("stFixed"), place: $("stPlace"), link: $("stLink"), signJp: $("stSign"),
   };
+  const pin = $("stPin");
+  const atWord = $("stAtW");
+  const atSay = $("stAtS");
+  let at = { lat: "", lng: "" }; // the stop's position as the sheet opened
 
   let mode = null; // "add" or "edit" while open
   let date = null; // the day the stop is on
@@ -124,8 +138,28 @@ export function mountStopSheet(root, store) {
   const current = () => (store.state.stops || []).find((s) => s && s.id === stopId && !s.deleted) || null;
   const online = () => store.state.online !== false;
 
+  // The position the stop will have: from a pasted link that has one, else
+  // as it was, except that a new place takes it off (the old one was for the
+  // old place).
+  function where(place) {
+    const p = pointFromLink(pin.value);
+    if (p) return { lat: String(p.lat), lng: String(p.lng) };
+    if (was && place !== was.place) return { lat: "", lng: "" };
+    return at;
+  }
+
+  function showAt() {
+    const typed = pin.value.trim() !== "";
+    const p = pointFromLink(pin.value);
+    const w = where(f.place.value.trim());
+    atWord.textContent = w.lat !== "" ? "On the map" : "Not on the map";
+    atSay.textContent = p ? "From the pasted link." : typed ? "No position in that link. Copy the long link from Google Maps’ address bar." : w.lat !== "" ? "Paste a Google Maps link to move it." : "Paste a Google Maps link to put it there.";
+  }
+
   // The fields as the backend takes them.
   function read() {
+    const place = f.place.value.trim();
+    const w = where(place);
     return {
       title: f.title.value.trim(),
       time: cleanTime(f.time.value),
@@ -133,9 +167,11 @@ export function mountStopSheet(root, store) {
       gettingThere: f.gettingThere.value.trim(),
       travelMin: cleanMin(f.travelMin.value),
       fixed: f.fixed.checked,
-      place: f.place.value.trim(),
+      place,
       link: f.link.value.trim(),
       signJp: f.signJp.value.trim(),
+      lat: w.lat,
+      lng: w.lng,
     };
   }
 
@@ -152,6 +188,8 @@ export function mountStopSheet(root, store) {
       place: str(stop.place).trim(),
       link: str(stop.link).trim(),
       signJp: str(stop.signJp).trim(),
+      lat: str(stop.lat),
+      lng: str(stop.lng),
     };
   }
 
@@ -166,7 +204,11 @@ export function mountStopSheet(root, store) {
     f.place.value = str(stop.place);
     f.link.value = str(stop.link);
     f.signJp.value = str(stop.signJp);
+    pin.value = "";
+    at = str(stop.lat) !== "" && str(stop.lng) !== "" ? { lat: str(stop.lat), lng: str(stop.lng) } : { lat: "", lng: "" };
+    was = null;
     was = read();
+    showAt();
   }
 
   const diff = (from, to) => {
@@ -190,6 +232,7 @@ export function mountStopSheet(root, store) {
     if (!isOpen()) return;
     const busy = phase !== null;
     for (const field of Object.values(f)) field.disabled = busy;
+    pin.disabled = busy;
     sheet.classList.toggle("is-saving", phase === "saving");
     done.disabled = phase === "saving";
     save.textContent = phase === "saving" ? SAVING : saveWord;
@@ -270,6 +313,7 @@ export function mountStopSheet(root, store) {
     phase = null;
     session += 1;
     for (const field of Object.values(f)) field.disabled = false;
+    pin.disabled = false;
     done.disabled = false;
     sheet.classList.remove("is-saving");
     sheet.classList.remove("is-open");
@@ -391,6 +435,8 @@ export function mountStopSheet(root, store) {
   }
 
   f.title.addEventListener("input", update);
+  pin.addEventListener("input", showAt);
+  f.place.addEventListener("input", showAt);
   // Correcting any field takes the reason away.
   const edited = () => {
     if (!refused) return;
@@ -417,7 +463,7 @@ export function mountStopSheet(root, store) {
   // The keyboard's Next, in a one-line field, goes to the next field (the
   // directions box among them); on the last one it puts the keyboard away.
   // Enter in the directions box is its own (a new line).
-  const order = [f.title, f.time, f.detail, f.gettingThere, f.travelMin, f.place, f.link, f.signJp];
+  const order = [f.title, f.time, f.detail, f.gettingThere, f.travelMin, f.place, pin, f.link, f.signJp];
   sheet.addEventListener("keydown", (ev) => {
     const i = order.indexOf(ev.target);
     if (ev.key !== "Enter" || i < 0 || ev.isComposing || ev.target === f.gettingThere) return;

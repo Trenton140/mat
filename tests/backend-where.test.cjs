@@ -1,0 +1,203 @@
+// Where things are (location build, item 3): Stops, Stays and Days gain lat
+// and lng (numbers as text, "" when unknown); migrate adds them; `locate`
+// geocodes what has none (at most 40 lookups a call); saveStop clears a
+// stop's coordinates when its place changes; the app can set them from a
+// pasted Maps link; the connector reads them but cannot set them.
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const path = require("node:path");
+const fs = require("node:fs");
+const P = require("../backend/Pure.js");
+const { createFakeBackend } = require("./fake-backend.cjs");
+
+const KEY = "test-key";
+const SEED = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "seed.json"), "utf8"));
+const PLAN = JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "plan.json"), "utf8"));
+const WITH_PLAN = { ...SEED, ...PLAN };
+
+function client(seed = WITH_PLAN, opts) {
+  const fake = createFakeBackend(JSON.parse(JSON.stringify(seed)), opts);
+  const call = (action, args = {}, extra = {}) => fake({ key: KEY, actor: "Mo", action, args, ...extra });
+  call.fake = fake;
+  return call;
+}
+
+// A stand-in geocoder: answers from a table, counts the questions.
+function geocoder(call, table) {
+  const asked = [];
+  call.fake.geocoder.answer = (q, region) => {
+    asked.push({ q, region });
+    return Object.prototype.hasOwnProperty.call(table, q) ? table[q] : null;
+  };
+  return asked;
+}
+
+const stopById = (d, id) => d.stops.find((s) => s.id === id);
+
+test("the tabs have lat and lng", () => {
+  for (const tab of ["Stops", "Stays", "Days"]) {
+    assert.ok(P.TABS[tab].includes("lat") && P.TABS[tab].includes("lng"), tab);
+    assert.equal(P.isTextColumn(tab, "lat"), true, "numbers as text");
+  }
+});
+
+test("load returns lat and lng as text, \"\" when unknown or not a coordinate", async () => {
+  const call = client();
+  const d = (await call("load")).data;
+  for (const s of d.stops) assert.deepEqual([s.lat, s.lng], ["", ""]);
+  for (const s of d.stays) assert.deepEqual([s.lat, s.lng], ["", ""]);
+  for (const day of d.days) assert.deepEqual([day.lat, day.lng], ["", ""]);
+  // Typed by hand: good numbers read back as text; anything else as "".
+  const row = call.fake.tables.Stops.find((r) => r.id === "planstop1203");
+  row.lat = "35.6585";
+  row.lng = 139.7023;
+  const row2 = call.fake.tables.Stops.find((r) => r.id === "planstop1204");
+  row2.lat = "north";
+  row2.lng = "139";
+  const d2 = (await call("load")).data;
+  assert.deepEqual([stopById(d2, "planstop1203").lat, stopById(d2, "planstop1203").lng], ["35.6585", "139.7023"]);
+  assert.deepEqual([stopById(d2, "planstop1204").lat, stopById(d2, "planstop1204").lng], ["", ""], "half a coordinate is none");
+});
+
+test("migrate adds the columns to an older Sheet and is safe to repeat", async () => {
+  const call = client({ ...WITH_PLAN, missingColumns: ["Stops.lat", "Stops.lng", "Stays.lat", "Stays.lng", "Days.lat", "Days.lng"] });
+  // Before migrate: load works, with no coordinates; locate is refused.
+  const d = (await call("load")).data;
+  assert.equal(stopById(d, "planstop1203").lat, "");
+  const early = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.deepEqual([early.ok, early.error], [false, "needs_migrate"]);
+  const added = (await call.fake({ key: KEY, action: "migrate", args: {} })).data.added;
+  assert.deepEqual(added.sort(), ["Days.lat", "Days.lng", "Stays.lat", "Stays.lng", "Stops.lat", "Stops.lng"]);
+  assert.deepEqual((await call.fake({ key: KEY, action: "migrate", args: {} })).data.added, []);
+});
+
+test("locate needs the trip key, geocodes what has no coordinates, and says what it found", async () => {
+  const call = client();
+  const asked = geocoder(call, {
+    "Shibuya Sky": { lat: 35.6585, lng: 139.7023 },
+    "Meiji Jingu": { lat: 35.6764, lng: 139.6993 },
+    "東京都台東区浅草1-1-1": { lat: 35.7119, lng: 139.7967 },
+    Tokyo: { lat: 35.6812, lng: 139.7671 },
+    "Dinner Tokyo": { lat: 35.68, lng: 139.77 },
+  });
+  assert.equal((await call.fake({ key: "wrong", action: "locate", args: {} })).error, "bad_key");
+  const revBefore = (await call("load")).rev;
+  const r = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(typeof r.data.found, "number");
+  assert.equal(r.data.more, false);
+  for (const a of asked) assert.equal(a.region, "jp");
+  const d = (await call("load")).data;
+  assert.deepEqual([stopById(d, "planstop1203").lat, stopById(d, "planstop1203").lng], ["35.6585", "139.7023"]);
+  assert.equal(stopById(d, "planstop1201").lat, "35.6764");
+  // A stop with no place: its title plus the day's city.
+  assert.equal(stopById(d, "planstop1204").lat, "35.68");
+  const asakusa = d.stays.find((s) => s.id === "planstay0001");
+  assert.deepEqual([asakusa.lat, asakusa.lng], ["35.7119", "139.7967"], "a stay by its Japanese address");
+  assert.equal(d.days.find((x) => x.date === "2026-12-12").lat, "35.6812", "a day by its city");
+  // Nothing found for the rest: "" and counted as missing; asked again next call.
+  assert.ok(r.data.missing > 0, JSON.stringify(r.data));
+  assert.equal(r.data.found, 3 + 1 + 2, JSON.stringify(r.data)); // stops 1201, 1203, 1204; one stay; the two Tokyo days
+  assert.ok(r.rev > revBefore, "phones learn the new coordinates on their next check");
+  // Nothing is logged in History.
+  assert.equal(call.fake.tables.Log.filter((x) => x.action === "locate").length, 0);
+  const again = asked.length;
+  const r2 = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(r2.data.found, 0);
+  assert.ok(asked.length > again, "the missing ones are asked again");
+  assert.ok(!asked.slice(again).some((a) => a.q === "Shibuya Sky"), "a found one is not asked again");
+});
+
+test("locate: a stop's place first, then its title with the day's city; a stay's address, then its name with its place", async () => {
+  const call = client();
+  const asked = geocoder(call, { "Lunch in Harajuku Tokyo": { lat: 35.67, lng: 139.70 }, "Niseko lodge": null });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const qs = asked.map((a) => a.q);
+  assert.ok(qs.includes("Lunch in Harajuku Tokyo"), qs.join(" | "));
+  // Meiji: place, then title + city.
+  assert.ok(qs.indexOf("Meiji Jingu") < qs.indexOf("Meiji Shrine Tokyo"), qs.join(" | "));
+  // Niseko lodge has no address and no place: its name alone.
+  assert.ok(qs.includes("Niseko lodge"), qs.join(" | "));
+  // A deleted stop is not looked up.
+  assert.equal(qs.some((q) => q.startsWith("undefined")), false);
+});
+
+test("locate: a place that is a Maps link with a position is read without a lookup", async () => {
+  const seed = JSON.parse(JSON.stringify(WITH_PLAN));
+  seed.stops.find((s) => s.id === "planstop1202").place = "https://www.google.com/maps/place/x/@35.1,139.1,17z/data=!3d35.6702!4d139.7027";
+  const call = client(seed);
+  const asked = geocoder(call, {});
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const d = (await call("load")).data;
+  assert.deepEqual([stopById(d, "planstop1202").lat, stopById(d, "planstop1202").lng], ["35.6702", "139.7027"]);
+  assert.equal(asked.some((a) => a.q.includes("maps")), false);
+});
+
+test("locate: at most 40 lookups a call, then more: true; a failing geocoder leaves \"\" and does not stop the call", async () => {
+  const seed = JSON.parse(JSON.stringify(WITH_PLAN));
+  for (let i = 0; i < 50; i++) seed.stops.push({ id: "bulkstop" + String(i).padStart(4, "0"), date: "2026-12-14", time: "", title: "Spot " + i });
+  const call = client(seed);
+  let n = 0;
+  call.fake.geocoder.answer = (q) => {
+    n++;
+    if (q === "Spot 3") throw new Error("quota");
+    return null;
+  };
+  const r = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(n, 40);
+  assert.equal(r.data.more, true);
+  const r2 = await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(r2.ok, true);
+});
+
+test("saveStop clears a stop's coordinates when its place changes, and keeps them otherwise", async () => {
+  const call = client();
+  geocoder(call, { "Shibuya Sky": { lat: 35.6585, lng: 139.7023 } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  let r = await call("updateStop", { id: "planstop1203", patch: { note: "Floor 14" } });
+  assert.equal(r.data.stop.lat, "35.6585", "an unrelated change keeps them");
+  r = await call("updateStop", { id: "planstop1203", patch: { place: "Shibuya Scramble Square" } });
+  assert.deepEqual([r.data.stop.lat, r.data.stop.lng], ["", ""], "a new place clears them");
+  // Undo puts the old place and its coordinates back.
+  const u = await call("undo", { logId: r.data.logId });
+  assert.equal(u.ok, true, JSON.stringify(u));
+  assert.equal(u.data.stop.lat, "35.6585");
+});
+
+test("the app sets a stop's coordinates (from a pasted link); a place change with them keeps the new ones", async () => {
+  const call = client();
+  let r = await call("updateStop", { id: "planstop1204", patch: { lat: "35.6612", lng: "139.6990" } });
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.deepEqual([r.data.stop.lat, r.data.stop.lng], ["35.6612", "139.699"]);
+  assert.match(call.fake.tables.Log.at(-1).summary, /changed Dinner: map/);
+  r = await call("updateStop", { id: "planstop1204", patch: { place: "Uobei", lat: "35.66", lng: "139.70" } });
+  assert.deepEqual([r.data.stop.lat, r.data.stop.lng], ["35.66", "139.7"]);
+  // Taken off the map.
+  r = await call("updateStop", { id: "planstop1204", patch: { lat: "", lng: "" } });
+  assert.deepEqual([r.data.stop.lat, r.data.stop.lng], ["", ""]);
+  for (const bad of [{ lat: "91", lng: "0" }, { lat: "35", lng: "" }, { lat: "x", lng: "y" }, { lat: 35, lng: 139 }]) {
+    const e = await call("updateStop", { id: "planstop1204", patch: bad });
+    assert.equal(e.error, "bad_input", JSON.stringify(bad));
+  }
+  // A new stop can carry them too.
+  const add = await call("addStop", { stop: { id: "newstop00001", date: "2026-12-12", title: "Tea", lat: "35.0", lng: "135.7" } });
+  assert.deepEqual([add.data.stop.lat, add.data.stop.lng], ["35", "135.7"]);
+});
+
+test("the connector reads coordinates but cannot set them", async () => {
+  const call = client();
+  geocoder(call, { "Shibuya Sky": { lat: 35.6585, lng: 139.7023 } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const rpc = (name, args) => call.fake.mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, { t: "claude-token" });
+  const trip = rpc("get_trip", {});
+  assert.ok(JSON.stringify(trip).includes("35.6585"), "get_trip shows them: " + JSON.stringify(trip).slice(0, 300));
+  // Asked to change a stop's lat/lng, the connector refuses: they are not its arguments.
+  const refused = rpc("change_stop", { id: "planstop1203", note: "x", lat: "1", lng: "1" });
+  assert.match(JSON.stringify(refused), /unknown argument lat/);
+  const d = (await call("load")).data;
+  assert.equal(stopById(d, "planstop1203").lat, "35.6585");
+  // Straight through handle_ as the connector: refused.
+  const e = await call("updateStop", { id: "planstop1203", patch: { lat: "1", lng: "1" } }, { via: "claude" });
+  assert.equal(e.error, "bad_input");
+});

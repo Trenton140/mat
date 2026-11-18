@@ -72,7 +72,7 @@ const STAMP_DROP_MS = 48 * 3600000;
 const STAMP_DROPPED = "That stamp’s day has closed.";
 
 // A stop as the backend gives it back, before the fields are filled in.
-const STOP_BLANK = { date: "", time: "", title: "", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "" };
+const STOP_BLANK = { date: "", time: "", title: "", detail: "", gettingThere: "", travelMin: 0, fixed: false, place: "", signJp: "", booked: false, link: "", photo: "", note: "", lat: "", lng: "" };
 
 const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
 const defaultWait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

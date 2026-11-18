@@ -80,7 +80,7 @@ function planKind_(kind) {
   if (kind === "stop") {
     return {
       tab: "Stops", key: "id", deletable: true, fromRow: stopFromRow, toRow: stopToRow, missing: MSG_.noStop,
-      fields: ["date", "time", "title", "detail", "gettingThere", "travelMin", "fixed", "place", "signJp", "booked", "link", "photo", "note"],
+      fields: ["date", "time", "title", "detail", "gettingThere", "travelMin", "fixed", "place", "signJp", "booked", "link", "photo", "note", "lat", "lng"],
     };
   }
   if (kind === "stay") {
@@ -122,6 +122,8 @@ function dispatch_(body) {
       return ok_({ added: added }, rev_());
     });
   }
+  // Where things are: run from a terminal like migrate (trip key only).
+  if (action === "locate") return withLock_(locate_);
   // The Claude connector's token, for Settings to copy into a link. Never logged.
   if (action === "claudeLink") {
     var token = claudeToken_();
@@ -381,6 +383,7 @@ function updateExpense_(args, ctx) {
   if (!id) return err_("bad_input", MSG_.badId);
   var patch = args.patch;
   if (!isObj_(patch)) return err_("bad_input", MSG_.badPatch);
+  if (claudeCoords_(patch, ctx)) return err_("bad_input", MSG_.stopPatchKey);
   var keys = Object.keys(patch);
   for (var i = 0; i < keys.length; i++) {
     if (EXPENSE_PATCH_KEYS_.indexOf(keys[i]) === -1) return err_("bad_input", MSG_.patchKey);
@@ -755,7 +758,14 @@ function planReply_(kind, item, logId) {
   return data;
 }
 
+// Coordinates come only from the app (a pasted Maps link) or locate: the
+// connector reads them but cannot set them.
+function claudeCoords_(input, ctx) {
+  return ctx.via === "claude" && isObj_(input) && (input.lat !== undefined || input.lng !== undefined);
+}
+
 function addStop_(args, ctx) {
+  if (claudeCoords_(args.stop, ctx)) return err_("bad_input", MSG_.stopPatchKey);
   var v = validateStop(args.stop, tripDates_());
   if (!v.ok) return err_("bad_input", v.message);
   return addPlanItem_("stop", v.value, ctx);
@@ -767,6 +777,7 @@ function updateStop_(args, ctx) {
   if (!id) return err_("bad_input", MSG_.badId);
   var patch = args.patch;
   if (!isObj_(patch)) return err_("bad_input", MSG_.badPatch);
+  if (claudeCoords_(patch, ctx)) return err_("bad_input", MSG_.stopPatchKey);
   var keys = Object.keys(patch);
   for (var i = 0; i < keys.length; i++) {
     if (plan.fields.indexOf(keys[i]) === -1) return err_("bad_input", MSG_.stopPatchKey);
@@ -782,7 +793,95 @@ function updateStop_(args, ctx) {
   merged.id = id;
   var v = validateStop(merged, tripDates_());
   if (!v.ok) return err_("bad_input", v.message);
+  // A new place: the old coordinates were for the old one (unless new ones came with it).
+  if (v.value.place !== cur.place && patch.lat === undefined && patch.lng === undefined) {
+    v.value.lat = "";
+    v.value.lng = "";
+  }
   return editPlanItem_("stop", id, cur, v.value, ctx);
+}
+
+// ---- where things are: locate ----
+// For each stop, stay and day with no coordinates, asks Apps Script's own
+// geocoder (Env.js geocode_, region jp): a stop by its place (a Maps link
+// with a position is read without asking), then its title with its day's
+// city; a stay by its Japanese address, then its name with its place; a day
+// by its city. At most LOCATE_MAX_ lookups a call (the same question twice in
+// a call is asked once); a lookup that fails or finds nothing leaves "" and
+// is asked again next call. No History line; rev moves when something was
+// found, so phones fetch it. -> { found, missing, more }
+
+var LOCATE_MAX_ = 40;
+
+function locate_() {
+  var tabs = ["Stops", "Stays", "Days"];
+  for (var t = 0; t < tabs.length; t++) {
+    if (!hasColumn_(tabs[t], "lat") || !hasColumn_(tabs[t], "lng")) return err_("needs_migrate", MSG_.needsMigrate);
+  }
+  var left = LOCATE_MAX_;
+  var more = false;
+  var found = 0;
+  var missing = 0;
+  var asked = {};
+  // A point for the first query that finds one; null when none does;
+  // undefined when the lookups ran out first.
+  function look(queries) {
+    for (var i = 0; i < queries.length; i++) {
+      var q = String(queries[i] || "").replace(/\s+/g, " ").trim();
+      if (q === "") continue;
+      if (!Object.prototype.hasOwnProperty.call(asked, q)) {
+        if (left <= 0) return undefined;
+        left--;
+        var got = null;
+        try {
+          got = geocode_(q, "jp");
+        } catch (e) {
+          got = null;
+        }
+        asked[q] = got ? coordsOf_(got) : null;
+        if (asked[q] && asked[q].lat === "") asked[q] = null;
+      }
+      if (asked[q]) return asked[q];
+    }
+    return null;
+  }
+  function put(tab, key, ref, p) {
+    if (p === undefined) {
+      more = true;
+      return;
+    }
+    if (p === null) {
+      missing++;
+      return;
+    }
+    updateWhere_(tab, key, ref, { lat: p.lat, lng: p.lng });
+    found++;
+  }
+  var placeText = function (v) { var s = cellText_(v).trim(); return safeUrl(s) ? "" : s; };
+  var days = readTable_("Days");
+  var cityOf = {};
+  days.forEach(function (r) { cityOf[cellDate_(r.date)] = cellText_(r.city).trim(); });
+  days.forEach(function (r) {
+    var date = cellDate_(r.date);
+    if (date === "" || coordsOf_(r).lat !== "" || cityOf[date] === "") return;
+    put("Days", "date", date, look([cityOf[date]]));
+  });
+  readTable_("Stays").forEach(function (r) {
+    var id = cellText_(r.id);
+    if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
+    put("Stays", "id", id, look([r.address_jp, cellText_(r.name) + " " + placeText(r.place)]));
+  });
+  readTable_("Stops").forEach(function (r) {
+    var id = cellText_(r.id);
+    if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
+    var pin = pointFromLink(cellText_(r.place));
+    if (pin) {
+      put("Stops", "id", id, pin);
+      return;
+    }
+    put("Stops", "id", id, look([placeText(r.place), cellText_(r.title).trim() + " " + (cityOf[cellDate_(r.date)] || "")]));
+  });
+  return ok_({ found: found, missing: missing, more: more }, found > 0 ? bumpRev_() : rev_());
 }
 
 // A new id adds the stay; a known one edits it. With merge: true (the Claude

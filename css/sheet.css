@@ -144,6 +144,10 @@ button.set-r:active,a.set-r:active{background:var(--key-hi);transform:translateY
 .st-time{max-width:12em}
 .st-time input{font-variant-numeric:tabular-nums}
 /* The time can't slip: a switch, 指定 boxed as on the ticket. */
+/* On the map / Not on the map, and the field to paste a Maps link into. */
+.st-at-h{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 8px}
+.st-at-h b{font-size:15px;font-weight:900}
+.st-at-h i{font-size:12.5px;font-weight:500;overflow-wrap:anywhere}
 .st-sw{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:48px;font-size:15px;font-weight:900}
 .st-sw i{border:1.5px solid var(--print);border-radius:2px;padding:0 4px 1px;margin-left:8px;font-size:12.5px;font-weight:900}
 .st-sw input{flex:none;position:relative;width:50px;height:30px;margin:0;border:1.5px solid var(--print);border-radius:15px;background:var(--paper);
