@@ -1460,26 +1460,32 @@ function afterUntick_(env, id, item, was, by) {
 // instead (a stuck tick, retried by a pull). noteBy (the undo's ctx; not
 // for a retry): when it stays owed, History's one note says so. item: the
 // text the put-back was bound to. A row ticked again meanwhile is cleared
-// only when the planner's cell, read just before (outside both locks: no
-// planner call ever runs under the app's lock), is not exactly Booked: a
-// re-tick that has already written Booked again keeps its "yes". When that
-// read fails or no longer finds the item, the row is left alone.
+// only when the planner's cell is not exactly Booked: a re-tick that has
+// already written Booked again keeps its "yes". That cell is read once,
+// under the app's lock (the one planner read made there, ruling of the
+// second fix round: read before the lock, a re-tick landing during the wait
+// was wiped; plannerTab_ takes no planner lock, so no lock waits on
+// another). When that read fails or no longer finds the item, the row is
+// left alone.
 // -> "owed" | "settled" | "busy"
 function settleUntick_(id, said, noteBy, item) {
-  var plannerBooked = null; // null: not known
-  if (said === "written" && typeof item === "string") {
+  // Whether the planner's cell says exactly Booked; null: not known.
+  var plannerBooked = function () {
+    if (typeof item !== "string") return null;
     try {
       var found = plannerTodo_(plannerTab_(TODO_BOOK_TAB_), id, item);
-      if (found) plannerBooked = found.status === "Booked";
-    } catch (e) { /* not known: leave the row alone */ }
-  }
+      return found ? found.status === "Booked" : null;
+    } catch (e) {
+      return null;
+    }
+  };
   var out = withLock_(function () {
     var row = findRow_("Todos", id);
     var pw = row ? cellText_(row.planner_written) : "";
     if (pw === "undo" && said !== "pending") {
       updateById_("Todos", id, { ticked_item: "", planner_written: "", planner_was: "" });
       bumpRev_();
-    } else if (pw === "yes" && said === "written" && plannerBooked === false) {
+    } else if (pw === "yes" && said === "written" && plannerBooked() === false) {
       updateById_("Todos", id, { planner_written: "", planner_was: "", status: cellText_(row.planner_was) });
       bumpRev_();
     }

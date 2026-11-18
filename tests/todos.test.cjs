@@ -816,7 +816,10 @@ test("I4: no planner call ever runs while the app's lock is held; planner writes
   await call("claimTodo", { id: "1", on: true }, "Ajen");
   const calls = call.fake.planner.calls;
   assert.ok(calls.length > 6);
-  assert.deepEqual(calls.filter((c) => c.appLock), [], "none under the app lock");
+  // The one exception (second fix round, ruling C1): settleUntick_ reads the Book Now cell under the
+  // app's lock when a row was ticked again while its put-back was out, so a re-tick that lands while
+  // it waits for the lock is not wiped. A read only, with no planner lock: no lock waits on another.
+  assert.deepEqual(calls.filter((c) => c.appLock && !(c.op === "read" && c.tab === "Book Now" && !c.plannerLock)), [], "none under the app lock but that read");
   assert.deepEqual(calls.filter((c) => c.op !== "read" && !c.plannerLock), [], "every write under the planner lock");
 });
 
@@ -1846,4 +1849,62 @@ test("fix I2 (ruling): a re-tick of an owed row writes Booked over a hand-set St
   const u = await call("undo", { logId: t.data.logId }, "Mo");
   assert.equal(u.data.planner, "written");
   assert.equal(bookStatus(call), "Cancelled");
+});
+
+// ---------- wave A second fix round ----------
+
+// Runs `between` once, inside the next app-lock taking that settleUntick_
+// makes, before its own work: another request that got the lock first.
+function whileSettleUntickWaits(call, between) {
+  const realSettle = call.fake.world.settleUntick_;
+  call.fake.world.settleUntick_ = (...a) => {
+    call.fake.world.settleUntick_ = realSettle;
+    const realLock = call.fake.world.withLock_;
+    call.fake.world.withLock_ = (fn) => {
+      call.fake.world.withLock_ = realLock;
+      between();
+      return realLock(fn);
+    };
+    return realSettle(...a);
+  };
+}
+
+test("fix2 C1: a re-tick that writes Booked and records yes while the put-back's record waits for the lock is not wiped", async () => {
+  const { call, logId } = await ticked();
+  later(call, 1);
+  whileSettleUntickWaits(call, () => {
+    assert.equal(bookStatus(call), "Not booked", "the put-back is in the planner");
+    call.fake({ key: KEY, actor: "Mo", action: "tickTodo", args: { id: "1" } });
+    assert.equal(stored(call, "1").planner_written, "yes");
+  });
+  await call("undo", { logId }, "Ajen");
+  assert.equal(bookStatus(call), "Booked");
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Not booked", "Booked"], "still ticked, yes, was what the tick replaced");
+  await forced(call);
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Not booked", "Booked"]);
+  assert.equal(bookStatus(call), "Booked");
+});
+
+test("fix2 C1: a plain undo still clears, and the one Book Now read under the app's lock is the record's own", async () => {
+  const { call, logId } = await ticked();
+  later(call, 1);
+  const u = await call("undo", { logId }, "Ajen");
+  assert.equal(u.data.planner, "written");
+  assert.deepEqual(owedOf(call), ["", "", "", "Not booked"]);
+  assert.equal(bookStatus(call), "Not booked");
+});
+
+test("fix2 C1: the record's Book Now read under the app's lock happens only for a row ticked again, once, and never with the planner lock", async () => {
+  const { call, logId } = await ticked();
+  later(call, 1);
+  whileSettleUntickWaits(call, () => { call.fake({ key: KEY, actor: "Mo", action: "tickTodo", args: { id: "1" } }); });
+  const start = call.fake.planner.calls.length;
+  await call("undo", { logId }, "Ajen");
+  const under = call.fake.planner.calls.slice(start).filter((c) => c.appLock);
+  assert.deepEqual(under.map((c) => [c.op, c.tab, c.plannerLock]), [["read", "Book Now", false]]);
+  const plain = await ticked();
+  later(plain.call, 1);
+  const s2 = plain.call.fake.planner.calls.length;
+  await plain.call("undo", { logId: plain.logId }, "Ajen");
+  assert.deepEqual(plain.call.fake.planner.calls.slice(s2).filter((c) => c.appLock), [], "a plain undo reads nothing under it");
 });
