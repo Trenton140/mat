@@ -13,6 +13,8 @@
 .bk.is-open{transform:none;box-shadow:0 -24px 40px -10px #000}
 .bk-top{display:flex;align-items:center;gap:8px;padding:12px var(--gr) 2px var(--gl);font-weight:900;font-size:16px}
 @media (max-width:380px){ .bk-top{font-size:14.5px;gap:6px} }
+/* A 320 px screen: the title's Japanese word (the page repeats it below) gives way to the count, and in Today each seal stands over its name, so no name is cut short. */
+@media (max-width:340px){ .bk-title i{display:none} .bk-p{flex-direction:column;align-items:flex-start;gap:4px} }
 .bk-title{min-width:0;white-space:nowrap}
 .bk-title i{font-family:var(--seal);font-weight:400;margin-right:8px}
 .bk-n{margin-left:auto;padding-left:4px;font-family:var(--dot);font-weight:400;font-size:13px;color:var(--dim);white-space:nowrap;font-variant-numeric:tabular-nums}

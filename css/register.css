@@ -35,6 +35,8 @@
 .who>div{display:flex;align-items:center;gap:6px}
 .who-l{color:var(--dim);font-size:12.5px;font-weight:700;margin-right:2px}
 .seals{display:flex;gap:6px}
+/* A narrow phone (a 320 px screen): the two seal rows do not fit side by side, so the split row goes under the paid one. */
+@media (max-width:370px){ .who{flex-wrap:wrap;row-gap:6px} }
 /* "split" with the Uneven button under it, so both seal rows fit a 390 px phone. */
 .who-split{display:grid;justify-items:start;line-height:1.1}
 #xUneven{border:0;background:none;color:var(--text);padding:3px 0 0;font-weight:700;font-size:12.5px;text-decoration:underline dotted;text-underline-offset:3px;min-height:22px}
@@ -75,6 +77,13 @@
 .un-row{display:grid;grid-template-columns:minmax(0,1fr) 40px 44px 40px 76px;align-items:center;column-gap:5px;min-height:50px;
   border-bottom:1.5px dashed rgba(21,18,15,.35)}
 .un-row:last-child{border-bottom:0}
+/* A narrow phone (320 to 350 px): the panel's side padding and the buttons give up a few px, so a name and an amount like $1,000.00 fit the row. */
+@media (max-width:350px){
+  .un{padding-left:8px;padding-right:8px}
+  .un-row{grid-template-columns:minmax(0,1fr) 34px 36px 34px max-content;column-gap:3px}
+  .un-minus,.un-plus{width:34px}
+  .un-amt{min-width:74px;font-size:14px}
+}
 .un-who{min-width:0;font-weight:700;font-size:15.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .un-minus,.un-plus{width:40px;height:40px;border:1.5px solid var(--print);border-radius:8px;background:none;color:var(--print);font-weight:900;font-size:20px;padding:0;
   transition:background .08s,transform .08s}

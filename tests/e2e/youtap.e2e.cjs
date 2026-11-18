@@ -159,7 +159,9 @@ module.exports = [
     name: "Last updated: Fetching… while it loads (a second tap starts nothing), Up to date ✓, then the time; a failed fetch says No signal and comes back",
     async run({ page }) {
       const backend = await ready(page);
-      assert.equal(await page.getAttribute("#setFresh", "aria-live"), "polite");
+      // The time changes under every sync, so it is not a live region; what a tap said is in the status line (tests/e2e/polish.e2e.cjs).
+      assert.equal(await page.getAttribute("#setFresh", "aria-live"), null);
+      assert.equal(await page.getAttribute("#setFreshSay", "role"), "status");
       const time = await text(page, "#setFresh");
       assert.match(time, /^Up to date \d\d:\d\d$/);
       const before = requests(backend, "load");

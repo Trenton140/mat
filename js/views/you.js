@@ -42,6 +42,10 @@ const FETCHING = "Fetching…";
 const FETCHED = "Up to date ✓";
 const NO_SIGNAL_WORD = "No signal";
 const SAID_MS = 2000; // how long a row says it worked
+// What a screen reader is told about Last updated (the time itself is not read out on every sync).
+const HEARD_FETCHED = "Up to date.";
+const HEARD_NO_SIGNAL = "No signal.";
+const HEARD_NEW = "New lines came in.";
 const FAILED_MS = 3000; // how long a row says it did not
 const PULLED_MS = 4000; // how long Planner payments says what came in
 
@@ -68,13 +72,14 @@ const MARKUP = `
   </div>
   <button type="button" class="set-r" id="setSound"><span>Stamp sound</span><b id="setSoundV">On</b></button>
   <button type="button" class="set-r" id="setHist"><span>History<small>Every change, with undo</small></span><b>Open</b></button>
-  <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh" aria-live="polite" data-w="Up to date 00:00"></b></button>
+  <button type="button" class="set-r" id="setFreshRow"><span>Last updated<small>Tap to fetch the latest</small></span><b id="setFresh" data-w="Up to date 00:00"></b></button>
+  <span class="set-vh" id="setFreshSay" role="status"></span>
   <button type="button" class="set-r" id="setDemo" aria-expanded="false" aria-controls="setDemoDays"><span>Try another day<small>See how a day will look before you go</small></span><b id="setDemoV">Pick</b></button>
   <div class="set-days" id="setDemoDays" hidden></div>
   <button type="button" class="set-r" id="setHow" aria-expanded="false" aria-controls="setHowLines"><span>How this works</span><b id="setHowV">Show</b></button>
   <div class="how" id="setHowLines" hidden></div>
   <button type="button" class="set-r" id="setInstall" aria-expanded="false"><span>Add to Home Screen<small>Opens like an app, full screen</small><span class="set-steps" id="setInstallHow" hidden><span>1. Tap Share, then Add to Home Screen.</span><span>2. If it asks for your trip link, paste: it’s already copied.</span></span></span><b>Set up</b></button>
-  <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between you.</small></span><b id="setInviteV" aria-live="polite" data-w="Not copied">Copy</b></button>
+  <button type="button" class="set-r" id="setInvite"><span>Invite link<small>For the other two. Keep it between&nbsp;you.</small></span><b id="setInviteV" aria-live="polite" data-w="Not copied">Copy</b></button>
   <button type="button" class="set-r" id="setClaude"><span>Claude link<small>Lets your Claude add stops and expenses. Keep it to yourself.</small></span><b id="setClaudeV" aria-live="polite" data-w="Not copied">Copy</b></button>
   <button type="button" class="set-r" id="setPlanner" hidden><span>Planner payments<small>Brings in what’s been paid from the planner sheet</small></span><b id="setPlannerV" aria-live="polite" data-w="Needs a look">Fetch</b></button>
   <div class="set-pp" id="setPlannerP" hidden></div>
@@ -157,6 +162,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const picFile = $("setPicFile");
   const soundV = $("setSoundV");
   const fresh = $("setFresh");
+  const hear = $("setFreshSay");
   const how = $("setHow");
   const howV = $("setHowV");
   const howLines = $("setHowLines");
@@ -200,6 +206,30 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   }
   const copyWord = () => COPY;
   const said = (word, ok) => say(word, ok ? COPIED : NOT_COPIED, ok ? SAID_MS : FAILED_MS, copyWord);
+
+  // The one line a screen reader is told about Last updated: only what
+  // matters (the answer to a tap, new lines from another phone, signal lost),
+  // never the time changing under every 20-second sync. Said while the sheet
+  // is open, and left empty again so the same words can be said twice.
+  let heardTimer = null;
+  const tell = (text) => {
+    clearTimeout(heardTimer);
+    hear.textContent = text;
+    if (text) heardTimer = setTimeout(() => { hear.textContent = ""; }, 5000);
+  };
+  let heardLines = null; // lines and stamps as last seen
+  let heardOnline = true;
+  function hearChanges(s) {
+    const n = (Array.isArray(s.expenses) ? s.expenses.filter((e) => e && !e.deleted).length : 0) + (Array.isArray(s.payments) ? s.payments.filter((p) => p && !p.removed).length : 0);
+    const grew = heardLines !== null && n > heardLines;
+    heardLines = n;
+    const online = s.online !== false;
+    const lost = heardOnline && !online;
+    heardOnline = online;
+    if (!opened) return;
+    if (lost) tell(HEARD_NO_SIGNAL);
+    else if (grew) tell(HEARD_NEW);
+  }
 
   const mePerson = (s) => s.people.find((p) => p.name === s.me) || null;
   const addressOf = (s) => {
@@ -297,6 +327,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
   const freshWord = (s) => (s.loadedAt === null ? NOT_YET : freshText(s.loadedAt));
 
   function render(s) {
+    hearChanges(s);
     drawWho(s);
     drawMail(s);
     drawPic(s);
@@ -366,6 +397,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
     if (!opened) return;
     opened = false;
     session++; // a Claude link still on its way is dropped, not copied
+    tell("");
     sheet.classList.remove("is-open");
     sheet.inert = true;
     scrim.hidden = true;
@@ -469,6 +501,7 @@ export function mountYou(root, store, { onHistory = () => {}, onDemo = () => {},
       fetching = false;
     }
     say(fresh, ok ? FETCHED : NO_SIGNAL_WORD, SAID_MS, () => freshWord(store.state));
+    tell(ok ? HEARD_FETCHED : HEARD_NO_SIGNAL);
   });
   how.addEventListener("click", () => setHow(howLines.hidden));
   demoRow.addEventListener("click", () => setDemo(demoDays.hidden));
