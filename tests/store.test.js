@@ -3335,3 +3335,9 @@ test("forgot() clears everything, keeps no queue, and shows the plain no-key scr
   assert.deepEqual([p.store.state.status, p.store.state.keyRefused, p.store.state.cleared, p.store.state.expenses.length], ["nokey", false, null, 0]);
   assert.deepEqual([...p.storage.map.keys()], []);
 });
+
+test("a wrong key on an empty phone says nothing was taken off", async () => {
+  const p = phone({ storage: memStorage({ "mat.key": "wrong-key-123" }) });
+  await p.store.boot();
+  assert.deepEqual([p.store.state.status, p.store.state.keyRefused, p.store.state.cleared], ["nokey", true, null]);
+});

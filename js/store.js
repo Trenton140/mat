@@ -365,6 +365,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     if (wiped && keep) return;
     const queue = keep ? getJson("mat.queue") : null;
     const mine = Array.isArray(queue) && myName ? queue.filter((q) => queuedBy(q) === myName) : [];
+    // Only say the trip was taken off when there was one here (a wrong key
+    // pasted on an empty phone has nothing to take off).
+    const had = base !== null || getItem("mat.cache") !== null || (Array.isArray(queue) && queue.length > 0);
     wiped = true;
     try {
       clear(mine.length ? JSON.stringify(mine) : null);
@@ -384,7 +387,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       paymentProblems: { at: "", list: [], more: 0 }, todoProblems: { at: "", list: [], more: 0 },
       loadedAt: null, lastChange: null, notice: null, setAside: [],
       history: { entries: [], more: false, loading: false, error: null },
-      cleared: { kept: mine.length },
+      cleared: had ? { kept: mine.length } : null,
     });
     historyLoaded = false;
     emit();
