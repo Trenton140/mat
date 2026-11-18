@@ -74,8 +74,8 @@ test("migrate adds the columns to an older Sheet and is safe to repeat", async (
 test("locate needs the trip key, geocodes what has no coordinates, and says what it found", async () => {
   const call = client();
   const asked = geocoder(call, {
-    "Shibuya Sky": { lat: 35.6585, lng: 139.7023 },
-    "Meiji Jingu": { lat: 35.6764, lng: 139.6993 },
+    "Shibuya Sky Tokyo": { lat: 35.6585, lng: 139.7023 },
+    "Meiji Jingu Tokyo": { lat: 35.6764, lng: 139.6993 },
     "東京都台東区浅草1-1-1": { lat: 35.7119, lng: 139.7967 },
     Tokyo: { lat: 35.6812, lng: 139.7671 },
     "Dinner Tokyo": { lat: 35.68, lng: 139.77 },
@@ -105,7 +105,7 @@ test("locate needs the trip key, geocodes what has no coordinates, and says what
   const r2 = await call.fake({ key: KEY, action: "locate", args: {} });
   assert.equal(r2.data.found, 0);
   assert.ok(asked.length > again, "the missing ones are asked again");
-  assert.ok(!asked.slice(again).some((a) => a.q === "Shibuya Sky"), "a found one is not asked again");
+  assert.ok(!asked.slice(again).some((a) => a.q === "Shibuya Sky Tokyo"), "a found one is not asked again");
 });
 
 test("locate: a stop's place first, then its title with the day's city; a stay's address, then its name with its place", async () => {
@@ -114,7 +114,7 @@ test("locate: a stop's place first, then its title with the day's city; a stay's
   await call.fake({ key: KEY, action: "locate", args: {} });
   const first = asked.map((a) => a.q);
   // Meiji: its place this call, its title with the day's city the next (one lookup a row a call).
-  assert.ok(first.includes("Meiji Jingu") && !first.includes("Meiji Shrine Tokyo"), first.join(" | "));
+  assert.ok(first.includes("Meiji Jingu Tokyo") && !first.includes("Meiji Shrine Tokyo"), first.join(" | "));
   await call.fake({ key: KEY, action: "locate", args: {} });
   const qs = asked.map((a) => a.q);
   assert.ok(qs.includes("Meiji Shrine Tokyo"), qs.join(" | "));
@@ -156,7 +156,7 @@ test("locate: at most 40 lookups a call, then more: true; a failing geocoder lea
 
 test("saveStop clears a stop's coordinates when its place changes, and keeps them otherwise", async () => {
   const call = client();
-  geocoder(call, { "Shibuya Sky": { lat: 35.6585, lng: 139.7023 } });
+  geocoder(call, { "Shibuya Sky Tokyo": { lat: 35.6585, lng: 139.7023 } });
   await call.fake({ key: KEY, action: "locate", args: {} });
   let r = await call("updateStop", { id: "planstop1203", patch: { note: "Floor 14" } });
   assert.equal(r.data.stop.lat, "35.6585", "an unrelated change keeps them");
@@ -190,7 +190,7 @@ test("the app sets a stop's coordinates (from a pasted link); a place change wit
 
 test("the connector reads coordinates but cannot set them", async () => {
   const call = client();
-  geocoder(call, { "Shibuya Sky": { lat: 35.6585, lng: 139.7023 } });
+  geocoder(call, { "Shibuya Sky Tokyo": { lat: 35.6585, lng: 139.7023 } });
   await call.fake({ key: KEY, action: "locate", args: {} });
   const rpc = (name, args) => call.fake.mcp({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }, { t: "claude-token" });
   const trip = rpc("get_trip", {});
@@ -279,4 +279,29 @@ test("I2: more is true only while untried rows remain; the next call takes those
   call.fake.tables.Stops.find((x) => x.id === "nowhere00000").deleted_at = "2026-12-01T00:00:00Z";
   await call.fake({ key: KEY, action: "locate", args: {} });
   assert.equal("stop:nowhere00000" in JSON.parse(call.fake.props.LOCATE_TRIED), false);
+});
+
+test("I4: a stop's place is looked up with its day's city, and an answer far from the day counts as not found", async () => {
+  const call = client();
+  const asked = geocoder(call, {
+    Tokyo: { lat: 35.6812, lng: 139.7671 },
+    // A Shibuya Sky in another city: 400 km from the day.
+    "Shibuya Sky Tokyo": { lat: 34.6937, lng: 135.5023 },
+    // Meiji Jingu found close by.
+    "Meiji Jingu Tokyo": { lat: 35.6764, lng: 139.6993 },
+  });
+  const r = await call.fake({ key: KEY, action: "locate", args: {} });
+  const qs = asked.map((a) => a.q);
+  assert.ok(qs.includes("Shibuya Sky Tokyo") && !qs.includes("Shibuya Sky"), qs.join(" | "));
+  const d = (await call("load")).data;
+  assert.equal(stopById(d, "planstop1203").lat, "", "400 km from the day: not taken");
+  assert.equal(stopById(d, "planstop1201").lat, "35.6764");
+  assert.ok(r.data.missing > 0);
+});
+
+test("I4: with the day not yet located, the answer is taken (nothing to check it against)", async () => {
+  const call = client();
+  geocoder(call, { "Shibuya Sky Tokyo": { lat: 34.6937, lng: 135.5023 } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(stopById((await call("load")).data, "planstop1203").lat, "34.6937");
 });

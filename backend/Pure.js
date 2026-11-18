@@ -298,6 +298,16 @@ function optCoords_(lat, lng) {
   return { ok: true, value: c };
 }
 
+// Metres between two { lat, lng } (numbers or text), along the ground; NaN when either is not a coordinate.
+function metresBetween_(a, b) {
+  var p = coordsOf_(a || {}), q = coordsOf_(b || {});
+  if (p.lat === "" || q.lat === "") return NaN;
+  var rad = Math.PI / 180;
+  var dLat = (Number(q.lat) - Number(p.lat)) * rad, dLng = (Number(q.lng) - Number(p.lng)) * rad;
+  var h = Math.pow(Math.sin(dLat / 2), 2) + Math.cos(Number(p.lat) * rad) * Math.cos(Number(q.lat) * rad) * Math.pow(Math.sin(dLng / 2), 2);
+  return 2 * 6371008.8 * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
 // The position in a pasted Google Maps link (the place's pin !3d..!4d.., else,
 // only in a place or search link, the map's centre @lat,lng), or null. Never
 // from a directions link (its start may be where someone was) or a bare map
@@ -1320,5 +1330,5 @@ function changeLogRow(rows, fields) {
 }
 
 if (typeof module !== "undefined") {
-  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_, plannerWhat_, coordsOf_, pointFromLink };
+  module.exports = { TABS, KINDS, isTextColumn, sanitizeCell, unsanitizeCell, rowToObj, objToRow, validateExpense, validatePayment, validatePersonPatch, validateStop, validateStay, validateDayPatch, DAY_PATCH_KEYS, safeUrl, safeHttpsUrl, dayLabel, stopFromRow, stopToRow, stayFromRow, stayToRow, dayFromRow, dayToRow, expenseFromRow, paymentFromRow, personFromRow, cellDate_, cellStamp_, summarize, undoTarget, canUndo, entryFromRow, parseLogRow, expenseToRow, paymentToRow, setupSeedRows, shouldFetchRate, rateSource, sameKey, paymentsFromRows, expenseFromPayment, paymentIdOf, todosFromRows, bookByDay, todoFromRow, isBooked, colLetter, changeLogRow, shortDay_, stampWindow, pressRefusal, stampDefFromRow, stampFromRow, stampSnap_, plannerWhat_, coordsOf_, pointFromLink, metresBetween_ };
 }

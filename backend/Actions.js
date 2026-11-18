@@ -804,7 +804,9 @@ function updateStop_(args, ctx) {
 // ---- where things are: locate ----
 // For each stop, stay and day with no coordinates, asks Apps Script's own
 // geocoder (Env.js geocode_, region jp). Each row has its forms of question:
-// a stop its place, then its title with its day's city; a stay its Japanese
+// a stop its place with its day's city, then its title with its day's city
+// (and when the day has coordinates, an answer more than LOCATE_NEAR_M from
+// them counts as not found: a common name in another city); a stay its Japanese
 // address, then its name with its place; a day its city. A stop whose place
 // is a Maps link with a position is read without asking.
 // Fair to every row: a row costs at most one lookup a call; rows never tried
@@ -818,6 +820,7 @@ function updateStop_(args, ctx) {
 
 var LOCATE_MAX_ = 40;
 var LOCATE_KEY_ = "LOCATE_TRIED";
+var LOCATE_NEAR_M_ = 30000;
 
 function locate_() {
   var tabs = ["Stops", "Stays", "Days"];
@@ -844,11 +847,15 @@ function locate_() {
   var rows = [];
   var days = readTable_("Days");
   var cityOf = {};
-  days.forEach(function (r) { cityOf[cellDate_(r.date)] = cellText_(r.city).trim(); });
+  var dayAt = {}; // a day's coordinates, as known so far
+  days.forEach(function (r) {
+    cityOf[cellDate_(r.date)] = cellText_(r.city).trim();
+    if (coordsOf_(r).lat !== "") dayAt[cellDate_(r.date)] = coordsOf_(r);
+  });
   days.forEach(function (r) {
     var date = cellDate_(r.date);
     if (date === "" || coordsOf_(r).lat !== "") return;
-    rows.push({ key: "day:" + date, tab: "Days", col: "date", ref: date, queries: clean([cityOf[date]]) });
+    rows.push({ key: "day:" + date, tab: "Days", col: "date", ref: date, day: date, queries: clean([cityOf[date]]) });
   });
   readTable_("Stays").forEach(function (r) {
     var id = cellText_(r.id);
@@ -859,9 +866,10 @@ function locate_() {
     var id = cellText_(r.id);
     if (id === "" || cellSet_(r.deleted_at) || coordsOf_(r).lat !== "") return;
     var city = cityOf[cellDate_(r.date)] || "";
+    var place = placeText(r.place);
     rows.push({
-      key: "stop:" + id, tab: "Stops", col: "id", ref: id, pin: pointFromLink(cellText_(r.place)),
-      queries: clean([placeText(r.place), cellText_(r.title).trim() + " " + city]),
+      key: "stop:" + id, tab: "Stops", col: "id", ref: id, pin: pointFromLink(cellText_(r.place)), on: cellDate_(r.date),
+      queries: clean([place ? place + " " + city : "", cellText_(r.title).trim() + " " + city]),
     });
   });
   // Keep only rows still waiting; untried first (in sheet order), then the longest ago.
@@ -903,6 +911,8 @@ function locate_() {
         if (asked[q] && asked[q].lat === "") asked[q] = null;
       }
       p = asked[q];
+      // A stop's answer far from its day's place is another place of that name.
+      if (p && row.on && dayAt[row.on] && !(metresBetween_(p, dayAt[row.on]) <= LOCATE_NEAR_M_)) p = null;
     }
     if (!p) {
       missing++;
@@ -910,6 +920,7 @@ function locate_() {
       return;
     }
     updateWhere_(row.tab, row.col, row.ref, { lat: p.lat, lng: p.lng });
+    if (row.day) dayAt[row.day] = p;
     delete tried[row.key];
     found++;
   });
