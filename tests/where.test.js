@@ -1,0 +1,159 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createWhere, ASK_GAP_MS, OPTIONS } from "../js/where.js";
+
+const NOW = Date.parse("2026-12-15T13:20:00+09:00");
+
+function mem(init = {}) {
+  const m = new Map(Object.entries(init));
+  return { getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), m };
+}
+// A stand-in phone: each request waits until the test answers it.
+function phone() {
+  const calls = [];
+  return {
+    calls,
+    watched: 0,
+    getCurrentPosition(ok, no, opts) {
+      calls.push({ ok, no, opts });
+    },
+    watchPosition() {
+      this.watched++;
+    },
+    give(i, lat, lng, accuracy = 30, at = NOW) {
+      calls[i].ok({ coords: { latitude: lat, longitude: lng, accuracy }, timestamp: at });
+    },
+    refuse(i) {
+      calls[i].no({ code: 1 });
+    },
+  };
+}
+// No real timers in a unit test.
+const T = { every: () => 1, stopEvery: () => {} };
+function doc(state = "visible") {
+  const fns = [];
+  return { visibilityState: state, addEventListener: (t, f) => fns.push(f), fire() { for (const f of fns) f(); } };
+}
+
+test("unset at first; nothing is asked until a tap; only the choice is stored", () => {
+  const s = mem();
+  const g = phone();
+  let t = NOW;
+  const w = createWhere({ ...T, storage: s, geolocation: g, now: () => t, doc: doc() });
+  w.start();
+  assert.equal(w.state(), "unset");
+  assert.equal(g.calls.length, 0, "never asked by itself");
+  w.ask();
+  assert.equal(w.state(), "on");
+  assert.equal(s.getItem("mat.where"), "on");
+  assert.equal(g.calls.length, 1);
+  assert.deepEqual(g.calls[0].opts, { enableHighAccuracy: false, maximumAge: 120000, timeout: 8000 });
+  assert.deepEqual(OPTIONS, g.calls[0].opts);
+  assert.equal(w.current(), null, "nothing waits: no position yet");
+  g.give(0, 35.0037, 135.7788, 40);
+  assert.deepEqual(w.current(), { lat: 35.0037, lng: 135.7788, at: NOW, accuracy: 40 });
+  // Only the choice is kept on the phone.
+  assert.deepEqual([...s.m.keys()], ["mat.where"]);
+  assert.equal([...s.m.values()].join().includes("35.0037"), false);
+  assert.equal(g.watched, 0, "never watchPosition");
+});
+
+test("stale, rough or from the phone's no: as if off", () => {
+  const g = phone();
+  let t = NOW;
+  const w = createWhere({ ...T, storage: mem(), geolocation: g, now: () => t, doc: doc() });
+  w.ask();
+  g.give(0, 35, 135, 301);
+  assert.equal(w.current(), null, "rough");
+  t = NOW + 3 * 60000 + 1000;
+  w.ask();
+  g.give(1, 35, 135, 50, NOW);
+  assert.equal(w.current(), null, "already older than 3 minutes when it came");
+  t += 1;
+  w.ask();
+  g.refuse(2);
+  assert.equal(w.state(), "refused");
+  assert.equal(w.current(), null);
+});
+
+test("asked at most once every 2 minutes, only while on screen", () => {
+  const g = phone();
+  let t = NOW;
+  const d = doc();
+  const w = createWhere({ ...T, storage: mem({ "mat.where": "on" }), geolocation: g, now: () => t, doc: d });
+  w.start();
+  assert.equal(g.calls.length, 1, "on: asked when the app starts on screen");
+  g.give(0, 35, 135);
+  d.fire();
+  assert.equal(g.calls.length, 1, "not again within 2 minutes");
+  t += ASK_GAP_MS;
+  d.visibilityState = "hidden";
+  d.fire();
+  assert.equal(g.calls.length, 1, "never while hidden");
+  d.visibilityState = "visible";
+  d.fire();
+  assert.equal(g.calls.length, 2, "back on screen after 2 minutes: asked");
+});
+
+test("refused stays quiet: nothing is asked again until a person taps", () => {
+  const g = phone();
+  const d = doc();
+  let t = NOW;
+  const w = createWhere({ ...T, storage: mem({ "mat.where": "refused" }), geolocation: g, now: () => t, doc: d });
+  w.start();
+  t += 10 * ASK_GAP_MS;
+  d.fire();
+  assert.equal(g.calls.length, 0);
+  assert.equal(w.state(), "refused");
+  w.ask();
+  assert.equal(g.calls.length, 1, "a tap asks again");
+});
+
+test("turning it off forgets the position and asks no more", () => {
+  const g = phone();
+  const d = doc();
+  let t = NOW;
+  const s = mem();
+  const w = createWhere({ ...T, storage: s, geolocation: g, now: () => t, doc: d });
+  let told = 0;
+  w.subscribe(() => told++);
+  w.ask();
+  g.give(0, 35, 135);
+  assert.ok(w.current());
+  w.turnOff();
+  assert.equal(w.state(), "off");
+  assert.equal(s.getItem("mat.where"), "off");
+  assert.equal(w.current(), null);
+  t += 10 * ASK_GAP_MS;
+  d.fire();
+  assert.equal(g.calls.length, 1);
+  assert.ok(told >= 3);
+});
+
+test("a phone with no geolocation is off and asks nothing; storage that throws is survived", () => {
+  const w = createWhere({ ...T, storage: mem(), geolocation: undefined, doc: doc() });
+  w.start();
+  w.ask();
+  assert.equal(w.supported(), false);
+  assert.equal(w.state(), "off");
+  assert.equal(w.current(), null);
+  const bad = { getItem() { throw new Error("no"); }, setItem() { throw new Error("no"); } };
+  const g = phone();
+  const w2 = createWhere({ ...T, storage: bad, geolocation: g, now: () => NOW, doc: doc() });
+  assert.equal(w2.state(), "unset");
+  w2.ask();
+  assert.equal(w2.state(), "on", "kept for this visit");
+});
+
+test("the phone's own permission, when it can be read, brings the choice in line", async () => {
+  const g = phone();
+  const perm = (state) => ({ query: () => Promise.resolve({ state }) });
+  const w = createWhere({ ...T, storage: mem({ "mat.where": "refused" }), geolocation: g, permissions: perm("granted"), now: () => NOW, doc: doc() });
+  w.start();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(w.state(), "on", "allowed since in Settings");
+  const w2 = createWhere({ ...T, storage: mem({ "mat.where": "on" }), geolocation: phone(), permissions: perm("denied"), now: () => NOW, doc: doc() });
+  w2.start();
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(w2.state(), "refused");
+});

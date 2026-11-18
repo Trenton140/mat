@@ -4,10 +4,13 @@
 // 11", then "today", "used" or how long until that day) and a row of squares,
 // one per day, filled for used days, that jump to a day.
 //
-// mountDays(root, store, { clock, onStop, onAddStop, onStay, onAllDays })
+// mountDays(root, store, { clock, where, onStop, onAddStop, onStay, onAllDays })
 //   -> { goDay(index, smooth), day() }  (goDay is a deliberate jump)
 // - clock: the trip's clock (js/clock.js). Every "now" here comes from
 //   clock.now(), never Date.now(), and is judged in the trip's time zone.
+// - where: the phone's position (js/where.js), or null. While its choice is
+//   unset, today's ticket with a next stop asks once (.tk-ask): Use it asks
+//   the phone, Not now turns it off for good (You can turn it on).
 // - onAllDays(): the counter was tapped. onStay(stayId): a ticket's stay row
 //   was tapped. onAddStop(date): a ticket's ＋ Add a stop was tapped.
 //   onStop(stopId): an open stop's Edit was tapped.
@@ -120,7 +123,7 @@ function patchTicket(old, fresh) {
   return old;
 }
 
-export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
+export function mountDays(root, store, { clock, where = null, onAllDays = () => {}, onStay = () => {}, onStop = () => {}, onAddStop = () => {}, onStampBook = () => {}, held = () => false } = {}) {
   const count = el("button", "bar-t");
   count.type = "button";
   count.id = "dayCount";
@@ -380,6 +383,14 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     applyOpen();
   }
   rail.addEventListener("click", (ev) => {
+    if (where && ev.target.closest(".tk-ask .yes")) {
+      where.ask();
+      return;
+    }
+    if (where && ev.target.closest(".tk-ask .no")) {
+      where.turnOff();
+      return;
+    }
     if (ev.target.closest(".tk-stampline")) {
       onStampBook();
       return;
@@ -531,6 +542,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
         // Today's stamp is open and not yet pressed: the ticket says so.
         stampOpen: stampToday === day.date,
       };
+      // Asked once, on today's ticket, the first time a day has a next stop.
+      if (nextId && where && where.supported() && where.state() === "unset") model.ask = true;
       const sig = JSON.stringify(model);
       if (sigs.get(day.date) === sig) return;
       sigs.set(day.date, sig);
@@ -615,6 +628,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
 
   render(store.state);
   store.subscribe(render);
+  if (where) where.subscribe(() => render(store.state));
   // Starting or stopping a demo is a deliberate jump: the rail goes to the
   // day the clock now says is today, whatever R32 would otherwise hold.
   let demoWas = clock.demoDay();

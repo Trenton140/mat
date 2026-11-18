@@ -89,6 +89,13 @@ i{font-style:normal}
 .sheet-top i{color:var(--dim);font-weight:700;font-size:14px;margin-left:6px}
 .sheet-top button{border:0;background:none;color:var(--dim);font-weight:900;font-size:15px;height:36px;padding:0 4px}
 
+/* ---------- 現在地: the red "you are here" box from the maps outside every station ----------
+   Printed wherever the phone's position was used; no box, no position. */
+.here{display:inline-flex;align-items:center;height:18px;padding:0 5px 1px;border-radius:2px;background:var(--shu);color:#fff;font-size:11.5px;font-weight:900;
+  letter-spacing:.04em;line-height:1;white-space:nowrap;position:relative;flex:none}
+.here::after{content:"";position:absolute;left:7px;bottom:-4px;border:4px solid transparent;border-top-color:var(--shu);border-bottom:0}
+.dist{font-family:var(--dot);font-weight:400;font-size:13px;font-variant-numeric:tabular-nums;white-space:nowrap}
+
 /* ---------- payer seals (also the register's) ---------- */
 .seal{width:38px;height:38px;border-radius:50%;border:1.6px solid var(--dim);background:none;color:var(--dim);font-weight:900;font-size:12px;padding:0;
   transition:background .12s,color .12s,border-color .12s,transform .12s ease-out}

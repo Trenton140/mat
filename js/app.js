@@ -26,6 +26,7 @@ import { rollingCount } from "./fx.js";
 import { createUpdater, otherVersionIn } from "./update.js";
 import { APP_VERSION } from "./config.js";
 import { isWide, onWide } from "./shape.js";
+import { createWhere } from "./where.js";
 
 // How often a visible phone asks the backend whether anything changed.
 const CHECK_MS = 20000;
@@ -200,6 +201,10 @@ function start() {
   });
   store = createStore({ api, storage });
 
+  // Where the phone is: kept in memory only, never sent or stored (js/where.js).
+  const where = createWhere({ storage: raw, geolocation: navigator.geolocation, permissions: navigator.permissions });
+  where.start();
+
   // The one clock the Days screen reads, in the trip's time zone.
   const clock = createClock({ getTz: () => (store.state.trip && store.state.trip.tz) || "Asia/Tokyo" });
   const tabs = mountTabs(store, raw);
@@ -270,6 +275,7 @@ function start() {
   });
   const you = mountYou(phone, store, {
     demo: clock,
+    where,
     getKey: () => storage.getItem("mat.key"),
     // A computer's window shows Days and Money side by side (Before takes the Days pane while it is the tab).
     screen: () => (tabs.tab() === "before" ? "Before we go" : isWide() ? "Days and Money" : tabs.tab() === "days" ? "Days" : "Money"),
@@ -363,6 +369,7 @@ function start() {
   });
   const days = mountDays(document.getElementById("vDays"), store, {
     clock,
+    where,
     onStay: (id) => {
       closeForDays();
       stayCard.open(id);

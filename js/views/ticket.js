@@ -20,6 +20,9 @@
 //   zero; toGo: days until the trip starts (daysToGo), counted down on Day 1;
 //   stampOpen: today's stamp in the stamp book is open and not yet pressed,
 //   so the ticket carries a line, .tk-stampline, that opens the book.
+// - ask: today's ticket asks, once, whether to use where the phone is
+//   (.tk-ask under the date, with Use it and Not now; the Days view sees to
+//   the taps). Without it the ticket is exactly as it was.
 // - stay: the night's stay (stayShownFor: on today's ticket before 04:00,
 //   last night's), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
@@ -241,6 +244,28 @@ function stampLine() {
   return b;
 }
 
+// 現在地, "you are here": the red box printed wherever the phone's position was used.
+export function hereBox() {
+  return el("span", "here", "現在地");
+}
+
+// The one-time line under the date on today's ticket: may MAT use where you are?
+function askLine() {
+  const d = el("div", "tk-ask");
+  const p = el("p");
+  const words = el("span", "", "Leave-by times from where you are?");
+  words.append(el("small", "", "Your location stays on this phone."));
+  p.append(hereBox(), words);
+  const yes = el("button", "yes", "Use it");
+  yes.type = "button";
+  const no = el("button", "no", "Not now");
+  no.type = "button";
+  const btns = el("div");
+  btns.append(yes, no);
+  d.append(p, btns);
+  return d;
+}
+
 // 宿泊 Tonight and the stay's name: a button that opens the hotel card.
 function stayRow(stay) {
   const b = el("button", "tk-stay");
@@ -277,6 +302,7 @@ export function ticketEl(model) {
   const dateRow = el("div", "tk-date");
   dateRow.append(when, validity(number, toGo));
   head.append(dateRow);
+  if (model.ask) head.append(askLine());
   if (model.stampOpen) head.append(stampLine());
   if (state === "used") head.append(gate(day, h, mark));
 
