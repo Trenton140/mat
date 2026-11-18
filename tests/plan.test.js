@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { minutesOf, nowIn, instantOf, openDayIndex, dayState, daysToGo, stopsFor, nextStopId, isPast, nextLine, stayFor, stayShownFor, NEXT_GRACE_MIN, NIGHT_ENDS_MIN, safeHref, originFor, mapsUrl, stayMapsUrl, inkFor, header, dayTotalYen, gateDate, issueLine } from "../js/plan.js";
+import { minutesOf, nowIn, instantOf, openDayIndex, dayState, daysToGo, stopsFor, nextStopId, isPast, nextLine, stayFor, stayShownFor, NEXT_GRACE_MIN, NIGHT_ENDS_MIN, safeHref, mapsUrl, stayMapsUrl, inkFor, header, dayTotalYen, gateDate, issueLine } from "../js/plan.js";
 
 const TZ = "Asia/Tokyo";
 const TRIP = { start: "2026-12-10", end: "2026-12-20", tz: TZ };
@@ -54,16 +54,15 @@ test("where you sleep", () => {
   assert.equal(stayFor(stays, "2026-12-13").name, "Niseko");
   assert.equal(stayFor(stays, "2026-12-20"), null);
 });
-test("directions", () => {
-  const stays = [{ id: "s1", name: "Asakusa hotel", place: "Asakusa hotel Tokyo", firstNight: "2026-12-10", lastNight: "2026-12-12", deleted: false }];
+test("directions start from where the phone is: no origin, ever", () => {
   const day = [stop("Meiji Shrine", "09:00", { place: "Meiji Jingu" }), stop("Lunch", "12:30", { place: "https://maps.app.goo.gl/abc" }), stop("Sky", "14:00", { place: "Shibuya Sky" })];
-  assert.equal(originFor(day, 0, stays, "2026-12-12"), "Asakusa hotel Tokyo");
-  assert.equal(originFor(day, 1, stays, "2026-12-12"), "Meiji Jingu");
-  assert.equal(originFor(day, 2, stays, "2026-12-12"), "Lunch"); // a link cannot be an origin
-  assert.equal(originFor(day, 0, [], "2026-12-12"), "");
-  assert.equal(mapsUrl(day[0], "Asakusa hotel Tokyo"), "https://www.google.com/maps/dir/?api=1&travelmode=transit&origin=Asakusa%20hotel%20Tokyo&destination=Meiji%20Jingu");
-  assert.equal(mapsUrl(day[1], "Meiji Jingu"), "https://maps.app.goo.gl/abc");
-  assert.equal(mapsUrl(stop("Dinner", "19:00"), ""), "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=Dinner");
+  assert.equal(mapsUrl(day[0]), "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=Meiji%20Jingu");
+  assert.equal(mapsUrl(day[1]), "https://maps.app.goo.gl/abc");
+  assert.equal(mapsUrl(day[2]), "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=Shibuya%20Sky");
+  assert.equal(mapsUrl(stop("Dinner", "19:00")), "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=Dinner");
+  // An origin passed by an old caller is ignored: Maps starts from the phone.
+  assert.equal(mapsUrl(day[0], "Asakusa hotel Tokyo"), "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=Meiji%20Jingu");
+  for (const s of day) assert.equal(mapsUrl(s).includes("origin"), false);
   assert.equal(stayMapsUrl({ name: "Lodge", place: "", addressJp: "北海道虻田郡" }), "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent("北海道虻田郡"));
 });
 test("links from the Sheet", () => {
@@ -88,13 +87,11 @@ test("the fare and the small print", () => {
 test("a place from the Sheet is only a link when safeHref says so", () => {
   const evil = "javascript:alert(1)";
   const spaced = "http://x y";
-  const url = mapsUrl(stop("Odd", "10:00", { place: evil }), "");
+  const url = mapsUrl(stop("Odd", "10:00", { place: evil }));
   assert.equal(url, "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=" + encodeURIComponent(evil));
-  assert.equal(mapsUrl(stop("Odd", "10:00", { place: spaced }), "Here"), "https://www.google.com/maps/dir/?api=1&travelmode=transit&origin=Here&destination=" + encodeURIComponent(spaced));
+  assert.equal(mapsUrl(stop("Odd", "10:00", { place: spaced })), "https://www.google.com/maps/dir/?api=1&travelmode=transit&destination=" + encodeURIComponent(spaced));
   assert.equal(stayMapsUrl({ name: "Inn", place: evil }), "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(evil));
   assert.equal(stayMapsUrl({ name: "Inn", place: spaced }), "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(spaced));
-  // a hand-typed place is still text as an origin
-  assert.equal(originFor([stop("a", "09:00", { place: evil }), stop("b", "10:00")], 1, [], "2026-12-12"), evil);
 });
 test("blank or missing fields never print undefined", () => {
   assert.equal(nextLine({ id: "x", time: "" }, 800), "");
@@ -102,9 +99,8 @@ test("blank or missing fields never print undefined", () => {
   assert.equal(minutesOf("25:00"), null);
   assert.equal(minutesOf("14:05"), 845);
   assert.equal(minutesOf(undefined), null);
-  assert.equal(mapsUrl({ id: "x" }, ""), "");
+  assert.equal(mapsUrl({ id: "x" }), "");
   assert.equal(stayMapsUrl({}), "");
-  assert.equal(originFor([{ id: "a" }, { id: "b" }], 1, [], "2026-12-12"), "");
   assert.deepEqual(header({}), { line: null, colour: null, ink: null, route: null, city: "", title: "" });
   assert.equal(stayFor([{ id: "s", name: "No dates" }], "2026-12-12"), null);
 });

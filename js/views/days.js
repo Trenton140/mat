@@ -26,7 +26,9 @@
 //
 // The open stop: today's next stop is open by default. Once a person opens
 // or closes a stop by hand, that choice holds (the next stop no longer opens
-// itself) until the day in view changes.
+// itself) until the day in view changes. The first stop open in a visit
+// (by itself or by hand) shows the line under its Directions key that says
+// Maps starts from where the phone is (.r-why); no other stop does.
 //
 // The next stop in view: when Days opens, when the rail makes a deliberate
 // jump (to today on coming back a later day, the demo starting or stopping, a
@@ -163,6 +165,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
   let autoId = null; // today's next stop: open unless a person chose
   let chosen = false; // a person has opened or closed a stop by hand
   let openId = null; // the stop they left open, or null
+  let whyId = null; // the first stop open in this visit: it carries the directions line
 
   const step = () => {
     const pg = rail.firstElementChild;
@@ -245,6 +248,7 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
 
   function applyOpen() {
     const id = chosen ? openId : autoId;
+    if (id && !whyId) whyId = id;
     for (const r of rail.querySelectorAll(".r[data-id]")) {
       const on = r.dataset.id === id;
       if (r.classList.contains("is-open") !== on) r.classList.toggle("is-open", on);
@@ -252,6 +256,8 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       if (b) b.setAttribute("aria-expanded", String(on));
       const more = r.querySelector(".r-more");
       if (more) more.inert = !on;
+      const why = r.querySelector(".r-why");
+      if (why && why.hidden !== (r.dataset.id !== whyId)) why.hidden = r.dataset.id !== whyId;
     }
   }
 

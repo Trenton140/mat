@@ -9,8 +9,8 @@
 // model = { day, number, count, state, header, stops, stays, total, mark,
 //           stay, nextId, minutes, toGo, tripName, stampOpen }
 // - day: the Days row ({ date, city, title, ... }); header: header(day) from
-//   js/plan.js; stops: stopsFor(...) for the day, in order; stays: every stay
-//   (the first stop's directions start from the night before's); number:
+//   js/plan.js; stops: stopsFor(...) for the day, in order; stays: every stay;
+//   number:
 //   1-based; mark: the issuer's mark ("MAT"); tripName: printed when the day
 //   has no route and no city.
 // - state: dayState(...) ("used", "today", "ahead"); minutes: the trip zone's
@@ -30,7 +30,7 @@
 // aria-expanded on its [role=button], and un-inerts its .r-more).
 // A used day's gate stamp is made once per day, place and mark, and reused.
 
-import { minutesOf, issueLine, isPast, nextLine, originFor, mapsUrl, safeHref, gateDate } from "../plan.js";
+import { minutesOf, issueLine, isPast, nextLine, mapsUrl, safeHref, gateDate } from "../plan.js";
 import { dayHead, yen } from "../format.js";
 import { rng, gateStampSVG } from "../stamp.js";
 
@@ -111,8 +111,10 @@ function route(h, tripName) {
 const failedPhotos = new Set();
 
 // What shows when the stop is open: the photo, how to get there, the note,
-// and the buttons (directions, and the stop's own link).
-function more(stop, origin) {
+// and the buttons (directions from here, and the stop's own link). Under the
+// keys, drawn hidden, the line that says where directions start: the Days
+// view shows it on the first stop opened in a visit (.r-why).
+function more(stop) {
   const wrap = el("div", "r-more");
   wrap.inert = true;
   const inner = el("div");
@@ -142,8 +144,8 @@ function more(stop, origin) {
     a.rel = "noopener";
     return a;
   };
-  const map = mapsUrl(stop, origin);
-  if (map) btns.append(link("r-map", "地図 Directions ↗", map));
+  const map = mapsUrl(stop);
+  if (map) btns.append(link("r-map", "地図 Directions from here ↗", map));
   const own = safeHref(stop.link);
   if (own) btns.append(link("r-map alt", "Ticket or booking ↗", own));
   // Opens the stop sheet on this stop (js/views/stopsheet.js).
@@ -151,12 +153,17 @@ function more(stop, origin) {
   edit.type = "button";
   btns.append(edit);
   inner.append(btns);
+  if (map) {
+    const why = el("p", "r-why", "Opens Maps from where your phone is, by train and bus.");
+    why.hidden = true;
+    inner.append(why);
+  }
   wrap.append(inner);
   return wrap;
 }
 
-function row(stop, i, model) {
-  const { state, minutes, nextId, stops, stays, day } = model;
+function row(stop, model) {
+  const { state, minutes, nextId } = model;
   const next = state === "today" && stop.id === nextId;
   const r = el("div", "r");
   r.dataset.id = stop.id;
@@ -190,7 +197,7 @@ function row(stop, i, model) {
     if (detail) s.append(detail);
     body.append(s);
   }
-  r.append(el("div", "r-t", minutesOf(stop.time) === null ? "—" : stop.time), body, el("div", "r-j", str(stop.signJp)), more(stop, originFor(stops, i, stays, day.date)));
+  r.append(el("div", "r-t", minutesOf(stop.time) === null ? "—" : stop.time), body, el("div", "r-j", str(stop.signJp)), more(stop));
   return r;
 }
 
@@ -274,7 +281,7 @@ export function ticketEl(model) {
   if (state === "used") head.append(gate(day, h, mark));
 
   const rows = el("div", "rows");
-  if (stops.length) rows.append(...stops.map((stop, i) => row(stop, i, model)));
+  if (stops.length) rows.append(...stops.map((stop) => row(stop, model)));
   else rows.append(el("div", "r-none", "Nothing planned yet."));
 
   const foot = el("div", "tk-foot");
