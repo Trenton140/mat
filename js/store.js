@@ -33,6 +33,7 @@
 // Everything outside comes in through createStore's arguments.
 
 import { newId } from "./time.js";
+import { untickOutcome } from "./todos.js";
 
 const BUSY_RETRIES = 3;
 const BUSY_DELAY_MS = 400;
@@ -49,7 +50,7 @@ const TODO_PULLS = 4;
 
 // How often an open phone asks for the planner's payments on its own.
 const PAY_AUTO_MS = 10 * 60 * 1000;
-const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt", "stampDefs", "stamps", "paymentProblems"];
+const DATA_KEYS = ["trip", "people", "days", "stops", "stays", "expenses", "payments", "rateToday", "rateSource", "sheetUrl", "plannerLinked", "todos", "todosPulledAt", "paymentsPulledAt", "stampDefs", "stamps", "paymentProblems", "todoProblems"];
 // Every kind of item the store keeps, the field it is found by and the flag
 // that marks it gone. Stays and day headers only ever change here through an
 // undo from History (their writes come in later tasks). A todo is an item
@@ -88,6 +89,15 @@ const fateUnknown = (err) => noReply(err) && !neverSent(err);
 // Worth trying again on the next contact.
 const transient = (err) => noReply(err) || codeOf(err) === "busy";
 const refusedAsStale = (err) => codeOf(err) === "stale" || codeOf(err) === "not_found";
+
+// s cut to max letters as the backend's plannerCut_ does: at max - 1, less a
+// trailing part-word, then "…".
+function cutText(s, max) {
+  if (s.length <= max) return s;
+  let t = s.slice(0, max - 1);
+  if (s.charAt(max - 1) !== " " && t.charAt(t.length - 1) !== " " && t.lastIndexOf(" ") > 0) t = t.slice(0, t.lastIndexOf(" "));
+  return t.replace(/\s+$/, "") + "…";
+}
 
 function bare(item) {
   if (!item) return item;
@@ -166,7 +176,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   const state = {
     status: "boot", online: true, rev: null, me: null,
-    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "", stampDefs: [], stamps: [], paymentProblems: { at: "", list: [], more: 0 },
+    trip: null, people: [], days: [], stops: [], stays: [], expenses: [], payments: [], rateToday: null, rateSource: null, sheetUrl: "", plannerLinked: false, todos: [], todosPulledAt: "", paymentsPulledAt: "", stampDefs: [], stamps: [], paymentProblems: { at: "", list: [], more: 0 }, todoProblems: { at: "", list: [], more: 0 },
     loadedAt: null, seenAt: null, lastChange: null, notice: null, setAside: [], keyRefused: false,
     history: { entries: [], more: false, loading: false, error: null },
   };
@@ -616,10 +626,11 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       } else {
         removeOp(op);
         state.notice = failNotice(err);
-        // A stop with no reply is asked about at once, not at the next
-        // 20-second check, so a stop that did land is back on screen before
-        // anyone types it again. (A reload only: the write is never resent.)
-        if (op.kind === "stop" && fateUnknown(err)) track(checkRev());
+        // A stop or a todo (a tick, a claim) with no reply is asked about at
+        // once, not at the next 20-second check, so one that did land (a slow
+        // tick outlasting the 30-second wait) is back on screen before anyone
+        // taps it again. (A reload only: the write is never resent.)
+        if ((op.kind === "stop" || op.kind === "todo") && fateUnknown(err)) track(checkRev());
       }
     }
     saveQueue();
@@ -924,7 +935,8 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       // Nothing is shown as undone until the backend says what there is to undo.
       return enqueue(chainKey(op.kind, op.id), () => undoUnsure(op, true));
     }
-    state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(undoneView(op, bare(find(op.kind, op.id)))), canUndo: false };
+    const shownBefore = bare(find(op.kind, op.id));
+    state.lastChange = { token: newId(), action: "undo", kind: op.kind, item: bare(undoneView(op, shownBefore)), canUndo: false };
     const uop = { kind: op.kind, id: op.id, status: "sending", view: (cur) => undoneView(op, cur) };
     ops.push(uop);
     changed();
@@ -943,6 +955,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
         confirm(op.kind, r.data[op.kind]);
         stepRev(r.rev);
         saveCache();
+        // An undone tick that left something in the planner says so (a new line on the bar).
+        const left = op.kind === "todo" ? untickOutcome(shownBefore, r.data) : null;
+        if (left) state.lastChange = { token: newId(), action: "undo", kind: "todo", item: copy(r.data.todo), canUndo: false, planner: left };
       } catch (err) {
         removeOp(uop);
         op.undone = false;
@@ -1199,18 +1214,28 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
 
   // Brings the list in from the planner: a plain call, never queued. While
   // the backend says more rows remain it is asked again (force), up to
-  // TODO_PULLS calls in a row. Resolves { ok: true, more, pulledAt } or
-  // { ok: false, code, message }; unless quiet, a failure is said the usual
-  // way. An unfinished pull keeps the last fetched time.
+  // TODO_PULLS calls in a row. Resolves { ok: true, more, pulledAt, stored }
+  // (stored: the backend answered with its stored list, read from the
+  // planner at pulledAt) or { ok: false, code, message }; unless quiet, a
+  // failure is said the usual way. An unfinished pull keeps the last fetched
+  // time.
   async function syncTodos({ force = false, quiet = false } = {}) {
     let r = null;
     let more = false;
-    // What the backend answered: into base (an unfinished pull keeps the last fetched time).
+    // What the backend answered: into base (an unfinished pull keeps the last
+    // fetched time). A real pull's problems replace the ones shown, kept as
+    // the backend keeps them (at most 20, and how many more); a stored answer
+    // leaves them alone.
     const keep = (got) => {
       const d = (got && got.data) || {};
       if (!base || !Array.isArray(d.todos)) return;
       const pulledAt = typeof d.pulledAt === "string" && d.pulledAt ? d.pulledAt : base.todosPulledAt || "";
       base = { ...base, todos: copy(d.todos), todosPulledAt: pulledAt };
+      if (!d.stored && Array.isArray(d.problems)) {
+        // This fetch's time (a pull cut short keeps the old pulledAt), each message cut to 160 as the backend stores it.
+        const list = copy(d.problems.slice(0, 20)).map((p) => (p && typeof p.message === "string" ? { ...p, message: cutText(p.message, 160) } : p));
+        base.todoProblems = { at: (typeof d.pulledAt === "string" && d.pulledAt) || new Date(now()).toISOString(), list, more: Math.max(0, d.problems.length - 20) };
+      }
       saveCache();
     };
     try {
@@ -1228,7 +1253,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     }
     keep(r);
     changed();
-    return { ok: true, more, pulledAt: state.todosPulledAt || "" };
+    return { ok: true, more, pulledAt: state.todosPulledAt || "", stored: !!(r && r.data && r.data.stored) };
   }
 
   // A tick, shown at once (done, by me, now); the backend then tries to
@@ -1297,6 +1322,7 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
     // A picture change belongs to its person: it waits behind their other changes.
     const key = entry ? chainKey(entry.kind === "picture" ? "person" : entry.kind, entry.ref) : "log:" + logId;
     return enqueue(key, async () => {
+      const shownBefore = entry && entry.kind === "todo" ? bare(find("todo", entry.ref)) : null;
       let r;
       try {
         r = await call("undo", { logId });
@@ -1318,6 +1344,9 @@ export function createStore({ api, storage, now = () => Date.now(), wait = defau
       stepRev(r.rev);
       saveCache();
       state.lastChange = { token: newId(), action: "undo", kind, item: copy(item), canUndo: false };
+      // An undone tick that left something in the planner says so.
+      const left = kind === "todo" ? untickOutcome(shownBefore, r.data) : null;
+      if (left) state.lastChange.planner = left;
       const top = r.data.entry;
       const rest = state.history.entries.map((e) => {
         if (e.id === logId) return { ...e, undoneBy: r.data.logId, canUndo: false };

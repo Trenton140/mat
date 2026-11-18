@@ -217,6 +217,8 @@ function optPhoto_(v, message) {
   if (v === undefined || v === null) return { ok: true, value: "" };
   if (typeof v !== "string") return fail_(message);
   if (v.trim() === "") return { ok: true, value: "" };
+  // safeUrl takes nothing over 500 letters: say so, not that it isn't https.
+  if (v.trim().length > 500) return fail_("That picture link is too long.");
   var u = safeHttpsUrl(v);
   return u ? { ok: true, value: u } : fail_(message);
 }
@@ -825,8 +827,19 @@ function plannerYes_(v) {
   return v === true || t === "yes" || t === "true";
 }
 
-function plannerBlank_(row) {
-  return !Array.isArray(row) || row.every(function (c) { return plannerText_(c) === ""; });
+// A blank row, looking only at the table's own columns (the first `width`;
+// all of them when width is left out): a cell further right, a note or a
+// filled-down checkbox past the header, does not make a row part of the table.
+function plannerBlank_(row, width) {
+  if (!Array.isArray(row)) return true;
+  var cells = typeof width === "number" ? row.slice(0, width) : row;
+  return cells.every(function (c) { return plannerText_(c) === ""; });
+}
+
+// How many columns a table spans: up to its header row's last named cell.
+function headWidth_(head) {
+  for (var c = head.length - 1; c >= 0; c--) if (head[c] !== "") return c + 1;
+  return 0;
 }
 
 // rows: the Payments tab as Sheets hands it back, row 1 the column names
@@ -843,6 +856,7 @@ function paymentsFromRows(rows) {
   for (var i = 0; i < PLANNER_NEEDS_.length; i++) {
     if (head.indexOf(PLANNER_NEEDS_[i]) === -1) return none("The planner’s Payments tab is missing the column " + PLANNER_NEEDS_[i] + ".");
   }
+  var width = headWidth_(head);
   var cell = function (row, name) {
     var c = head.indexOf(name);
     return c === -1 ? "" : row[c];
@@ -854,7 +868,7 @@ function paymentsFromRows(rows) {
   var capped = false;
   for (var r = 1; r < list.length; r++) {
     var row = list[r];
-    if (plannerBlank_(row)) continue;
+    if (plannerBlank_(row, width)) continue;
     if (read === PLANNER_MAX_ROWS_) {
       capped = true;
       break;
@@ -1056,9 +1070,10 @@ function headOf_(row) {
 // (a second table below is never read with the first one's columns). Item is
 // cut to 300 characters and Notes to 2,000.
 // -> { items: [{ id, item, bookBy, status, note, link, row, statusCol }],
-// problems: [{ id, message }], missing }: missing is why the tab can't be
-// read at all (else null); row is the item's 1-based row in the tab and
-// statusCol the 0-based column of Status, for writing back.
+// problems: [{ id, message, row, what }], missing }: missing is why the tab
+// can't be read at all (else null); row is the item's 1-based row in the tab
+// (the sheet's own row number) and statusCol the 0-based column of Status,
+// for writing back; a problem's what is a few words of its Item.
 function todosFromRows(rows, year) {
   var list = Array.isArray(rows) ? rows : [];
   var none = function (message) { return { items: [], problems: [], missing: message }; };
@@ -1066,6 +1081,7 @@ function todosFromRows(rows, year) {
   var h = headerAt_(list, TODO_NEEDS_);
   if (h === -1) return none("The planner’s Book Now tab has no row with the columns #, Item, Book by and Status.");
   var head = headOf_(list[h]);
+  var width = headWidth_(head);
   var cell = function (row, name) {
     var c = head.indexOf(name);
     return c === -1 || !Array.isArray(row) ? "" : row[c];
@@ -1075,7 +1091,7 @@ function todosFromRows(rows, year) {
   var seen = {};
   for (var r = h + 1; r < list.length; r++) {
     var row = list[r];
-    if (items.length && plannerBlank_(row)) break;
+    if (items.length && plannerBlank_(row, width)) break;
     if (headerAt_([row], TODO_NEEDS_) === 0) break;
     var item = cutText_(plannerText_(cell(row, "item")), TODO_ITEM_MAX_);
     if (item === "") continue;
@@ -1083,7 +1099,7 @@ function todosFromRows(rows, year) {
     if (num === null) continue;
     var id = String(num);
     if (seen[id] === true) {
-      problems.push({ id: id, message: "That number is in the Book Now tab twice." });
+      problems.push({ id: id, message: "That number is in the Book Now tab twice.", row: r + 1, what: plannerWhat_(item) });
       continue;
     }
     seen[id] = true;
@@ -1228,8 +1244,8 @@ function changeLogRow(rows, fields) {
   }
   var named = {};
   Object.keys(fields).forEach(function (k) { named[k.trim().toLowerCase()] = fields[k]; });
-  var firstCol = -1, lastCol = -1;
-  head.forEach(function (name, c) { if (name !== "") { if (firstCol === -1) firstCol = c; lastCol = c; } });
+  var firstCol = -1, lastCol = headWidth_(head) - 1;
+  head.forEach(function (name, c) { if (name !== "" && firstCol === -1) firstCol = c; });
   var values = [];
   for (var c = firstCol; c <= lastCol; c++) {
     var name = head[c];

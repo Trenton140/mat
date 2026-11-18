@@ -21,6 +21,11 @@
 //   notice only when that fails twice in a row). wake() does the fetch alone
 //   (the app has started).
 //
+// Under the fetch line, "Not read from the planner": the items the last pull
+// could not read (store.state.todoProblems), two lines each, hidden when
+// there are none. Fetch says "Read 13:20" when the backend answered with
+// the list it read then (a fetch within 30 seconds of the last).
+//
 // A row opens in place (as a ticket's stop does): the whole item, the note
 // and the controls. Ticking is the settle stamp's moment: the same red 済
 // lands where the tap was, with the same thud (and the same sound setting)
@@ -39,7 +44,7 @@ import { paidStampSVG } from "../stamp.js";
 import { wetInk, rollingCount } from "../fx.js";
 import { thud, primeSound } from "../sound.js";
 import { clock as hhmm, localDay, dayHead } from "../format.js";
-import { homeToday, dueLine, byBookBy, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab } from "../todos.js";
+import { homeToday, dueLine, byBookBy, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab, todoProblemHead } from "../todos.js";
 
 // How long a just-ticked row stays stamped in place, at the least.
 const HOLD_MS = 1600;
@@ -50,6 +55,7 @@ const FETCHING = "Fetching…";
 const FETCHED = "Up to date ✓";
 const MORE = "More to fetch";
 const NOT_FETCHED = "Not fetched";
+const PROBLEMS = "Not read from the planner";
 const PENDING = "The planner hasn’t been updated yet.";
 const AUTO_FAILED = "Couldn’t fetch the list from the planner.";
 
@@ -108,7 +114,10 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
   fetchB.id = "bwFetch";
   fetchB.setAttribute("aria-live", "polite");
   foot.append(at, fetchB);
-  card.append(band, rows, perf, doneB, doneBox, foot);
+  const probs = el("div", "bw-pp");
+  probs.id = "bwProblems";
+  probs.hidden = true;
+  card.append(band, rows, perf, doneB, doneBox, foot, probs);
   section.append(card);
   root.replaceChildren(section);
 
@@ -300,12 +309,42 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     return nowIn(trip.tz || "Asia/Tokyo", clock ? clock.now() : now()).date < trip.start;
   }
 
+  // "13:20" today, "Dec 3, 13:20" another day: the phone's own clock.
+  function whenText(ms) {
+    const day = localDay(ms);
+    return day === localDay(now()) ? hhmm(ms) : dayHead(day, []).en.split(" ").slice(1).join(" ") + ", " + hhmm(ms);
+  }
+
   function fetchedText(s) {
     const ms = Date.parse(typeof s.todosPulledAt === "string" ? s.todosPulledAt : "");
     if (!isFinite(ms)) return "From the planner";
-    const day = localDay(ms);
-    const when = day === localDay(now()) ? hhmm(ms) : dayHead(day, []).en.split(" ").slice(1).join(" ") + ", " + hhmm(ms);
-    return "From the planner · fetched " + when;
+    return "From the planner · fetched " + whenText(ms);
+  }
+
+  // The items the last pull could not read. Planner text is untrusted:
+  // textContent only. Redrawn only when the list changes, so a screen
+  // reader is not read it again on every store change.
+  let shownProblems = null;
+  function drawProblems(s) {
+    const tp = s.todoProblems && typeof s.todoProblems === "object" ? s.todoProblems : {};
+    const all = list(tp.list).filter((p) => p && typeof p === "object");
+    const more = Number.isFinite(tp.more) && tp.more > 0 ? tp.more : 0;
+    const key = all.length ? JSON.stringify([tp.at, all, more]) : "";
+    probs.hidden = !all.length;
+    if (key === shownProblems) return;
+    shownProblems = key;
+    probs.replaceChildren();
+    if (!all.length) return;
+    const head = el("div", "bw-pp-h", PROBLEMS);
+    const ms = Date.parse(typeof tp.at === "string" ? tp.at : "");
+    if (isFinite(ms)) head.append(el("small", "", whenText(ms)));
+    probs.append(head);
+    for (const p of all) {
+      const one = el("div", "bw-pp-i");
+      one.append(el("div", "bw-pp-w", todoProblemHead(p)), el("div", "bw-pp-m", typeof p.message === "string" ? p.message : ""));
+      probs.append(one);
+    }
+    if (more) probs.append(el("div", "bw-pp-more", "and " + more + " more"));
   }
 
   function render() {
@@ -364,6 +403,7 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     patch(doneBox, done.map(doneRow));
 
     at.textContent = fetchedText(s);
+    drawProblems(s);
     restoreFocus(spot);
     if (focusLanded) {
       const target = focusLanded === "done" ? doneB : rows.querySelector('[data-id="' + CSS.escape(focusLanded) + '"] .bw-tick');
@@ -475,7 +515,9 @@ export function mountTodos(root, store, { clock, now = () => Date.now(), onState
     }
     fetchB.disabled = false;
     if (r.ok) fails = 0;
-    say(!r.ok ? NOT_FETCHED : r.more ? MORE : FETCHED, SAID_MS);
+    // The backend's stored list (read within the last 30 seconds): when it was read, not "Up to date".
+    const readAt = r.ok && r.stored ? Date.parse(r.pulledAt || "") : NaN;
+    say(!r.ok ? NOT_FETCHED : r.more ? MORE : isFinite(readAt) ? "Read " + whenText(readAt) : FETCHED, SAID_MS);
   }
 
   const online = (s) => s.online !== false && !(globalThis.navigator && globalThis.navigator.onLine === false);

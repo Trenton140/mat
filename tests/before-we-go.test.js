@@ -4,7 +4,7 @@
 // here is made up.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { homeToday, dueLine, dueText, openTodos, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab, tabName } from "../js/todos.js";
+import { homeToday, dueLine, dueText, openTodos, doneTodos, isDone, plannerPending, tickedLine, isStale, showBeforeTab, tabName, untickOutcome, todoProblemHead } from "../js/todos.js";
 
 const item = (o) => ({ id: "1", item: "x", bookBy: "", status: "", note: "", link: "", claimedBy: "", tickedBy: "", tickedAt: "", done: false, ...o });
 
@@ -98,8 +98,9 @@ test("a tick on a Status the planner computes is done and never pending, and its
   const t = item({ tickedBy: "Mo", tickedAt: new Date(2026, 11, 3, 9, 30).toISOString(), status: "Not booked", plannerComputes: true });
   assert.equal(isDone(t), true);
   assert.equal(plannerPending(t), false);
-  assert.equal(tickedLine(t), "Ticked by Mo. The planner works this one out itself.");
-  assert.equal(tickedLine({ ...t, status: "Booked" }), "Ticked by Mo. The planner works this one out itself.");
+  // Fix round 6a: past tense, true even after the formula is replaced (was: "The planner works this one out itself.").
+  assert.equal(tickedLine(t), "Ticked by Mo. The planner worked this one out itself, so the app left it as it was.");
+  assert.equal(tickedLine({ ...t, status: "Booked" }), "Ticked by Mo. The planner worked this one out itself, so the app left it as it was.");
 });
 
 test("the done line: who ticked it and the day (the phone's own calendar), or booked in the planner", () => {
@@ -146,4 +147,26 @@ test("the undo bar's line for each change to an item", async () => {
   assert.equal(changeText({ kind: "todo", action: "takeover", item: it }), "Took over Tea class.");
   assert.equal(changeText({ kind: "todo", action: "unclaim", item: it }), "Handed back Tea class.");
   assert.equal(changeText({ kind: "todo", action: "undo", item: it }), "Undone.");
+});
+
+test("wave A 1: a Book Now problem's first line: number, row and a few words, each left out when missing", () => {
+  assert.equal(todoProblemHead({ id: "4", row: 7, what: "Made-up item" }), "#4 · row 7 · Made-up item");
+  assert.equal(todoProblemHead({ id: "4", row: null, what: "" }), "#4");
+  assert.equal(todoProblemHead({ id: "", row: 7, what: "x" }), "row 7 · x");
+  assert.equal(todoProblemHead({}), "A Book Now row");
+  assert.equal(todoProblemHead(), "A Book Now row");
+});
+
+test("wave A 5: untickOutcome: pending, kept after a written tick, and nothing to say otherwise", () => {
+  const written = item({ tickedBy: "Mo", status: "Booked", done: true });
+  const off = (o) => ({ todo: item({ tickedBy: "", ...o }) });
+  assert.equal(untickOutcome(written, { planner: "pending", ...off({ status: "Not booked" }) }), "pending");
+  assert.equal(untickOutcome(written, { planner: "kept", ...off({ status: "Not booked" }) }), "kept");
+  assert.equal(untickOutcome(written, { planner: "written", ...off({ status: "Not booked" }) }), null);
+  assert.equal(untickOutcome(item({ tickedBy: "Mo", status: "Not booked" }), { planner: "kept", ...off({ status: "Not booked" }) }), null, "never written: nothing there to keep");
+  assert.equal(untickOutcome(item({ tickedBy: "Mo", status: "Booked" }), { planner: "kept", ...off({ status: "Booked" }) }), null, "booked by hand before the tick: still booked, nothing to say");
+  assert.equal(untickOutcome(item({ tickedBy: "Mo", status: "Booked", plannerComputes: true }), { planner: "kept", ...off({ status: "" }) }), null, "a computed Status");
+  assert.equal(untickOutcome(item({ tickedBy: "" }), { planner: "pending", todo: item({ tickedBy: "Mo" }) }), null, "an undo that ticks again is no untick");
+  assert.equal(untickOutcome(written, { planner: "pending" }), null);
+  assert.equal(untickOutcome(null, null), null);
 });

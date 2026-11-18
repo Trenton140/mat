@@ -711,3 +711,12 @@ test("stamp rows and the History sentence", () => {
   assert.equal(P.summarize("press", "stamp", null, { day: "2030-01-05" }), "stamped Jan 5");
   assert.equal(P.summarize("press", "stamp", null, { day: "" }), "stamped the book");
 });
+
+test("wave A 9: a stay's photo link over 500 letters says it is too long, not that it isn't https", () => {
+  const stay = { id: "stayMadeUp0001", name: "Made-up inn", firstNight: "2026-12-10", lastNight: "2026-12-11" };
+  const long = "https://photos.example.test/" + "a".repeat(480);
+  assert.ok(long.length > 500);
+  assert.equal(P.validateStay({ ...stay, photo: long }).message, "That picture link is too long.");
+  assert.equal(P.validateStay({ ...stay, photo: "  " + long.slice(0, 498) + "  " }).ok, true, "500 letters once trimmed is fine");
+  assert.equal(P.validateStay({ ...stay, photo: "http://photos.example.test/a.jpg" }).message, "That photo link has to start with https://.");
+});

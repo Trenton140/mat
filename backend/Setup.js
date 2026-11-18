@@ -88,7 +88,8 @@ function checkPlannerPayments_() {
     Logger.log("Planner: " + read.missing);
     return;
   }
-  var n = rows.slice(1).filter(function (r) { return !plannerBlank_(r); }).length;
+  var width = headWidth_(headOf_(rows[0]));
+  var n = rows.slice(1).filter(function (r) { return !plannerBlank_(r, width); }).length;
   Logger.log("Planner: " + n + " payment rows, columns ok");
 }
 
