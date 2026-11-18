@@ -51,8 +51,38 @@ export function privateEnv() {
       if (m) out[m[1]] = m[2];
     }
   }
-  for (const k of ["MAT_KEY", "DESK_KEY"]) if (process.env[k]) out[k] = process.env[k];
+  for (const k of KEY_NAMES) if (process.env[k]) out[k] = process.env[k];
   return out;
+}
+
+// The env names that hold a key (never printed).
+export const KEY_NAMES = ["MAT_KEY", "MAT_CHECK_KEY", "MAT_OWNER_KEY", "DESK_KEY"];
+
+// The key the release checks use (security, 2026-11-18): the read-only check
+// key, MAT_CHECK_KEY (it may load, rev, history and migrate, nothing else);
+// the old shared MAT_KEY only when there is no check key. "" when neither.
+export function checkKey(env) {
+  return (env && (env.MAT_CHECK_KEY || env.MAT_KEY)) || "";
+}
+
+// The key that reads the whole trip for the private list: the owner's own
+// key (MAT_OWNER_KEY), else the old shared MAT_KEY (the check key's load
+// leaves out the e-Transfer addresses, which the list must hold).
+export function ownerKey(env) {
+  return (env && (env.MAT_OWNER_KEY || env.MAT_KEY)) || "";
+}
+
+// text with every key in env blanked, for a message that could carry one.
+export function withoutKeys(text, env) {
+  let s = String(text);
+  for (const k of KEY_NAMES) {
+    const v = env && env[k];
+    if (typeof v === "string" && v.length >= 6) {
+      s = s.split(v).join("(key)");
+      s = s.split(encodeURIComponent(v)).join("(key)");
+    }
+  }
+  return s;
 }
 
 // --- the backend stamp: ten hex digits over every file clasp pushes ---------
@@ -117,7 +147,8 @@ export async function liveStamp(apiUrl) {
   }
 }
 
-// One action, posted the way the phone posts it.
+// One action, posted the way the phone posts it: the key in the body only,
+// never in the address.
 export async function call(apiUrl, key, action, args = {}) {
   const r = await fetch(apiUrl, {
     method: "POST",

@@ -12,11 +12,12 @@
 // 2. If the live backend is not this commit's backend: clasp push, new version
 //    on the same deployment, then wait until the live backend answers with
 //    this commit's stamp.
-// 3. The live trip still loads with the trip's key (from ~/.config/mat/env).
+// 3. The live trip still loads, read with the release check's read-only key
+//    (MAT_CHECK_KEY from ~/.config/mat/env; MAT_KEY only when there is none).
 // 4. git push origin main (the push check runs again there).
 // 5. Wait until the site serves this version, then compare every file the
 //    phones cache, byte for byte, with this commit.
-// 6. Open the live site in a headless browser with the key in the fragment
+// 6. Open the live site in a headless browser with the check key in the fragment
 //    (never in the query string): the trip loads and there is no script error.
 //
 // It never prints a key. If a step fails it stops and says where things stand.
@@ -26,7 +27,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
-import { ROOT, SITE, call, git, gitOk, liveStamp, privateEnv, readConfig, readReceipt, writtenBackendStamp } from "./release-lib.mjs";
+import { ROOT, SITE, call, checkKey, git, gitOk, liveStamp, privateEnv, readConfig, readReceipt, withoutKeys, writtenBackendStamp } from "./release-lib.mjs";
 import { shellList } from "./stamp-sw.mjs";
 
 const check = process.argv.includes("--check");
@@ -50,7 +51,9 @@ git(["fetch", "origin", "main"]);
 if (!gitOk(["merge-base", "--is-ancestor", "origin/main", "HEAD"])) stop("origin/main has commits this one does not.", "Merge them, then `npm run gate` again.");
 const cfg = readConfig();
 const env = privateEnv();
-if (!env.MAT_KEY) stop("No trip key to check the live trip with.", "Put MAT_KEY=... in ~/.config/mat/env (never in the repository).");
+const KEY = checkKey(env);
+if (!KEY) stop("No key to check the live trip with.", "Put MAT_CHECK_KEY=... in ~/.config/mat/env (never in the repository).");
+if (!env.MAT_CHECK_KEY) step("no MAT_CHECK_KEY: checking with the old shared MAT_KEY");
 step("commit " + head.slice(0, 7) + ", version " + cfg.appVersion + ", gate passed " + receipt.at + " (" + receipt.unit.pass + " unit, " + receipt.e2e.pass + " browser)");
 
 // 2 ---------------------------------------------------------------------------
@@ -92,8 +95,8 @@ if (migrate && !check) {
   let added = [];
   let settled = false;
   for (let i = 0; i < 6 && !settled; i++) {
-    const r = await call(cfg.apiUrl, env.MAT_KEY, "migrate");
-    if (!r || r.ok !== true) stop("migrate did not succeed (" + ((r && (r.message || r.error)) || "no answer") + ").", "The site was NOT published.");
+    const r = await call(cfg.apiUrl, KEY, "migrate");
+    if (!r || r.ok !== true) stop("migrate did not succeed (" + withoutKeys((r && (r.message || r.error)) || "no answer", env) + ").", "The site was NOT published.");
     const now = (r.data && r.data.added) || [];
     added = added.concat(now);
     settled = i > 0 && now.length === 0;
@@ -102,9 +105,9 @@ if (migrate && !check) {
   if (!settled) stop("migrate kept adding columns after six calls.", "Look at the Sheet. The site was NOT published.");
   step("backend: migrate ran" + (added.length ? ", added " + added.join(", ") : ", nothing to add"));
 }
-const load = await call(cfg.apiUrl, env.MAT_KEY, "load").catch(() => null);
+const load = await call(cfg.apiUrl, KEY, "load").catch(() => null);
 if (!load || load.ok !== true || !Array.isArray(load.data.days) || !load.data.days.length || !Array.isArray(load.data.stops)) {
-  stop("The live trip does not load (" + ((load && (load.message || load.error)) || "no answer") + ").", "The site was NOT published. Fix or roll back the backend first.");
+  stop("The live trip does not load (" + withoutKeys((load && (load.message || load.error)) || "no answer", env) + ").", "The site was NOT published. Fix or roll back the backend first.");
 }
 step("live trip loads: " + load.data.days.length + " days, " + load.data.stops.length + " stops, rev " + load.rev);
 
@@ -161,16 +164,17 @@ try {
   // sent to the site's server (a query string is, and until 2026-11-18 this
   // step put the key in one). The app reads it there, so this is also the only
   // way the check really signs in: it waits for the trip's own day count.
-  await page.goto(SITE + "#k=" + encodeURIComponent(env.MAT_KEY), { waitUntil: "load", timeout: 45000 });
+  // The check key's phone has no one chosen (me is "") and shows the trip read-only.
+  await page.goto(SITE + "#k=" + encodeURIComponent(KEY), { waitUntil: "load", timeout: 45000 });
   await page.waitForSelector("#phone", { timeout: 20000 });
   await page.waitForSelector("#dayCount", { state: "visible", timeout: 30000 });
   await sleep(2000);
 } catch (e) {
-  errors.push("the page did not start: " + String(e.message || e).split("\n")[0].replace(env.MAT_KEY, "(key)"));
+  errors.push("the page did not start: " + withoutKeys(String(e.message || e).split("\n")[0], env));
 } finally {
   await browser.close();
 }
-if (errors.length) stop("The live site started with " + errors.length + " error(s): " + errors.slice(0, 3).join(" | "), "This is live now. Fix forward or revert the commit and ship again.");
+if (errors.length) stop("The live site started with " + errors.length + " error(s): " + withoutKeys(errors.slice(0, 3).join(" | "), env), "This is live now. Fix forward or revert the commit and ship again.");
 step("live site starts with no script error");
 
 console.log("\nship: DONE. Version " + cfg.appVersion + " (" + head.slice(0, 7) + ") is live, backend " + want + ". Record it in the ledger and MEMORY.md.");
