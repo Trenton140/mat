@@ -12,7 +12,7 @@ var TABS = {
   Log: ["id", "at", "who", "via", "action", "kind", "ref", "summary", "before", "after", "undoes", "undone_by"],
   Todos: ["id", "item", "book_by", "status", "note", "link", "claimed_by", "ticked_by", "ticked_at", "ticked_item", "planner_written", "planner_was", "gone"],
   StampDefs: ["id", "date", "name_ja", "name_en", "place", "motif", "ink", "shape"],
-  Stamps: ["id", "def", "who", "at", "seed", "gone"],
+  Stamps: ["id", "def", "who", "at", "seed", "gone", "here"],
 };
 
 var KINDS = ["food", "transport", "stay", "activity", "shopping"];
@@ -1265,6 +1265,8 @@ function stampDefFromRow(o) {
 function stampFromRow(o) {
   var s = { def: cellText_(o.def), who: cellText_(o.who), at: cellStamp_(o.at), seed: cellNum_(o.seed) };
   if (cellText_(o.gone) === "yes") s.gone = true;
+  // Pressed with the phone in the place: only this yes is ever kept, never where.
+  if (cellText_(o.here) === "yes") s.here = true;
   return s;
 }
 

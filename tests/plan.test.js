@@ -208,7 +208,7 @@ test("R37: other days' tickets are unchanged", () => {
 });
 
 // ---- where you are (location build, items 5 to 8) ----
-import { hereLine, nearStops, stayDistance, NEAR_M } from "../js/plan.js";
+import { hereLine, nearStops, stayDistance, inPlace, NEAR_M, PLACE_M } from "../js/plan.js";
 import { metres, walkMinutes } from "../js/geo.js";
 
 const SKYAT = { lat: 35.6584421, lng: 139.7022205 };
@@ -274,4 +274,13 @@ test("lodging distance", () => {
   assert.equal(stayDistance({ lat: "", lng: "" }, here), "");
   assert.equal(stayDistance({ lat: "35", lng: "139" }, null), "");
   assert.equal(stayDistance(null, here), "");
+});
+
+test("the stamp in the place: within 15 km of the day's coordinates", () => {
+  const here = SKYAT;
+  assert.equal(inPlace({ lat: String(north(here, PLACE_M - 50).lat), lng: String(here.lng) }, here), true);
+  assert.equal(inPlace({ lat: String(north(here, PLACE_M + 50).lat), lng: String(here.lng) }, here), false);
+  assert.equal(inPlace({ lat: "", lng: "" }, here), false, "a day with no coordinates");
+  assert.equal(inPlace({ lat: "35", lng: "139" }, null), false, "no usable position");
+  assert.equal(inPlace(null, here), false, "no such day (the issue stamp)");
 });

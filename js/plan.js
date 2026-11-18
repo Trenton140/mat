@@ -133,6 +133,8 @@ export function nextLine(stop, minutes) {
 // Past this a straight line says nothing (you would take a train): the
 // leave-by and the stops' distances fall back to today's lines.
 export const NEAR_M = 3000;
+// The stamp is pressed "in the place" within this of the day's coordinates.
+export const PLACE_M = 15000;
 
 // Leave by, from where you are: the next stop's 現在地 line and its leave
 // line from the walking minutes, or null when today's line stands (no time,
@@ -178,6 +180,14 @@ export function stayDistance(stay, here) {
   if (!here || !stay) return "";
   const m = metres(here, stay);
   return Number.isFinite(m) ? distanceText(m) + " from here" : "";
+}
+
+// Whether a stamp for this day is pressed in the place: a usable position
+// within PLACE_M of the day's coordinates.
+export function inPlace(day, here) {
+  if (!here || !day) return false;
+  const m = metres(here, day);
+  return Number.isFinite(m) && m <= PLACE_M;
 }
 
 export function stayFor(stays, date) {

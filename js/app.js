@@ -229,7 +229,7 @@ function start() {
   const allDays = mountAllDays(phone, store, { clock, onPick: (i) => days.goDay(i) });
   const stopSheet = mountStopSheet(phone, store);
   // The stamp book, a panel like History, opened from the Days bar or today's ticket.
-  const book = mountStampBook(phone, store);
+  const book = mountStampBook(phone, store, { where });
   const closeDaySheets = () => {
     stayCard.close(false);
     allDays.close(false);
