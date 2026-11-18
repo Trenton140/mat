@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { rng, paidStampSVG, gateStampSVG } from "../js/stamp.js";
-import { remindText, sentCents } from "../js/views/slip.js";
+import { rng, paidStampSVG, gateStampSVG, boxSealSVG } from "../js/stamp.js";
+import { remindText, sentCents, settledOf, filedText } from "../js/views/slip.js";
 
 test("a stamp is drawn from its seed: the same seed, the same stamp", () => {
   assert.equal(paidStampSVG(42), paidStampSVG(42));
@@ -40,6 +40,27 @@ test("the gate stamp escapes what it prints", () => {
   assert.equal(svg.includes("<b>"), false);
   const quoted = gateStampSVG(1, "a", '"&', "'");
   assert.ok(quoted.includes("&quot;&amp;") && quoted.includes("&#39;"));
+});
+
+test("the settled seal prints 精算済 and the day, from digits only", () => {
+  const svg = boxSealSVG(77, "2026-12-19");
+  assert.ok(svg.startsWith("<svg") && svg.includes("精算済") && svg.includes("SETTLED 2026.12.19"));
+  assert.equal(boxSealSVG(77, "2026-12-19"), svg, "the same seed, the same seal");
+  assert.ok(svg.includes('mask="url(#pmb77)"'), "its own mask, never the paid stamp's");
+  assert.equal(paidStampSVG(77).includes("pmb77"), false);
+  const odd = boxSealSVG(77, "<b>2026</b>");
+  assert.equal(odd.includes("<b>"), false);
+  assert.ok(odd.includes(">SETTLED</text>"));
+});
+
+test("a slip is settled when nothing is open and something was stamped", () => {
+  const st = (id, cad, at, o = {}) => ({ id, from: "Ajen", to: "Mo", cad, stampedAt: at, ...o });
+  assert.equal(settledOf([{ from: "Ajen", to: "Mo", cents: 100 }], [st("a", 5, "2026-12-19T12:00:00Z")]), null, "something open");
+  assert.equal(settledOf([], []), null, "nobody ever owed anybody");
+  const s = settledOf([], [st("b", 250, "2026-12-19T12:00:00Z", { seed: 31 }), st("a", 250.5, "2026-12-14T12:00:00Z")]);
+  assert.deepEqual(s, { count: 2, cents: 50050, day: "2026-12-19", seed: 31 });
+  assert.deepEqual(filedText(s), { head: "Settled Sat Dec 19", sub: "2 payments, $500.50 in all" });
+  assert.equal(filedText({ count: 1, cents: 7200, day: "2026-12-14" }).sub, "1 payment, $72.00 in all");
 });
 
 test("Remind says who, how much and where to send it", () => {

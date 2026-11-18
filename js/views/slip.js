@@ -14,13 +14,17 @@
 
 import { owedList, direct, routedVia, balances } from "../money.js";
 import { dollars, pt, dayHead, localDay } from "../format.js";
-import { paidStampSVG } from "../stamp.js";
-import { wetInk } from "../fx.js";
+import { paidStampSVG, boxSealSVG } from "../stamp.js";
+import { wetInk, WET_MS } from "../fx.js";
 import { thud } from "../sound.js";
 import { drawWorking, routeSentence } from "./working.js";
 import { copyText } from "../clip.js";
 
 const ARM_MS = 8000;
+// Settling (mock-up 2B): the last stamp lands, SEAL_MS later the square seal
+// lands on the head, FILE_MS after that the slip folds to its filed line.
+const SEAL_MS = 520;
+const FILE_MS = 1100;
 const FOLD = 2;
 const MAX_CENTS = 10000000; // $100,000, the backend's limit
 const ASK = "Pay each person directly? You’ll make more payments. The totals are the same.";
@@ -59,6 +63,29 @@ function button(cls, text) {
   return b;
 }
 
+// The slip is settled when nothing is left open and something was stamped:
+// { count, cents, day, seed } (day: the newest stamp's, on the phone's own
+// calendar; seed: its stamp's, for the seal), else null.
+// `stamps`: the payments not removed, newest first.
+export function settledOf(open, stamps) {
+  if (open.length || !stamps.length) return null;
+  const ms = Date.parse(stamps[0].stampedAt);
+  return {
+    count: stamps.length,
+    cents: stamps.reduce((a, p) => a + Math.round(p.cad * 100), 0),
+    day: localDay(isFinite(ms) ? ms : Date.now()),
+    seed: stamps[0].seed,
+  };
+}
+
+// The filed slip's one line: "Settled Sat Dec 19" / "2 payments, $500.00 in all".
+export function filedText(st) {
+  return {
+    head: "Settled " + dayHead(st.day, []).en,
+    sub: st.count + (st.count === 1 ? " payment, " : " payments, ") + dollars(st.cents) + " in all",
+  };
+}
+
 const keyOf = (t) => t.from + ">" + t.to;
 const centsOf = (p) => Math.round(p.cad * 100);
 const calm = () => !!(globalThis.matchMedia && globalThis.matchMedia("(prefers-reduced-motion: reduce)").matches);
@@ -94,6 +121,12 @@ export function mountSlip(slip, store) {
   let armTimer = null;
   let shown = null; // signature of the last drawing
   let view = null;
+  // The settled seal. phase: null (not settled), "stamped" (the last stamp
+  // has just landed here; the seal is on its way), "sealed" (the seal is on
+  // the head, the slip not filed yet) or "filed". unfiled: Open was tapped.
+  // land: draw the seal landing, once.
+  const seal = { phase: null, unfiled: false, land: false };
+  let sealTimers = [];
 
   function disarm() {
     clearTimeout(armTimer);
@@ -108,6 +141,54 @@ export function mountSlip(slip, store) {
       disarm();
       draw();
     }, ARM_MS);
+  }
+
+  function shake() {
+    slip.classList.remove("shake");
+    void slip.offsetWidth; // play the shake again
+    slip.classList.add("shake");
+  }
+
+  function clearSeal() {
+    sealTimers.forEach(clearTimeout);
+    sealTimers = [];
+  }
+
+  // Follows the slip into and out of being settled. Settled when first drawn
+  // (or after a reload): filed at once. Settled while on screen: the seal
+  // lands, then the slip is filed; with reduced motion it is simply filed.
+  function track(before, v) {
+    const st = v && settledOf(v.open, v.stamps);
+    if (!st) {
+      clearSeal();
+      Object.assign(seal, { phase: null, unfiled: false, land: false });
+      return;
+    }
+    if (seal.phase) return;
+    if (!(before && before.open.length) || calm()) {
+      seal.phase = "filed";
+      return;
+    }
+    seal.phase = "stamped";
+    sealTimers.push(setTimeout(() => {
+      seal.phase = "sealed";
+      seal.land = true;
+      draw();
+      thud();
+      shake();
+      sealTimers.push(setTimeout(() => {
+        seal.phase = "filed";
+        fileClasses();
+      }, FILE_MS));
+    }, SEAL_MS));
+  }
+
+  // Filed or not is a class on the slip, so the fold plays between the two.
+  function fileClasses() {
+    const filed = seal.phase === "filed" && !seal.unfiled;
+    slip.classList.toggle("is-filed", filed);
+    const inner = slip.querySelector(".fold > div");
+    if (inner) inner.inert = filed;
   }
 
   // ---- drawing ----
@@ -247,6 +328,51 @@ export function mountSlip(slip, store) {
     return box;
   }
 
+  // The settled slip (mock-up 2B): everything under the head in a fold, the
+  // filed line with Open, the binder holes and the square seal.
+  function holes() {
+    const h = el("div", "holes");
+    h.setAttribute("aria-hidden", "true");
+    h.append(el("i"), el("i"));
+    return h;
+  }
+
+  function foldOf(body) {
+    const fold = el("div", "fold");
+    const inner = el("div");
+    inner.append(...body);
+    fold.append(inner);
+    return fold;
+  }
+
+  function stubOf(st) {
+    const t = filedText(st);
+    const stub = el("div", "stub");
+    const words = el("span");
+    words.append(el("b", "", t.head), t.sub);
+    const open = button("", "Open");
+    open.id = "unfile";
+    stub.append(words, open);
+    return stub;
+  }
+
+  function sealOf(st) {
+    const box = el("div", "big boxs");
+    box.id = "seal";
+    box.style.setProperty("--rot", "-4deg");
+    // Built from digits and constants only (js/stamp.js boxSealSVG).
+    box.innerHTML = boxSealSVG(st.seed, st.day);
+    if (seal.land) {
+      seal.land = false;
+      box.classList.add("land", "wet");
+      setTimeout(() => {
+        box.classList.remove("wet");
+        box.classList.add("dry");
+      }, WET_MS);
+    }
+    return box;
+  }
+
   // Which focused control to put focus back on after a redraw.
   function focusTarget() {
     const a = document.activeElement;
@@ -280,10 +406,12 @@ export function mountSlip(slip, store) {
       v.stamps.map((p) => [p.id, p.from, p.to, p.cad, p.seed, p.rot, paidDay(v, p)]),
       ui.work ? [v.live.map((e) => [e.id, e.title, e.amount, e.currency, e.rate, e.paidBy, e.split, e.splitMode, e.splitVals, e.day]), v.payments.map((p) => [p.id, p.removed])] : 0,
       { ...ui, amt: undefined },
+      seal.phase === "sealed" || seal.phase === "filed",
     ]);
     fresh = new Set();
     if (sig === shown && !force && !hits.size) {
       markPending(v);
+      fileClasses();
       return;
     }
     shown = sig;
@@ -304,7 +432,11 @@ export function mountSlip(slip, store) {
       rows.push(older);
     }
     const foot = el("div", "slip-f", "Stamp it the moment you send. What’s left is always what’s shown here.");
-    slip.replaceChildren(head, ...rows, foot, ...(v.me ? [simpBlock(v)] : []));
+    const body = [...rows, foot, ...(v.me ? [simpBlock(v)] : [])];
+    const st = seal.phase === "sealed" || seal.phase === "filed" ? settledOf(v.open, v.stamps) : null;
+    if (st) slip.replaceChildren(holes(), head, foldOf(body), stubOf(st), sealOf(st));
+    else slip.replaceChildren(head, ...body);
+    fileClasses();
 
     if (focus) {
       const again = slip.querySelector(focus.sel);
@@ -335,13 +467,7 @@ export function mountSlip(slip, store) {
     if (lc && lc.action === "stamp" && lc.item) fresh.add(lc.item.id);
     draw(true);
     thud();
-    if (!calm()) {
-      setTimeout(() => {
-        slip.classList.remove("shake");
-        void slip.offsetWidth; // play the shake again
-        slip.classList.add("shake");
-      }, 130);
-    }
+    if (!calm()) setTimeout(shake, 130);
   }
 
   function tapSpot(key) {
@@ -394,6 +520,13 @@ export function mountSlip(slip, store) {
     if (!view) return;
     const t = ev.target;
     if (t.closest("#stampAmt")) return;
+    if (t.closest("#unfile")) {
+      seal.unfiled = true;
+      fileClasses();
+      const first = slip.querySelector(".fold button");
+      if (first) first.focus({ preventScroll: true });
+      return;
+    }
     const spotBtn = t.closest("button.spot[data-key]");
     if (spotBtn) return tapSpot(spotBtn.dataset.key);
     if (t.closest("#copyTo")) {
@@ -461,7 +594,9 @@ export function mountSlip(slip, store) {
   });
 
   function render(s) {
+    const before = view;
     view = read(s);
+    track(before, view);
     draw();
   }
 

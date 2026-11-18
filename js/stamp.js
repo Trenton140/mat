@@ -107,3 +107,23 @@ export function gateStampSVG(seed, place, date, mark) {
     '<text x="50" y="58" font-size="21">' + esc(date) + '</text>' +
     '<text x="50" y="82" font-size="13">' + esc(mark) + "</text></g></svg>";
 }
+
+// The square seal (角印) that lands on a settled slip's head: 精算済 in a
+// double box, with "SETTLED 2026.12.19" under it. `day` is "YYYY-MM-DD"; it
+// is printed only when it is one, so the string is built from digits and
+// constants and may be set with innerHTML. The wear's ids carry a "b", so the
+// seal never shares a mask with the paid stamp drawn from the same seed.
+export function boxSealSVG(seed, day) {
+  const n = Number.parseInt(seed, 10);
+  const id = n >= 1 && n <= 0xffffffff ? n : 1;
+  const r = rng(id);
+  const defs = wear("b" + id, r, 100);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day));
+  const date = m ? "SETTLED " + m[1] + "." + m[2] + "." + m[3] : "SETTLED";
+  return '<svg viewBox="0 0 100 46" width="100%" aria-hidden="true" focusable="false"><defs>' + defs + "</defs>" +
+    '<g mask="url(#pmb' + id + ')" fill="' + INK + '" text-anchor="middle">' +
+    '<rect x="2" y="2" width="96" height="42" rx="2" fill="none" stroke="' + INK + '" stroke-width="2.6"/>' +
+    '<rect x="5.5" y="5.5" width="89" height="35" fill="none" stroke="' + INK + '" stroke-width=".9"/>' +
+    '<text x="50" y="27" font-size="19" font-family="Zen Antique, Hiragino Mincho ProN, Yu Mincho, serif" letter-spacing="4" textLength="66" lengthAdjust="spacingAndGlyphs">精算済</text>' +
+    '<text x="50" y="37.5" font-size="7.5" font-family="Zen Kaku Gothic New, Hiragino Sans, sans-serif" font-weight="900" letter-spacing=".6" textLength="' + (m ? 80 : 36) + '" lengthAdjust="spacingAndGlyphs">' + date + "</text></g></svg>";
+}
