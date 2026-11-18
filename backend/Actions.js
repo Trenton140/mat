@@ -1225,11 +1225,15 @@ function settleTick_(id, item, by, out) {
   if (!rec || !rec.ok) {
     // The recording threw or the lock was busy. If the row already says the
     // planner was written (it got that far, or a tick of an owed row said so
-    // up front), the app knows of the Booked: the planner is left as it is.
+    // up front) with the very status this write replaced, the app knows of
+    // the Booked: the planner is left as it is. A planner_was that differs
+    // (an owed row whose Status was changed by hand meanwhile) would put the
+    // wrong status back on undo: that write is taken back out instead.
     var saved;
     try {
       var again = findRow_("Todos", id);
       saved = again ? cellText_(again.planner_written) : "";
+      if (saved === "yes" && out.result === "written" && cellText_(again.planner_was) !== out.was) saved = "";
     } catch (e2) {
       saved = null; // not known: leave the planner alone rather than undo a recorded write
     }

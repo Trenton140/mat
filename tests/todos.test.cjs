@@ -1801,3 +1801,35 @@ test("fix C2: the Change Log row spans only the header's columns, whatever lies 
   const clean = P.changeLogRow([CHEAD.concat(["", ""]), [5, "x", "", "", "", "", "", "", "", "", "", "", "far right"]], { Item: "I" });
   assert.equal(clean.values.length, CHEAD.length);
 });
+
+test("fix I1: a re-tick over a hand-set Status whose record finds the lock busy never later puts back the stale status", async () => {
+  const { call } = await owed(); // planner Booked, row owes "Not booked"
+  call.fake.planner.cellFails = false;
+  call.fake.planner.tabs["Book Now"][3][4] = "Cancelled"; // set by hand in the planner
+  const n0 = call.lock.n;
+  call.lock.busy = (n) => n === n0 + 2; // free for the tick's save, busy when its planner write is recorded
+  later(call, 1);
+  const t = await call("tickTodo", { id: "1" }, "Mo");
+  call.lock.busy = () => false;
+  assert.equal(t.ok, true);
+  later(call, 1);
+  await call("undo", { logId: t.data.logId }, "Mo");
+  await forced(call);
+  assert.equal(bookStatus(call), "Cancelled", "never Not booked");
+  assert.equal(writes(call).filter((w) => w.kind === "cell" && w.value === "Not booked").length, 0);
+});
+
+test("fix I2 (ruling): a re-tick of an owed row writes Booked over a hand-set Status, and its undo puts that Status back", async () => {
+  const { call } = await owed();
+  call.fake.planner.cellFails = false;
+  call.fake.planner.tabs["Book Now"][3][4] = "Cancelled";
+  later(call, 1);
+  const t = await call("tickTodo", { id: "1" }, "Mo");
+  assert.equal(t.data.planner, "written");
+  assert.equal(bookStatus(call), "Booked");
+  assert.deepEqual(owedOf(call), ["Mo", "yes", "Cancelled", "Booked"]);
+  later(call, 1);
+  const u = await call("undo", { logId: t.data.logId }, "Mo");
+  assert.equal(u.data.planner, "written");
+  assert.equal(bookStatus(call), "Cancelled");
+});
