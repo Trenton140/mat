@@ -203,7 +203,7 @@ test("setPerson turns Simplify off for Trenton, load shows it, rev rises and his
 test("history is newest first, records via claude, filters by ref, and pages with limit and before", async () => {
   const call = client();
   await call("addExpense", { expense: ramen() });
-  await call("addExpense", { expense: ramen({ id: "exp0000002", title: "Coffee", amount: 600 }) }, { via: "claude" });
+  await call.fake.claude("addExpense", { expense: ramen({ id: "exp0000002", title: "Coffee", amount: 600 }) });
   await call("deleteExpense", { id: "exp0000001" });
   const all = await historyAll(call);
   assert.deepEqual(all.map((e) => e.id), [3, 2, 1]);
@@ -436,13 +436,14 @@ test("every write needs an actor who is on the trip", async () => {
   assert.equal((await call("load", {}, { actor: undefined })).ok, true);
 });
 
-test("via is claude only when the body says exactly that", async () => {
+test("via is claude only on the connector's own path; a phone saying so is ignored (security fix round)", async () => {
   const call = client();
+  await call("addExpense", { expense: ramen({ id: "exp0000004" }) }, { via: "claude" });
   await call("addExpense", { expense: ramen({ id: "exp0000001" }) }, { via: "Claude" });
   await call("addExpense", { expense: ramen({ id: "exp0000002" }) }, { via: "web" });
-  await call("addExpense", { expense: ramen({ id: "exp0000003" }) }, { via: "claude" });
+  await call.fake.claude("addExpense", { expense: ramen({ id: "exp0000003" }) });
   const vias = (await historyAll(call)).map((e) => e.via);
-  assert.deepEqual(vias, ["claude", "app", "app"]);
+  assert.deepEqual(vias, ["claude", "app", "app", "app"]);
   assert.equal(call.fake.tables.Log[0].via, "app");
 });
 
@@ -751,13 +752,14 @@ test("history for an expense is not mixed with a person of the same name (F9)", 
   assert.deepEqual(forLine.map((e) => e.kind), ["expense"]);
 });
 
-test("the key check reads the cached key, not Script Properties, and compares whole keys (F12)", async () => {
+test("the key check compares whole keys and reads the shared key from Script Properties on every request (F12, superseded by the security fix round)", async () => {
   const fake = createFakeBackend();
   for (const key of ["test-key", "test-kez", "test-ke", "test-key2", ""]) {
     const r = await fake({ key, actor: "Mo", action: "rev", args: {} });
     assert.equal(r.ok, key === "test-key", key);
   }
-  assert.equal(fake.propReads.includes("TRIP_KEY"), false);
+  // The empty key is refused before anything is read; the other four each read it afresh.
+  assert.equal(fake.propReads.filter((k) => k === "TRIP_KEY").length, 4);
 });
 
 // ---------- the trip side: stops, stays and day headers (Plan 2, Task 2) ----------
@@ -861,7 +863,7 @@ test("every new write needs a known actor; nothing is written without one", asyn
 
 test("a stop written by Claude is logged with via claude", async () => {
   const call = client({});
-  await call("addStop", { stop: { id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky" } }, { via: "claude" });
+  await call.fake.claude("addStop", { stop: { id: "stopAAAA0001", date: "2026-12-12", title: "Shibuya Sky" } });
   const [entry] = await historyAll(call);
   assert.equal(entry.via, "claude");
   assert.equal(entry.kind, "stop");
@@ -1445,7 +1447,7 @@ test("syncPayments: not linked, unreadable, no actor, the lock busy", async () =
 
 test("Log rows from a pull say planner whoever started it; an app body cannot claim planner, nor set planner_id", async () => {
   const call = linked();
-  await call("syncPayments", {}, { via: "claude" });
+  await call.fake.claude("syncPayments", {});
   assert.deepEqual(call.fake.tables.Log.map((l) => l.via), ["planner", "planner"]);
   await call("addExpense", { expense: { ...ramen(), plannerId: "X7", planner_id: "X7" } }, { via: "planner" });
   assert.equal(call.fake.tables.Log.at(-1).via, "app");

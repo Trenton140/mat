@@ -5,15 +5,20 @@
 // - the release check's read-only key (CHECK_KEY_HASH, CheckKey.js);
 // - the old shared trip key (TRIP_KEY), only while it still exists: run
 //   retireSharedLink() (Setup.js) once everyone has their own link.
-// Uses getProp_, setProp_, tripKey_, sha256Hex_ (Env.js; in memory in
+// Uses getProp_, setProp_, sha256Hex_ (Env.js; in memory in
 // tests/fake-backend.cjs) and keyHolder, personKeysFrom (Pure.js).
 
 var PERSON_KEYS_PROP_ = "PERSON_KEYS";
 
 // PERSON_KEYS as { name: { hash, at } }, read afresh on every call (never
 // cached), so a cancelled or replaced link stops working on the next request.
+// Throws when the property is there but is not a JSON object (fix round 1):
+// the request then answers the plain server sentence, so nobody gets in and
+// no phone takes it for a refused key (which would clear it).
 function personKeys_() {
-  return personKeysFrom(getProp_(PERSON_KEYS_PROP_));
+  var raw = getProp_(PERSON_KEYS_PROP_);
+  if (!personKeysReadable(raw)) throw new Error("PERSON_KEYS is not readable");
+  return personKeysFrom(raw);
 }
 
 function setPersonKeys_(keys) {
@@ -21,9 +26,12 @@ function setPersonKeys_(keys) {
 }
 
 // The holder of a key: { kind: "person", name } | { kind: "check" } |
-// { kind: "shared" } | null (refused: bad_key).
+// { kind: "shared" } | null (refused: bad_key). The shared key is read from
+// Script Properties on every request, never from the script cache (fix
+// round 1), so deleting TRIP_KEY, by hand or by retireSharedLink, takes
+// effect on the next request. Throws when PERSON_KEYS can't be read.
 function holderOf_(key) {
   if (typeof key !== "string" || key === "") return null;
   var check = typeof CHECK_KEY_HASH === "string" ? CHECK_KEY_HASH : "";
-  return keyHolder(key, sha256Hex_(key), tripKey_(), personKeys_(), check);
+  return keyHolder(key, sha256Hex_(key), getProp_("TRIP_KEY"), personKeys_(), check);
 }

@@ -104,7 +104,15 @@ var EXPENSE_PATCH_KEYS_ = ["title", "amount", "currency", "paidBy", "split", "sp
 // it is retired. A request that is not one of these is bad_key, as before.
 function handle_(body) {
   if (!isObj_(body)) return err_("bad_input", MSG_.badRequest);
-  var holder = holderOf_(body.key);
+  var holder;
+  try {
+    holder = holderOf_(body.key);
+  } catch (e) {
+    // PERSON_KEYS broken by hand (fix round 1): nobody in, and not bad_key,
+    // which would make every phone clear itself.
+    reportError_("holderOf_", e, [body.key]);
+    return err_("server", MSG_.server);
+  }
   if (!holder) return err_("bad_key", MSG_.badKey);
   return handleAs_(holder, body);
 }
@@ -148,7 +156,9 @@ function reportError_(where, e, extra) {
 // start needs, and runs migrate.
 var CHECK_ACTIONS_ = ["load", "rev", "history", "migrate"];
 // The connector reads and writes through its tools only.
-var CLAUDE_ACTIONS_ = ["load", "history", "syncPayments", "addExpense", "addStop", "updateStop", "deleteStop", "saveStay", "deleteStay", "setDay", "undo"];
+var CLAUDE_ACTIONS_ = ["load", "history", "syncPayments", "addExpense", "addStop", "updateStop", "deleteStop", "saveStay", "deleteStay", "setDay", "undo",
+  // Listed only so they answer their own "do this one in the app" sentence.
+  "pressStamp", "tickTodo"];
 
 function dispatch_(body, holder) {
   var args = body.args === undefined || body.args === null ? {} : body.args;
@@ -211,7 +221,8 @@ function dispatch_(body, holder) {
   // only the shared key still takes the phone's word, as before.
   var actor = holder.kind === "person" || holder.kind === "claude" ? holder.name : body.actor;
   if (typeof actor !== "string" || names.indexOf(actor) === -1) return err_("bad_input", MSG_.badActor);
-  var via = holder.kind === "claude" || body.via === "claude" ? "claude" : "app";
+  // Only the connector's own path is "through Claude" (fix round 1).
+  var via = holder.kind === "claude" ? "claude" : "app";
   var ctx = { actor: actor, via: via, names: names, holder: holder.kind };
   // Reads the planner first, then takes the lock itself.
   if (action === "syncPayments") return syncPayments_(args, ctx);
@@ -1651,9 +1662,6 @@ function claimTodo_(args, ctx) {
 // planner was changed back or forward), "kept" (nothing to do there, or left
 // alone on purpose), "pending" (the planner may still say Booked).
 function undoTodo_(entry, rows, ctx) {
-  // Security (2026-11-18): on a person's own key, someone's claim (or their
-  // handing it back) is undone only by them.
-  if (ctx.holder === "person" && (entry.action === "claim" || entry.action === "unclaim") && entry.who !== ctx.actor) return err_("bad_input", MSG_.notYourClaim);
   if (entry.undoneBy !== null) return err_("stale", MSG_.undone);
   if (entry.action === "takeoff") return err_("stale", MSG_.cantUndo);
   if (!canUndo(entry, rows.map(logShape_))) return err_("stale", MSG_.newer);
@@ -1673,6 +1681,12 @@ function undoTodo_(entry, rows, ctx) {
   var claimedBy = text(target.claimedBy), tickedBy = text(target.tickedBy), tickedAt = text(target.tickedAt), tickedItem = text(target.tickedItem);
   var known = function (v) { return v === "" || ctx.names.indexOf(v) !== -1; };
   if (!known(claimedBy) || !known(tickedBy) || typeof tickedAt !== "string" || typeof tickedItem !== "string") return err_("stale", MSG_.cantUndo);
+  // Security (2026-11-18, fix round 1): on a person's own key, and through
+  // the connector (the owner's), an undo may move a claim only between
+  // nobody and the one asking: never take someone else's off, never put
+  // someone else on, whatever kind of entry is undone.
+  var others = function (v) { return v !== "" && v !== ctx.actor; };
+  if ((ctx.holder === "person" || ctx.holder === "claude") && claimedBy !== cur.claimedBy && (others(claimedBy) || others(cur.claimedBy))) return err_("bad_input", MSG_.notYourClaim);
   if (tickedBy !== "" && tickedItem === "") tickedItem = cur.item;
   var untick = cur.tickedBy !== "" && tickedBy === "";
   var retick = cur.tickedBy === "" && tickedBy !== "";

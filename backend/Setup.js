@@ -32,9 +32,10 @@ function setup() {
   if (plain && plain.getLastRow() === 0 && plain.getLastColumn() === 0 && ss.getSheets().length > 1) ss.deleteSheet(plain);
 
   var props = PropertiesService.getScriptProperties();
-  // A shared key only for a brand-new trip: once anyone has a personal link
-  // (or the shared one was retired) setup never brings a shared key back.
-  if (!props.getProperty("TRIP_KEY") && Object.keys(personKeys_()).length === 0) props.setProperty("TRIP_KEY", Utilities.getUuid().replace(/-/g, "").slice(0, 24));
+  // A shared key only for a brand-new trip: once anyone has a personal link,
+  // or the shared one was ever retired (SHARED_RETIRED, set by
+  // retireSharedLink), setup never brings a shared key back.
+  if (!props.getProperty("TRIP_KEY") && props.getProperty("SHARED_RETIRED") !== "yes" && !props.getProperty("PERSON_KEYS")) props.setProperty("TRIP_KEY", Utilities.getUuid().replace(/-/g, "").slice(0, 24));
   // The Claude connector's token. Not shown here: the app's Settings copies it.
   ensureClaudeToken_();
 
@@ -91,15 +92,54 @@ function dayOf_(iso) {
   return typeof iso === "string" && iso.length >= 10 ? iso.slice(0, 10) : "an unknown date";
 }
 
+// Whether `keys` (PERSON_KEYS as read) holds a link for this name, as its
+// own entry (never an inherited one such as "constructor").
+function hasLink_(keys, name) {
+  return Object.prototype.hasOwnProperty.call(keys, name);
+}
+
+// A name a link can be kept under (fix round 1): a string that is not
+// "__proto__" (which a plain object cannot hold as its own key).
+function linkableName_(name) {
+  return typeof name === "string" && name !== "" && name !== "__proto__";
+}
+
+var LINKS_UNREADABLE_ = "PERSON_KEYS can’t be read (it is not what issueLinks writes). Nobody can open the trip with a personal link until it is fixed. To start again: in Project Settings → Script Properties delete PERSON_KEYS, then run issueLinks and send everyone their new link.";
+
+// PERSON_KEYS, or null after saying in the log that it can't be read.
+function personKeysOrSay_() {
+  try {
+    return personKeys_();
+  } catch (e) {
+    Logger.log(LINKS_UNREADABLE_);
+    return null;
+  }
+}
+
 // Makes a link for everyone on the trip who has none, and logs each new one
-// once. Those who already have one are listed, without a key.
+// once. Those who already have one are listed, without a key. Links kept for
+// names no longer on the trip are removed (named in the log).
 function issueLinks() {
+  if (personKeysOrSay_() === null) return;
   var made = [];
   var had = [];
+  var gone = [];
+  var odd = [];
   var r = withLock_(function () {
     var keys = personKeys_();
-    peopleNames_().forEach(function (name) {
-      if (keys[name]) {
+    var names = peopleNames_();
+    Object.keys(keys).forEach(function (name) {
+      if (names.indexOf(name) === -1) {
+        delete keys[name];
+        gone.push(name);
+      }
+    });
+    names.forEach(function (name) {
+      if (!linkableName_(name)) {
+        odd.push(name);
+        return;
+      }
+      if (hasLink_(keys, name)) {
         had.push(name + ": already has a link (issued " + dayOf_(keys[name].at) + ").");
         return;
       }
@@ -107,13 +147,15 @@ function issueLinks() {
       keys[name] = { hash: sha256Hex_(key), at: nowIso_() };
       made.push({ name: name, key: key });
     });
-    if (made.length) setPersonKeys_(keys);
+    if (made.length || gone.length) setPersonKeys_(keys);
     return { ok: true };
   });
   if (!r || r.ok !== true) {
     Logger.log("The app is busy saving. Run issueLinks again in a moment.");
     return;
   }
+  gone.forEach(function (name) { Logger.log("Removed the link of someone no longer on the trip: " + name + "."); });
+  odd.forEach(function (name) { Logger.log(name + ": no link made: that name can’t be used. Change it in the People tab."); });
   had.forEach(function (line) { Logger.log(line); });
   made.forEach(function (m) { logLink_(m.name, m.key); });
   if (made.length) logSiteHint_();
@@ -133,6 +175,11 @@ function newLinkFor_(n) {
     Logger.log("There is no person " + n + " on this trip.");
     return;
   }
+  if (!linkableName_(name)) {
+    Logger.log(name + ": no link made: that name can’t be used. Change it in the People tab.");
+    return;
+  }
+  if (personKeysOrSay_() === null) return;
   var key = newPersonKey_();
   var r = withLock_(function () {
     var keys = personKeys_();
@@ -156,10 +203,11 @@ function cancelLinkFor_(n) {
     Logger.log("There is no person " + n + " on this trip.");
     return;
   }
+  if (personKeysOrSay_() === null) return;
   var had = false;
   var r = withLock_(function () {
     var keys = personKeys_();
-    had = !!keys[name];
+    had = hasLink_(keys, name);
     if (had) {
       delete keys[name];
       setPersonKeys_(keys);
@@ -186,25 +234,37 @@ function cancelLinkForPerson4() { cancelLinkFor_(4); }
 function cancelLinkForPerson5() { cancelLinkFor_(5); }
 function cancelLinkForPerson6() { cancelLinkFor_(6); }
 
-// Who has a link and since when, and whether the shared link still works.
-// Never a key.
+// Who has a link and since when, links kept for names no longer on the trip,
+// and whether the shared link still works. Never a key.
 function linksStatus() {
-  var keys = personKeys_();
-  peopleNames_().forEach(function (name, i) {
-    Logger.log((i + 1) + ". " + name + ": " + (keys[name] ? "has a link (issued " + dayOf_(keys[name].at) + ")" : "no link yet"));
+  var keys = personKeysOrSay_();
+  if (keys === null) return;
+  var names = peopleNames_();
+  names.forEach(function (name, i) {
+    Logger.log((i + 1) + ". " + name + ": " + (hasLink_(keys, name) ? "has a link (issued " + dayOf_(keys[name].at) + ")" : "no link yet"));
   });
+  var stale = Object.keys(keys).filter(function (name) { return names.indexOf(name) === -1; });
+  if (stale.length) Logger.log("Not on the trip any more, still has a link: " + stale.join(", ") + ". Run issueLinks to remove it.");
   Logger.log(getProp_("TRIP_KEY") ? "The shared link still works." : "The shared link is retired.");
 }
 
 // Deletes the shared key, only once everyone has a personal link. After
-// this only personal links, the check key and the Claude link work.
+// this only personal links, the check key and the Claude link work, and
+// setup() never makes a shared key again (SHARED_RETIRED).
 function retireSharedLink() {
-  var keys = personKeys_();
-  var without = peopleNames_().filter(function (name) { return !keys[name]; });
+  var keys = personKeysOrSay_();
+  if (keys === null) return;
+  var names = peopleNames_();
+  if (!names.length) {
+    Logger.log("Not retired: the People tab lists nobody.");
+    return;
+  }
+  var without = names.filter(function (name) { return !hasLink_(keys, name); });
   if (without.length) {
     Logger.log("Not retired: " + without.join(", ") + (without.length === 1 ? " has" : " have") + " no personal link yet. Run issueLinks first.");
     return;
   }
+  setProp_("SHARED_RETIRED", "yes");
   if (!getProp_("TRIP_KEY")) {
     forgetTripKey_();
     Logger.log("The shared link was already retired.");

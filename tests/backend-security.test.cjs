@@ -389,3 +389,107 @@ test("no key or token reaches a Log row, a History sentence, a reply or the owne
   assert.equal(holdsSecret(w, text), false);
   assert.equal(text.includes("plannerid0000000000000000000x"), false);
 });
+
+// ---------- fix round 1 (review 2026-11-18) ----------
+
+test("I2: the shared key is read from Script Properties on every request, never from a cached copy", async () => {
+  const w = world();
+  assert.equal(w.fake.primitives.tripKey_(), SHARED); // a cached copy now exists
+  delete w.fake.props.TRIP_KEY; // deleted by hand, cache left as it was
+  assert.equal((await w.as(SHARED, "rev")).error, "bad_key", "refused at once");
+  w.fake.props.TRIP_KEY = SHARED;
+  assert.equal((await w.as(SHARED, "rev")).ok, true);
+});
+
+test("I3: a PERSON_KEYS that is there but not a JSON object lets nobody in and wipes nobody (the plain server sentence)", async () => {
+  for (const raw of ["{bad", "[]", "null", '"x"', "3"]) {
+    const w = world();
+    w.fake.props.PERSON_KEYS = raw;
+    const r = await w.as(w.keys.Mo, "load");
+    assert.deepEqual([r.ok, r.error, r.message], [false, "server", "Something went wrong on our side. Try again."], raw);
+    assert.equal((await w.as(SHARED, "load")).error, "server", "not even the shared key: nothing is decided on a broken property");
+    w.fake.logged.length = 0;
+    w.fake.world.linksStatus();
+    assert.match(w.fake.logged[0], /^PERSON_KEYS can’t be read/, raw);
+    w.fake.logged.length = 0;
+    w.fake.world.issueLinks();
+    assert.match(w.fake.logged[0], /^PERSON_KEYS can’t be read/);
+    assert.equal(w.fake.props.PERSON_KEYS, raw, "issueLinks does not overwrite it");
+  }
+  const empty = world();
+  empty.fake.props.PERSON_KEYS = "";
+  assert.equal((await empty.as(SHARED, "rev")).ok, true, "an empty property is simply no personal keys");
+});
+
+test("minor: undoing someone else's undo can't move their claim; the connector follows the owner's own rule", async () => {
+  const BOOK = [["#", "Item", "Book by", "Status"], [1, "JR pass", "2026-12-01", ""]];
+  const w = world(["Mo", "Ajen", "Trenton"], { ...SEED, plannerId: "plannerid0000000000000000000x", plannerTabs: { "Book Now": BOOK, "Change Log": [["#", "Tab", "Old value", "New value"]] } });
+  await w.as(w.keys.Mo, "syncTodos", { force: true });
+  const claim = await w.as(w.keys.Ajen, "claimTodo", { id: "1", on: true });
+  const undo = await w.as(w.keys.Ajen, "undo", { logId: claim.data.logId }); // Ajen takes her own back
+  assert.equal(undo.ok, true);
+  const again = await w.as(w.keys.Mo, "undo", { logId: undo.data.logId }); // would put Ajen back on it
+  assert.equal(again.ok, false, "Mo can't put Ajen's claim back");
+  assert.equal(w.fake.tables.Todos[0].claimed_by, "");
+  const ajen2 = await w.as(w.keys.Ajen, "claimTodo", { id: "1", on: true });
+  const viaClaude = w.fake.world.handleAs_({ kind: "claude", name: "Mo" }, { action: "undo", args: { logId: ajen2.data.logId } });
+  assert.equal(viaClaude.ok, false, "the connector (the owner) can't undo Ajen's claim either");
+  assert.equal(w.fake.tables.Todos[0].claimed_by, "Ajen");
+});
+
+test("minor: via claude from a phone is ignored; only the connector's own path sets it", async () => {
+  const w = world();
+  const r = await w.as(w.keys.Mo, "addExpense", { expense: ramen("exp0000071") }, { via: "claude" });
+  assert.equal(r.ok, true);
+  assert.equal(w.fake.tables.Log.at(-1).via, "app");
+  const s = await w.as(SHARED, "addExpense", { expense: ramen("exp0000072") }, { actor: "Mo", via: "claude" });
+  assert.equal(s.ok, true);
+  assert.equal(w.fake.tables.Log.at(-1).via, "app");
+});
+
+test("minor: names are looked up as own properties; a name like constructor gets its link; __proto__ is refused", () => {
+  const fake = createFakeBackend({ ...SEED, people: { Trenton: { name: "constructor" } } });
+  fake.world.issueLinks();
+  assert.ok(fake.logged.some((l) => /^constructor’s link: #k=[0-9a-f]{64}$/.test(l)), fake.logged.join("\n"));
+  const odd = createFakeBackend({ ...SEED, people: { Trenton: { name: "__proto__" } } });
+  odd.world.issueLinks();
+  assert.ok(odd.logged.some((l) => l === "__proto__: no link made: that name can’t be used. Change it in the People tab."), odd.logged.join("\n"));
+  odd.logged.length = 0;
+  odd.world.retireSharedLink();
+  assert.match(odd.logged[0], /^Not retired: __proto__ has no personal link yet/);
+});
+
+test("minor: retireSharedLink refuses when the People tab reads as empty", () => {
+  const w = world();
+  w.fake.tables.People.length = 0;
+  w.fake.world.retireSharedLink();
+  assert.deepEqual(w.fake.logged, ["Not retired: the People tab lists nobody."]);
+  assert.equal(w.fake.props.TRIP_KEY, SHARED);
+});
+
+test("minor: links for names no longer on the trip are listed by linksStatus and removed by issueLinks (names only)", async () => {
+  const w = world();
+  const ghost = w.fake.personKey("Old name");
+  w.fake.world.linksStatus();
+  assert.ok(w.fake.logged.includes("Not on the trip any more, still has a link: Old name. Run issueLinks to remove it."), w.fake.logged.join("\n"));
+  w.fake.logged.length = 0;
+  w.fake.world.issueLinks();
+  assert.ok(w.fake.logged.includes("Removed the link of someone no longer on the trip: Old name."), w.fake.logged.join("\n"));
+  assert.equal(JSON.parse(w.fake.props.PERSON_KEYS)["Old name"], undefined);
+  assert.equal(holdsSecret({ ...w, keys: { ...w.keys, ghost } }, w.fake.logged.join("\n")), false);
+});
+
+test("minor: once retired, setup never makes a shared key again, even with no personal keys left", () => {
+  const w = world();
+  w.fake.world.retireSharedLink();
+  assert.equal(w.fake.props.SHARED_RETIRED, "yes");
+  const src = fs.readFileSync(path.join(__dirname, "..", "backend", "Setup.js"), "utf8");
+  assert.match(src, /getProperty\("SHARED_RETIRED"\)/, "setup checks the flag");
+});
+
+test("minor: an e-mail address in an error's text is blanked in the owner's log", async () => {
+  const w = world();
+  w.fake.world.history_ = () => { throw new Error("no row for someone@example.com"); };
+  await w.as(w.keys.Mo, "history");
+  assert.equal(w.fake.consoleLines[0].includes("someone@example.com"), false, w.fake.consoleLines[0]);
+});

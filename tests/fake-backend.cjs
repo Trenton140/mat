@@ -390,6 +390,11 @@ function createFakeBackend(seed, { clock, lockFails, keepsApostrophe = false } =
     }
     return handleAs(holder, body);
   };
+  // Test-only: a request through the connector's own path (handleAs_ as the
+  // holder { kind: "claude" }, as Mcp.js makes it after its token check),
+  // as `actor` (default the trip's first person). A phone's via: "claude" is
+  // ignored by the backend (fix round 1).
+  fake.claude = (action, args = {}, actor) => Promise.resolve(copy(world.handleAs_({ kind: "claude", name: actor || world.peopleNames_()[0] }, { action, args: copy(args) })));
   fake.mcp = (msg, params) => copy(world.mcp_(copy(msg), copy(params)));
   fake.tables = tables;
   fake.requests = requests;
