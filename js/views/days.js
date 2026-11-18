@@ -42,7 +42,7 @@ import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, 
 import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
 import { summary as bookSummary, countText } from "../stampbook.js";
-import { isPhone } from "../shape.js";
+import { isPhone, isWide } from "../shape.js";
 
 const TICK_MS = 15000;
 // While a demo runs, a trip minute passes every half second.
@@ -341,10 +341,27 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
       toggle(ev.target.closest(".r"));
       return;
     }
+    arrow(ev);
+  });
+  // The arrow keys move the days.
+  function arrow(ev) {
     // Not on a phone: from the day the strip is gliding to, so two quick presses move two days.
     const from = aim === null || isPhone() ? cur : aim;
     if (ev.key === "ArrowRight") jump(from + 1, true);
     if (ev.key === "ArrowLeft") jump(from - 1, true);
+  }
+  // On a computer they also work with nothing focused (focus on the page
+  // itself), so a person does not have to click into Days first. Never while
+  // a field, the register or a sheet is in use, nor while Before covers the
+  // ticket's pane.
+  document.addEventListener("keydown", (ev) => {
+    if (ev.target !== document.body && ev.target !== document.documentElement) return;
+    if (!isWide() || ev.defaultPrevented || ev.ctrlKey || ev.metaKey || ev.altKey || ev.shiftKey) return;
+    if (!root.classList.contains("is-active")) return;
+    const phone = root.closest(".phone");
+    if (phone && /(^|\s)[a-z]+-open(\s|$)/.test(phone.className)) return;
+    ev.preventDefault(); // the browser's own arrow scrolling would move the strip a second time
+    arrow(ev);
   });
 
   // Opening a stop closes the one that was open; tapping the open one closes it.

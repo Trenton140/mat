@@ -388,7 +388,7 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     else close();
   });
   // WIDE: a computer's keyboard is the register's keys while it is open and
-  // nothing is being typed into a field: digits, ".", Backspace (⌫) and Enter
+  // nothing is being typed into a field: digits, "." (or ","), Backspace (⌫) and Enter
   // (Ring it up). Enter on a button reached with Tab presses that button; on
   // one last clicked with the mouse (a chip, a key) it is still Ring it up.
   let tabbed = false; // the focus was last moved by Tab, not by a click
@@ -402,7 +402,9 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
     const at = ev.target instanceof Element ? ev.target : null;
     if (at && at.closest("input, textarea, select, [contenteditable]")) return;
     let k = null;
+    // The decimal point: "." or, from a numpad that types a comma, ",".
     if (/^[0-9]$/.test(ev.key) || ev.key === ".") k = ev.key;
+    else if (ev.key === ",") k = ".";
     else if (ev.key === "Backspace") k = "del";
     else if (ev.key === "Enter" && !(tabbed && at && at.closest("button, a"))) k = "go";
     if (!k) return;
