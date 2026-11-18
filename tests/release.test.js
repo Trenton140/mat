@@ -18,7 +18,11 @@ test("backend/Stamp.js matches the backend files (run npm run stamp)", () => {
 test("a push goes out only as main, with a receipt, behind its own backend", () => {
   assert.equal(push({}), null);
   assert.match(push({ remoteRef: "refs/original/refs/heads/main" }), /refs\/original/);
-  assert.match(push({ remoteRef: "refs/heads/ticks-build" }), /Only main/);
+  assert.match(push({ remoteRef: "refs/heads/ticks-build" }), /Only main and dev/);
+  // dev (reviewed work waiting for a release) goes out under the same checks.
+  assert.equal(push({ remoteRef: "refs/heads/dev" }), null);
+  assert.match(push({ remoteRef: "refs/heads/dev", receipt: null }), /npm run gate/);
+  assert.match(push({ remoteRef: "refs/heads/dev", localSha: "0".repeat(40) }), /never deleted/);
   assert.match(push({ localSha: "0".repeat(40) }), /never deleted/);
   assert.match(push({ receipt: null }), /npm run gate/);
   assert.match(push({ receipt: { unit: { pass: 9, fail: 1 }, e2e: { pass: 5, fail: 0 } } }), /failing tests/);

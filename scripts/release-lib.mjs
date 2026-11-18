@@ -144,8 +144,11 @@ export function needsBump(changed, shell) {
 //   live: the stamp the live backend answers with
 export function judgePush({ remoteRef, localSha, receipt, commitStamp, live }) {
   if (/refs\/original\//.test(remoteRef)) return "refs/original is never pushed: it holds history that was removed on purpose.";
-  if (remoteRef !== "refs/heads/main") return "Only main is published (" + remoteRef + " is not main).";
-  if (/^0+$/.test(localSha)) return "main is never deleted.";
+  // main is production (the site is served from it). dev is where reviewed work
+  // waits for a release; from this Mac it is only ever set to a commit that
+  // could be released, so the same checks apply to it.
+  if (remoteRef !== "refs/heads/main" && remoteRef !== "refs/heads/dev") return "Only main and dev are pushed from here (" + remoteRef + " is neither).";
+  if (/^0+$/.test(localSha)) return "main and dev are never deleted.";
   if (!receipt) return "This commit has not passed the gate. Run `npm run gate`, then `npm run ship`.";
   if (receipt.unit.fail || receipt.e2e.fail) return "The gate's receipt for this commit records failing tests.";
   if (commitStamp && commitStamp !== live) {
