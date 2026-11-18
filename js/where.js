@@ -6,7 +6,7 @@
 // localStorage (mat.where) is the choice alone: "on", "off" or "refused"
 // (nothing yet: "unset").
 //
-// createWhere({ storage, geolocation, permissions, now, doc, every, stopEvery }) ->
+// createWhere({ storage, geolocation, permissions, now, doc, every, stopEvery, later }) ->
 //   { state(), supported(), ask(), turnOff(), current(), subscribe(fn), start() }
 // - state(): "unset", "on", "off" or "refused". A phone with no geolocation
 //   is always "off" (supported() false).
@@ -20,6 +20,8 @@
 // - The phone is asked only while the app is on screen and the choice is on,
 //   at most once every 2 minutes, with getCurrentPosition (never
 //   watchPosition): coarse, a position up to 2 minutes old is fine, 8 seconds.
+//   A request the phone never answers (a suspended page) is given up after
+//   STUCK_MS, so it cannot block asking for the rest of the visit.
 // - subscribe(fn): fn() when the choice or the position changes.
 
 import { usable } from "./geo.js";
@@ -27,14 +29,16 @@ import { usable } from "./geo.js";
 const KEY = "mat.where";
 export const ASK_GAP_MS = 2 * 60 * 1000;
 export const OPTIONS = { enableHighAccuracy: false, maximumAge: 120000, timeout: 8000 };
+export const STUCK_MS = 15000;
 const DENIED = 1;
 
-export function createWhere({ storage, geolocation, permissions, now = () => Date.now(), doc = globalThis.document, every = (f, ms) => setInterval(f, ms), stopEvery = (h) => clearInterval(h) } = {}) {
+export function createWhere({ storage, geolocation, permissions, now = () => Date.now(), doc = globalThis.document, every = (f, ms) => setInterval(f, ms), stopEvery = (h) => clearInterval(h), later = (f, ms) => setTimeout(f, ms) } = {}) {
   const geo = geolocation && typeof geolocation.getCurrentPosition === "function" ? geolocation : null;
   const fns = [];
   let pos = null; // { lat, lng, at, accuracy }: memory only
   let lastAsk = -Infinity;
   let asking = false;
+  let askNo = 0; // which request `asking` is about
   let timer = null;
 
   const read = () => {
@@ -70,10 +74,15 @@ export function createWhere({ storage, geolocation, permissions, now = () => Dat
     if (!force && now() - lastAsk < ASK_GAP_MS) return;
     lastAsk = now();
     asking = true;
+    const mine = ++askNo;
+    const done = () => {
+      if (askNo === mine) asking = false;
+    };
+    later(done, STUCK_MS);
     try {
       geo.getCurrentPosition(
         (p) => {
-          asking = false;
+          done();
           const c = p && p.coords;
           if (!c || choice !== "on") return;
           const t = Number(p.timestamp);
@@ -81,7 +90,7 @@ export function createWhere({ storage, geolocation, permissions, now = () => Dat
           tell();
         },
         (e) => {
-          asking = false;
+          done();
           if (e && e.code === DENIED) {
             pos = null;
             write("refused");
@@ -91,7 +100,7 @@ export function createWhere({ storage, geolocation, permissions, now = () => Dat
         OPTIONS,
       );
     } catch {
-      asking = false;
+      done();
     }
   }
 

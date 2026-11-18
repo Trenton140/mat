@@ -29,7 +29,7 @@ function phone() {
   };
 }
 // No real timers in a unit test.
-const T = { every: () => 1, stopEvery: () => {} };
+const T = { every: () => 1, stopEvery: () => {}, later: () => {} };
 function doc(state = "visible") {
   const fns = [];
   return { visibilityState: state, addEventListener: (t, f) => fns.push(f), fire() { for (const f of fns) f(); } };
@@ -156,4 +156,24 @@ test("the phone's own permission, when it can be read, brings the choice in line
   w2.start();
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(w2.state(), "refused");
+});
+
+test("(a) a request the phone never answers stops blocking after 15 seconds", () => {
+  const g = phone();
+  const d = doc();
+  let t = NOW;
+  const timers = [];
+  const w = createWhere({ ...T, later: (f, ms) => timers.push({ f, ms }), storage: mem({ "mat.where": "on" }), geolocation: g, now: () => t, doc: d });
+  w.start();
+  assert.equal(g.calls.length, 1);
+  t += ASK_GAP_MS;
+  d.fire();
+  assert.equal(g.calls.length, 1, "still waiting on the first");
+  assert.equal(timers.at(-1).ms, 15000);
+  timers.at(-1).f();
+  d.fire();
+  assert.equal(g.calls.length, 2, "asked again once the stuck one is given up");
+  // A late answer to the given-up request is still taken.
+  g.give(0, 35, 135, 40, t);
+  assert.ok(w.current());
 });
