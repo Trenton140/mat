@@ -201,3 +201,36 @@ test("the connector reads coordinates but cannot set them", async () => {
   const e = await call("updateStop", { id: "planstop1203", patch: { lat: "1", lng: "1" } }, { via: "claude" });
   assert.equal(e.error, "bad_input");
 });
+
+// ---- fix round ----
+
+test("I1: undoing an older edit leaves coordinates found since; undoing an edit that set them puts the old ones back", async () => {
+  const call = client();
+  // An edit made before locate ran.
+  const title = await call("updateStop", { id: "planstop1203", patch: { title: "Sky deck" } });
+  geocoder(call, { "Shibuya Sky Tokyo": { lat: 35.6585, lng: 139.7023 }, "Shibuya Sky": { lat: 35.6585, lng: 139.7023 } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  assert.equal(stopById((await call("load")).data, "planstop1203").lat, "35.6585");
+  const u = await call("undo", { logId: title.data.logId });
+  assert.equal(u.ok, true, JSON.stringify(u));
+  assert.equal(u.data.stop.title, "Shibuya Sky");
+  assert.deepEqual([u.data.stop.lat, u.data.stop.lng], ["35.6585", "139.7023"], "the coordinates stay");
+  // An edit that pasted a Maps link: its undo brings the old coordinates back.
+  const pasted = await call("updateStop", { id: "planstop1203", patch: { lat: "35.6", lng: "139.6" } });
+  const u2 = await call("undo", { logId: pasted.data.logId });
+  assert.deepEqual([u2.data.stop.lat, u2.data.stop.lng], ["35.6585", "139.7023"]);
+  // Undoing a stop's removal leaves coordinates alone too.
+  const del = await call("deleteStop", { id: "planstop1203" });
+  const u3 = await call("undo", { logId: del.data.logId });
+  assert.equal(u3.data.stop.lat, "35.6585");
+});
+
+test("I1: the same for a day's edit made before locate", async () => {
+  const call = client();
+  const e = await call("setDay", { date: "2026-12-12", patch: { title: "Busy" } });
+  geocoder(call, { Tokyo: { lat: 35.68, lng: 139.77 } });
+  await call.fake({ key: KEY, action: "locate", args: {} });
+  const u = await call("undo", { logId: e.data.logId });
+  assert.equal(u.ok, true);
+  assert.equal(u.data.day.lat, "35.68");
+});

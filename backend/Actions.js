@@ -1786,6 +1786,13 @@ function undoStamp_(entry, rows, ctx) {
 
 // ---- undo ----
 
+// Whether a logged change moved an item's coordinates (both sides known and different).
+function movedCoords_(entry) {
+  var b = entry.before, a = entry.after;
+  if (!b || !a || b.lat === undefined || a.lat === undefined) return false;
+  return b.lat !== a.lat || b.lng !== a.lng;
+}
+
 function undo_(args, ctx) {
   var raw = args.logId;
   var logId = typeof raw === "number" ? raw : typeof raw === "string" && raw.trim() !== "" ? Number(raw) : NaN;
@@ -1817,6 +1824,12 @@ function undo_(args, ctx) {
   if (plan) {
     cur = plan.fromRow(curRow);
     patch = changedCols_(plan, cur, target);
+    // Coordinates are written back only when that change itself moved them:
+    // an older entry (or one from before locate ran) must not wipe them.
+    if (!movedCoords_(entry)) {
+      delete patch.lat;
+      delete patch.lng;
+    }
     if (plan.deletable) patch.deleted_at = target.deleted ? (cur.deleted ? undefined : nowIso_()) : "";
     saved = writePlan_(plan, entry.ref, patch);
   } else if (isExpense) {
