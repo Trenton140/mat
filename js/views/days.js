@@ -276,9 +276,29 @@ export function mountDays(root, store, { clock, onAllDays = () => {}, onStay = (
     rail.scrollTo({ left: cur * step(), behavior: smooth && !calm() ? "smooth" : "auto" });
   }
 
+  // The day in view is kept when the strip changes width (crossing into or
+  // out of the two panes): the scroll position is in pixels, so it would land
+  // on a neighbouring day. A phone turned sideways already keeps its day, so
+  // a change from one phone shape to the other is left alone.
+  let knownW = 0;
+  let knownPhone = isPhone();
+  const resizing = () => knownW > 0 && rail.clientWidth !== knownW && !(knownPhone && isPhone());
+  if (typeof ResizeObserver === "function") {
+    new ResizeObserver(() => {
+      const w = rail.clientWidth;
+      if (w === knownW) return;
+      const was = knownW;
+      const wasPhone = knownPhone;
+      knownW = w;
+      knownPhone = isPhone();
+      if (!was || !w || !dates.length || (wasPhone && knownPhone)) return;
+      rail.scrollTo({ left: cur * step(), behavior: "auto" });
+    }).observe(rail);
+  }
+
   // The day in view follows the rail as it is swiped.
   rail.addEventListener("scroll", () => {
-    if (!dates.length) return;
+    if (!dates.length || resizing()) return;
     const i = clamp(Math.round(rail.scrollLeft / step()));
     if (i !== cur) {
       setCur(i);

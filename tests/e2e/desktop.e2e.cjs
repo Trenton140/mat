@@ -11,7 +11,7 @@
 // These cases run as a computer: a mouse and a keyboard, no touch.
 
 const assert = require("node:assert/strict");
-const { SEED, WITH_PLAN, NOON12, makeBackend, open, until, visible } = require("./helpers.cjs");
+const { SEED, WITH_PLAN, NOON12, makeBackend, open, advance, until, visible } = require("./helpers.cjs");
 
 const BIG = { width: 1440, height: 900 };
 const LAPTOP = { width: 1280, height: 720 };
@@ -381,24 +381,200 @@ cases.push(
       }));
       await page.evaluate(() => { window.__notReloaded = true; });
       const reloaded = () => page.evaluate(() => window.__notReloaded !== true).catch(() => true);
+      // A reload set off inside an awaited fast-forward would leave that call
+      // unanswered (and the browser stuck): stop waiting as soon as the page navigates.
+      const forward = (ms) => Promise.race([page.clock.fastForward(ms).catch(() => {}), page.waitForEvent("framenavigated").catch(() => {})]);
       await openSkyEdit(page);
       assert.equal(await announce(), true, "the page answers");
-      await page.clock.fastForward(10000);
+      await forward(10000);
       backend.now += 10000;
       assert.equal(await reloaded(), false, "not while the stop's form is open in the Days pane");
       // Moving from one pane's sheet to the other's: still waiting.
       await page.click("#histBtn");
       await waitOpen(page, "hist");
-      await page.clock.fastForward(10000);
+      await forward(10000);
       assert.equal(await reloaded(), false, "not while History is open in the Money pane");
       await page.click("#ring");
       await waitOpen(page, "reg");
-      await page.clock.fastForward(10000);
+      await forward(10000);
       assert.equal(await reloaded(), false, "not while the register is open in the Money pane");
       await page.click("#regDone");
       await waitClosed(page, "reg");
       page.clock.fastForward(4000).catch(() => {});
       await until(() => reloaded(), "then it reloads");
+      // The new page is up before the case ends, so the browser is not closed mid-load.
+      await until(() => page.evaluate(() => document.querySelectorAll("#rc .rc-row").length > 0).catch(() => false), "the app is back");
+    },
+  },
+);
+
+// ---------- the fix round after review ----------
+
+// Which shape the page is in, read from the geometry, and what js/shape.js says.
+async function shapeOf(page) {
+  return page.evaluate(async () => {
+    const m = await import("/js/shape.js");
+    const phone = document.getElementById("phone").getBoundingClientRect();
+    const nav = document.getElementById("nav").getBoundingClientRect();
+    const days = document.getElementById("vDays").getBoundingClientRect();
+    const money = document.getElementById("vMoney").getBoundingClientRect();
+    const two = getComputedStyle(document.getElementById("vDays")).opacity !== "0" && getComputedStyle(document.getElementById("vMoney")).opacity !== "0" && days.right <= money.left + 0.5;
+    const railRight = nav.left >= phone.right - nav.width - 0.5 && nav.height >= phone.height - 0.5;
+    const barFoot = Math.abs(nav.bottom - phone.bottom) < 1 && Math.abs(nav.width - phone.width) < 1;
+    let geo = "?";
+    if (two && railRight) geo = "WIDE";
+    else if (railRight) geo = "SIDEWAYS";
+    else if (barFoot && phone.width === innerWidth && phone.width <= 480) geo = "PHONE";
+    else if (barFoot && phone.width <= 560 && phone.height === innerHeight) geo = "BETWEEN";
+    return { geo, isWide: m.isWide(), isPhone: m.isPhone() };
+  });
+}
+
+for (const [size, want] of [
+  [{ width: 999, height: 768 }, { geo: "BETWEEN", isWide: false, isPhone: false }],
+  [{ width: 1000, height: 520 }, { geo: "SIDEWAYS", isWide: false, isPhone: true }],
+  [{ width: 1000, height: 521 }, { geo: "WIDE", isWide: true, isPhone: false }],
+  [{ width: 480, height: 900 }, { geo: "PHONE", isWide: false, isPhone: true }],
+  [{ width: 481, height: 900 }, { geo: "BETWEEN", isWide: false, isPhone: false }],
+]) {
+  cases.push({
+    name: "the boundaries: " + size.width + "x" + size.height + " is " + want.geo + ", and isWide()/isPhone() agree",
+    viewport: size,
+    mobile: false,
+    async run({ page }) {
+      await both(page);
+      assert.deepEqual(await shapeOf(page), want);
+    },
+  });
+}
+
+cases.push(
+  {
+    // Ruling: width decides, not pointer type. A touch tablet this size gets the two panes.
+    name: "a touch tablet at 1024x768 (no hover) gets the two panes",
+    viewport: { width: 1024, height: 768 },
+    async run({ page }) {
+      await both(page);
+      assert.equal(await page.evaluate(() => matchMedia("(hover:hover)").matches), false, "a touch device, no hover");
+      const l = await layout(page);
+      assert.ok(l.daysShown && l.moneyShown && !l.daysInert && !l.moneyInert, "both panes in use");
+      assert.deepEqual(l.keys, ["youBtn", "ring"]);
+      assert.equal((await shapeOf(page)).geo, "WIDE");
+    },
+  },
+  {
+    name: "on a phone the keyboard is not the register's keys: digits and Enter on the page do nothing",
+    viewport: PHONE,
+    async run({ page }) {
+      const backend = await both(page);
+      await page.click("#ring");
+      await waitOpen(page, "reg");
+      await page.click("#xQuick .chip[data-q=\"Coffee\"]");
+      await page.evaluate(() => {
+        for (const key of ["7", "0", "Enter"]) document.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+      });
+      for (const k of ["7", "0", "Enter"]) await page.keyboard.press(k);
+      assert.equal((await page.textContent("#xAmt")).replace(/\s+/g, ""), "$0", "nothing typed");
+      const n = backend.fake.tables.Expenses.length;
+      await page.waitForTimeout(300);
+      assert.equal(backend.fake.tables.Expenses.length, n, "nothing rung up");
+    },
+  },
+  {
+    name: "WIDE: no keys from a field, with a modifier, mid-conversion (keyCode 229), or Enter on a ticket row",
+    viewport: BIG,
+    mobile: false,
+    async run({ page }) {
+      const backend = await both(page);
+      const count = () => backend.fake.tables.Expenses.length;
+      const n = count();
+      const amt = () => page.evaluate(() => document.getElementById("xAmt").textContent.replace(/\s+/g, ""));
+      await page.click("#ring");
+      await waitOpen(page, "reg");
+      for (const k of ["1", "2"]) await page.keyboard.press(k);
+      assert.equal(await amt(), "$12");
+      // From a field: the digit is the field's.
+      await page.click("#xWhat");
+      await page.keyboard.type("Tea 5");
+      assert.equal(await amt(), "$12", "a digit typed in the title stays in the title");
+      assert.equal(await page.inputValue("#xWhat"), "Tea 5");
+      // A conversion being confirmed: Safari sends Enter with keyCode 229.
+      await page.evaluate(() => {
+        const w = document.getElementById("xWhat");
+        w.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true }));
+      });
+      await page.waitForTimeout(300);
+      assert.equal(count(), n, "a confirming Enter rings nothing up");
+      assert.equal(await page.evaluate(() => document.activeElement.id), "xWhat", "and the title keeps focus");
+      assert.equal(await amt(), "$12");
+      await page.evaluate(() => {
+        document.activeElement.blur();
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, bubbles: true, cancelable: true }));
+      });
+      await page.waitForTimeout(300);
+      assert.equal(count(), n, "nor on the page");
+      // With a modifier: the browser's, not the register's.
+      for (const k of ["Meta+3", "Control+3", "Alt+3"]) await page.keyboard.press(k);
+      assert.equal(await amt(), "$12", "no digit with a modifier");
+      // Enter on a ticket row opens or closes the row, nothing else.
+      await page.evaluate(() => document.querySelector('#rail .pg[data-date="2026-12-12"] .r[data-id="planstop1204"] .r-b').focus());
+      await page.keyboard.press("Enter");
+      await page.waitForTimeout(300);
+      assert.equal(count(), n, "Enter on a ticket row rings nothing up");
+      assert.equal(await amt(), "$12");
+    },
+  },
+  {
+    name: "the day in view is kept across a resize: 1440 to 390 and back, and a phone turned sideways and back",
+    viewport: BIG,
+    mobile: false,
+    async run({ page }) {
+      await both(page);
+      const day = () => page.textContent("#dayCount span");
+      const shown = () => page.evaluate(() => {
+        const rail = document.getElementById("rail");
+        return Math.round(rail.scrollLeft / (rail.firstElementChild.offsetWidth + (parseFloat(getComputedStyle(rail).columnGap) || 0))) + 1;
+      });
+      await page.click("#pager .sq:nth-child(7)");
+      await until(async () => (await day()) === "Day 7 of 11" && (await shown()) === 7, "day 7");
+      for (const size of [PHONE, SIDEWAYS, PHONE, BIG]) {
+        await page.setViewportSize(size);
+        await page.waitForTimeout(400);
+        assert.equal(await day(), "Day 7 of 11", "the count at " + size.width + "x" + size.height);
+        assert.equal(await shown(), 7, "the ticket in view at " + size.width + "x" + size.height);
+      }
+    },
+  },
+  {
+    name: "WIDE: only a key that shows is marked current, and when Before goes focus lands on a key that shows",
+    viewport: BIG,
+    mobile: false,
+    async run({ page }) {
+      const BHEAD = ["#", "Item", "Who", "Book by", "Status", "Notes", "Booking link"];
+      const CHEAD = ["#", "Date / time", "Agent / session", "Tab", "Cell(s)", "Item", "Old value", "New value", "Why", "Proof / source", "Verified?"];
+      const items = [{ "#": 2, Item: "Tea ceremony class", "Book by": "2026-11-18", Status: "Pending" }, { "#": 5, Item: "Pocket wifi pickup", "Book by": "2026-11-10", Status: "Booked" }];
+      const backend = makeBackend({ ...WITH_PLAN, plannerId: "fakePlannerSheet_desk", plannerTabs: { "Book Now": [["Before we go: bookings"], BHEAD, ...items.map((o) => BHEAD.map((h) => (o[h] === undefined ? "" : o[h])))], "Change Log": [CHEAD] } }, { now: NOON12 - 300000 });
+      assert.equal((await backend.fake({ key: "test-key", actor: "Mo", action: "syncTodos", args: {} })).ok, true);
+      backend.now = NOON12;
+      await open(page, { backend, nowMs: NOON12, tab: "money" });
+      await until(() => visible(page, "#beforeBtn"), "the Before key is in the rail");
+      const marked = () => page.evaluate(() => [...document.querySelectorAll("#nav [aria-current]")].map((b) => (b.getBoundingClientRect().width > 0 ? "" : "hidden:") + (b.dataset.tab || b.id)));
+      assert.deepEqual(await marked(), [], "nothing hidden is marked");
+      await page.click("#beforeBtn");
+      await until(() => visible(page, "#todos"), "the list shows");
+      assert.deepEqual(await marked(), ["before"]);
+      await page.focus("#beforeBtn");
+      assert.equal((await backend.fake({ key: "test-key", actor: "Ajen", action: "tickTodo", args: { id: "2" } })).ok, true, "ticked on another phone");
+      await advance(page, backend, 31 * 1000);
+      await page.evaluate(() => window.__matTest.store.checkRev());
+      await advance(page, backend, 1700);
+      await until(async () => !(await visible(page, "#beforeBtn")), "the key goes");
+      const f = await page.evaluate(() => {
+        const a = document.activeElement;
+        return { body: a === document.body, shows: !!a && a.getBoundingClientRect().width > 0 };
+      });
+      assert.deepEqual(f, { body: false, shows: true }, "focus is on something that shows");
+      assert.deepEqual(await marked(), [], "nothing hidden is marked");
     },
   },
 );

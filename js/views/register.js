@@ -397,7 +397,8 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
   }, true);
   document.addEventListener("keydown", (ev) => {
     if (ev.key === "Tab") tabbed = true;
-    if (!opened || ev.defaultPrevented || ev.isComposing || ev.ctrlKey || ev.metaKey || ev.altKey || !isWide()) return;
+    // keyCode 229: an input method is at work (Safari confirms a conversion with Enter and isComposing false).
+    if (!opened || ev.defaultPrevented || ev.isComposing || ev.keyCode === 229 || ev.ctrlKey || ev.metaKey || ev.altKey || !isWide()) return;
     const at = ev.target instanceof Element ? ev.target : null;
     if (at && at.closest("input, textarea, select, [contenteditable]")) return;
     let k = null;
@@ -410,10 +411,12 @@ export function mountRegister(root, store, { now = () => Date.now(), storage = d
   });
   what.addEventListener("input", render);
   what.addEventListener("keydown", (ev) => {
-    if (ev.key !== "Enter") return;
+    // An Enter that confirms a Japanese conversion (isComposing, or keyCode 229
+    // in Safari) belongs to the input method: no blur, no ring up.
+    if (ev.key !== "Enter" || ev.isComposing || ev.keyCode === 229) return;
     what.blur();
     // WIDE: Enter after the title rings it up, as the keys' Ring it up would.
-    if (isWide() && !ev.isComposing) {
+    if (isWide()) {
       ev.preventDefault();
       press("go");
     }

@@ -122,7 +122,8 @@ function mountTabs(store, storage) {
     for (const b of nav.querySelectorAll("button[data-tab]")) {
       const on = b.dataset.tab === t;
       b.classList.toggle("is-active", on);
-      if (on) b.setAttribute("aria-current", "page");
+      // WIDE hides the Days and Money keys (the panes are both there): only Before can be the current key.
+      if (on && !(wide && b.dataset.tab !== "before")) b.setAttribute("aria-current", "page");
       else b.removeAttribute("aria-current");
     }
     for (const [name, view] of Object.entries(views)) {
@@ -342,8 +343,11 @@ function start() {
       beforeBtn.setAttribute("aria-label", tabName(open));
       if (!show && tabs.tab() === "before") tabs.showTab("days", false);
       if (hadFocus) {
+        // The Days key, or in WIDE (where it is hidden) the rail's first key that shows.
+        const keys = [...document.querySelectorAll("#nav button")];
         const daysBtn = document.querySelector('#nav button[data-tab="days"]');
-        if (daysBtn) daysBtn.focus({ preventScroll: true });
+        const to = daysBtn && daysBtn.getClientRects().length ? daysBtn : keys.find((k) => k.getClientRects().length);
+        if (to) to.focus({ preventScroll: true });
       }
     },
   });
