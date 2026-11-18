@@ -55,6 +55,14 @@ async function expectReach(page, selector) {
 async function days(page, opts = {}) {
   const backend = await open(page, { seed: WITH_PLAN, tab: "days", nowMs: NOON12, ...opts });
   await until(() => page.evaluate(() => document.querySelectorAll("#rail .pg .tk").length === 11), "the tickets draw");
+  // The strip has come to rest on today (Dec 12) before anything is tapped: a tap on a strip still gliding lands on another day.
+  await until(() => page.evaluate(() => /^Day 3 of 11/.test(document.querySelector("#dayCount").textContent)), "the strip rests on today, Day 3 of 11");
+  await until(async () => {
+    const at = () => page.evaluate(() => document.querySelector("#rail").scrollLeft);
+    const a = await at();
+    await page.waitForTimeout(120);
+    return a === (await at());
+  }, "the strip is still");
   return backend;
 }
 async function money(page, opts = {}) {
@@ -93,13 +101,19 @@ for (const [name, size] of [["upright", PORTRAIT], ["sideways", SIDEWAYS]]) {
         await days(page);
         await standInNotch(page, inset);
         const row = '#rail .pg[data-date="' + D12 + '"] .r[data-id="' + DINNER + '"]';
-        await page.click(row + " .r-b");
+        // Getting to the stop sheet is not what this case is about, so the two taps on the way are
+        // given to the page directly. A real pointer click on a row that is still opening is
+        // retried by the browser driver with other scroll alignments, one of which slides the day
+        // strip to the next day; the row is then never reached (seen about one run in two, on the
+        // first case of a run only).
+        const tap = (sel) => page.dispatchEvent(sel, "click");
+        await tap(row + " .r-b");
         await until(() => page.evaluate((sel) => document.querySelector(sel).classList.contains("is-open"), row), "the stop opens");
         await until(() => page.evaluate((sel) => {
           const e = document.querySelector(sel + " .r-edit");
           return !!e && e.getBoundingClientRect().height > 0;
         }, row), "Edit shows");
-        await page.click(row + " .r-edit");
+        await tap(row + " .r-edit");
         await waitOpen(page, "stop");
         await raiseNotice(page);
         await expectReach(page, "#stDone");
@@ -447,7 +461,8 @@ cases.push({
     const asked = [];
     await serveVersion(page, "9999", asked);
     await comeBack(page);
-    await until(() => asked.length === 1, "the look");
+    // The look, then what a reload would get (both answered with the new version here).
+    await until(() => asked.filter((u) => /\?look=/.test(u)).length === 1 && asked.length >= 2, "the look and the second read");
     await advance(page, backend, 10000);
     assert.equal(await reloaded(page), false, "not while You is open");
     await page.click("#youDone");
