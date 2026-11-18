@@ -90,6 +90,12 @@ button.bar-t{border:0;background:none;padding:0;min-height:36px;min-width:0;colo
 /* 指定: a time that cannot slip, boxed like a reserved seat, beside its English. */
 .r-fx{display:flex;align-items:center;gap:6px;margin-top:3px;font-size:12.5px;font-weight:700;line-height:1.2;white-space:nowrap}
 .r-fx b{border:1.5px solid var(--print);border-radius:2px;padding:0 4px 1px;font-weight:900}
+/* 現在地 under the name: the distance from where you are (only with a position). */
+.r-fx .here{margin-right:1px}
+.r-fx.at{margin-top:5px;margin-bottom:5px;align-items:flex-start}
+/* One line, as drawn (it may run on under the sign's column); on a narrow phone it breaks after the dot only. */
+@media (max-width:350px){ .r-fx.at .dist{min-width:0;white-space:normal;line-height:1.3;padding-top:1px} }
+.r-lv.is-late{color:var(--shu)}
 /* The open stop: a 200 ms height change, nothing else moves. */
 .r-more{grid-column:2 / -1;display:grid;grid-template-rows:0fr;transition:grid-template-rows .2s ease-out}
 .r.is-open .r-more{grid-template-rows:1fr}

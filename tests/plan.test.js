@@ -206,3 +206,44 @@ test("R37: other days' tickets are unchanged", () => {
   assert.equal(stayShownFor([X, Y], DEC13, { today: "2026-12-14", minutes: hm(0, 30) }).id, "Y");
   assert.equal(stayShownFor([X, Y], DEC13, {}).id, "Y");
 });
+
+// ---- where you are (location build, items 5 to 8) ----
+import { hereLine, NEAR_M } from "../js/plan.js";
+import { metres, walkMinutes } from "../js/geo.js";
+
+const SKYAT = { lat: 35.6584421, lng: 139.7022205 };
+// A point `m` metres north of p.
+const north = (p, m) => ({ lat: p.lat + m / 111195, lng: p.lng });
+const skyStop = (over = {}) => stop("Shibuya Sky", "14:00", { lat: String(SKYAT.lat), lng: String(SKYAT.lng), travelMin: 30, ...over });
+
+test("leave-by from where you are: on time, close, late", () => {
+  const here = north(SKYAT, 1200);
+  const m = metres(here, SKYAT);
+  const walk = walkMinutes(m);
+  assert.equal(walk, 20); // 1200 m * 1.3 / 80 = 19.5, up
+  // 13:20; leave at 13:40 -> in 20 min.
+  assert.deepEqual(hereLine(skyStop(), 800, here), { dist: "1.2 km · 20 min on foot", lead: "Leave by 13:40, in 20 min.", late: false });
+  // 13:35: 5 min to spare.
+  assert.deepEqual(hereLine(skyStop(), 815, here), { dist: "1.2 km · 20 min on foot", lead: "Leave now. 5 min to spare.", late: false });
+  assert.equal(hereLine(skyStop(), 819, here).lead, "Leave now. 1 min to spare.");
+  assert.equal(hereLine(skyStop(), 814, here).lead, "Leave by 13:40, in 6 min.");
+  assert.equal(hereLine(skyStop(), 820, here).lead, "Leave now.");
+  // 13:46: six minutes late, in vermilion.
+  assert.deepEqual(hereLine(skyStop(), 826, here), { dist: "1.2 km · 20 min on foot", lead: "About 6 min late. Leave now.", late: true });
+  // Well ahead: hours.
+  assert.equal(hereLine(skyStop(), 600, here).lead, "Leave by 13:40, in 3 h 40 min.");
+});
+
+test("leave-by falls back to today's line", () => {
+  const near = north(SKYAT, 500);
+  assert.equal(hereLine(skyStop(), 800, null), null, "no usable position");
+  assert.equal(hereLine(skyStop({ lat: "", lng: "" }), 800, near), null, "no coordinates");
+  assert.equal(hereLine(skyStop({ time: "" }), 800, near), null, "no time");
+  assert.equal(hereLine(skyStop(), 840, near), null, "started: Now. stands");
+  assert.equal(hereLine(skyStop(), 850, near), null);
+  assert.equal(hereLine(skyStop(), 800, north(SKYAT, NEAR_M + 10)), null, "over 3 km: a train, not a walk");
+  assert.ok(hereLine(skyStop(), 800, north(SKYAT, NEAR_M - 10)));
+  // A stop the geocoder put in another city: far, so it falls back.
+  assert.equal(hereLine(skyStop({ lat: "34.6937", lng: "135.5023" }), 800, near), null);
+});
+

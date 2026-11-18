@@ -43,7 +43,7 @@
 // ground under it), it goes back to the top. Never
 // on a minute tick, a sync or a redraw.
 
-import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor } from "../plan.js";
+import { openDayIndex, dayState, daysToGo, nowIn, stopsFor, nextStopId, header, dayTotalYen, stayShownFor, hereLine } from "../plan.js";
 import { issuer, dayShort, dayHead } from "../format.js";
 import { ticketEl } from "./ticket.js";
 import { summary as bookSummary, countText } from "../stampbook.js";
@@ -67,9 +67,11 @@ const calm = () => typeof matchMedia === "function" && matchMedia("(prefers-redu
 // whether a redrawn row is the same as the one on screen.
 const drawn = new WeakMap();
 
-// A row's markup without the text of its leave-by line.
-const LEAD = /(<b class="r-lv">)[^<]*(<\/b>)/;
-const withoutLead = (html) => html.replace(LEAD, "$1$2");
+// A row's markup without the text (and the late colour) of its leave-by
+// line, and without its distances (they move as the phone does).
+const LEAD = /(<b class="r-lv)(?: is-late)?(">)[^<]*(<\/b>)/;
+const DIST = /(<span class="dist">)[^<]*(<\/span>)/g;
+const withoutLead = (html) => html.replace(LEAD, "$1$2$3").replace(DIST, "$1$2");
 
 // Puts the fresh rows into `rows` in order, keeping each old row that is
 // drawn the same. A row that differs only in its leave-by line's words (the
@@ -89,6 +91,11 @@ function patchRows(rows, fresh) {
     const next = r.querySelector(".r-lv");
     if (lead && next && withoutLead(was) === withoutLead(now)) {
       lead.textContent = next.textContent;
+      if (lead.className !== next.className) lead.className = next.className;
+      const from = r.querySelectorAll(".dist");
+      keep.querySelectorAll(".dist").forEach((d, i) => {
+        if (from[i] && d.textContent !== from[i].textContent) d.textContent = from[i].textContent;
+      });
       drawn.set(keep, now);
       return keep;
     }
@@ -499,6 +506,8 @@ export function mountDays(root, store, { clock, where = null, onAllDays = () => 
     const stays = list(s.stays).filter((x) => x && typeof x === "object");
     const expenses = list(s.expenses).filter((x) => x && typeof x === "object");
     const inView = cur >= 0 ? dates[cur] : null;
+    // Where the phone is, when usable (js/where.js): memory only.
+    const here = where ? where.current() : null;
     const left = rail.scrollLeft;
     const spot = focusSpot();
 
@@ -542,6 +551,11 @@ export function mountDays(root, store, { clock, where = null, onAllDays = () => 
         // Today's stamp is open and not yet pressed: the ticket says so.
         stampOpen: stampToday === day.date,
       };
+      // Leave by, from where you are: only with a usable position near the next stop.
+      if (nextId && here) {
+        const hl = hereLine(dayStops.find((x) => x.id === nextId), now.minutes, here);
+        if (hl) model.hereNext = hl;
+      }
       // Asked once, on today's ticket, the first time a day has a next stop.
       if (nextId && where && where.supported() && where.state() === "unset") model.ask = true;
       const sig = JSON.stringify(model);

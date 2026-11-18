@@ -5,6 +5,7 @@
 
 import { dateIn } from "./time.js";
 import { jpyOf } from "./money.js";
+import { metres, walkMinutes, distanceText } from "./geo.js";
 
 const str = (v) => (typeof v === "string" ? v.trim() : "");
 
@@ -125,6 +126,31 @@ export function nextLine(stop, minutes) {
     return minutes >= leave ? "Leave now." : "Leave by " + clock(leave) + ", in " + span(leave - minutes) + ".";
   }
   return "Next, in " + span(at - minutes) + ".";
+}
+
+// ---- where you are (js/where.js gives the position; it never leaves the phone) ----
+
+// Past this a straight line says nothing (you would take a train): the
+// leave-by and the stops' distances fall back to today's lines.
+export const NEAR_M = 3000;
+
+// Leave by, from where you are: the next stop's 現在地 line and its leave
+// line from the walking minutes, or null when today's line stands (no time,
+// already started, no coordinates, no usable position, or over NEAR_M).
+// `here`: a usable position (js/where.js current()), or null.
+// -> { dist: "1.2 km · 20 min on foot", lead, late }
+export function hereLine(stop, minutes, here) {
+  const at = minutesOf(stop && stop.time);
+  if (at === null || !here || minutes >= at) return null;
+  const m = metres(here, stop);
+  if (!Number.isFinite(m) || m > NEAR_M) return null;
+  const walk = walkMinutes(m);
+  const spare = at - walk - minutes;
+  const dist = distanceText(m) + " · " + walk + " min on foot";
+  if (spare > 5) return { dist, lead: "Leave by " + clock(at - walk) + ", in " + span(spare) + ".", late: false };
+  if (spare > 0) return { dist, lead: "Leave now. " + spare + " min to spare.", late: false };
+  if (spare === 0) return { dist, lead: "Leave now.", late: false };
+  return { dist, lead: "About " + span(-spare) + " late. Leave now.", late: true };
 }
 
 export function stayFor(stays, date) {

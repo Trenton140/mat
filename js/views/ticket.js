@@ -23,6 +23,10 @@
 // - ask: today's ticket asks, once, whether to use where the phone is
 //   (.tk-ask under the date, with Use it and Not now; the Days view sees to
 //   the taps). Without it the ticket is exactly as it was.
+// - hereNext: leave-by from where you are (plan.js hereLine) for today's next
+//   stop, or absent: a 現在地 line under its name (distance, minutes on
+//   foot) and the leave line from the walking minutes, in vermilion when late.
+//   Absent, the next stop reads exactly as it did.
 // - stay: the night's stay (stayShownFor: on today's ticket before 04:00,
 //   last night's), or null. Drawn after the stops as one
 //   button, .tk-stay[data-stay], that opens the hotel card; no stay, no row.
@@ -191,11 +195,13 @@ function row(stop, model) {
     fx.append(el("b", "", "指定"), " ", el("span", "", "Fixed time"));
     body.append(fx);
   }
-  const lead = next ? nextLine(stop, minutes) : "";
+  const here = next && model.hereNext ? model.hereNext : null;
+  if (here) body.append(hereRow(here.dist));
+  const lead = here ? here.lead : next ? nextLine(stop, minutes) : "";
   const detail = str(stop.detail);
   if (lead || detail) {
     const s = el("div", "r-s");
-    if (lead) s.append(el("b", "r-lv", lead));
+    if (lead) s.append(el("b", here && here.late ? "r-lv is-late" : "r-lv", lead));
     if (lead && detail) s.append(" ");
     if (detail) s.append(detail);
     body.append(s);
@@ -247,6 +253,15 @@ function stampLine() {
 // 現在地, "you are here": the red box printed wherever the phone's position was used.
 export function hereBox() {
   return el("span", "here", "現在地");
+}
+
+// 現在地 and a distance, boxed under a stop's name like 指定. Where it has to
+// wrap (a narrow phone), only after the dot: "1.2 km ·" / "20 min on foot".
+function hereRow(text) {
+  const fx = el("div", "r-fx at");
+  const kept = text.replace(/ /g, "\u00a0").replace("\u00a0·\u00a0", "\u00a0· ");
+  fx.append(hereBox(), el("span", "dist", kept));
+  return fx;
 }
 
 // The one-time line under the date on today's ticket: may MAT use where you are?
