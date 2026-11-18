@@ -98,8 +98,9 @@ test("a tick on a Status the planner computes is done and never pending, and its
   const t = item({ tickedBy: "Mo", tickedAt: new Date(2026, 11, 3, 9, 30).toISOString(), status: "Not booked", plannerComputes: true });
   assert.equal(isDone(t), true);
   assert.equal(plannerPending(t), false);
-  assert.equal(tickedLine(t), "Ticked by Mo. The planner works this one out itself.");
-  assert.equal(tickedLine({ ...t, status: "Booked" }), "Ticked by Mo. The planner works this one out itself.");
+  // Fix round 6a: past tense, true even after the formula is replaced (was: "The planner works this one out itself.").
+  assert.equal(tickedLine(t), "Ticked by Mo. The planner worked this one out itself, so the app left it as it was.");
+  assert.equal(tickedLine({ ...t, status: "Booked" }), "Ticked by Mo. The planner worked this one out itself, so the app left it as it was.");
 });
 
 test("the done line: who ticked it and the day (the phone's own calendar), or booked in the planner", () => {

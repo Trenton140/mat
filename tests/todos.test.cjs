@@ -1025,7 +1025,8 @@ test("final 1: when recording throws and the put-back fails too, History says Bo
   assert.equal((await history(call))[0].kind, "planner");
 });
 
-const FORMULA_LINE = "The planner computes this one’s Status, so it was left alone.";
+// Fix round 6a: past tense, true for as long as the row stays so (was: "The planner computes this one’s Status, so it was left alone.").
+const FORMULA_LINE = "The planner worked out this one’s Status itself when it was ticked, so the app left it alone.";
 
 test("final 2: a tick on a Status cell that holds a formula writes nothing to the planner and answers kept", async () => {
   const call = linked();
@@ -1604,14 +1605,27 @@ test("wave A 4: a throw before the planner part is known still answers pending",
   assert.equal(t.data.planner, "pending");
 });
 
-test("wave A 6: a formula Status replaced by text later is written at a pull, and the formula note is not left standing alone", { todo: "design decision (R51 settles formula ticks for good): reported, not changed" }, async () => {
+test("fix 6a (ruling): a formula Status replaced by text later stays as it is, and what History and the list say stays true", async () => {
   const call = linked();
   await call("syncTodos");
   withFormula(call);
   await call("tickTodo", { id: "1" });
   delete call.fake.planner.formulas["Book Now"].E4; // the owner types a plain value over the formula
   await forced(call);
-  assert.equal(bookStatus(call), "Booked");
+  assert.deepEqual(writes(call), [], "no new planner write path");
+  assert.equal(stored(call, "1").planner_written, "formula");
+  const notes = (await history(call)).filter((e) => e.kind === "planner");
+  assert.deepEqual(notes.map((e) => e.summary), [FORMULA_LINE], "past tense: no promise of a later write");
+  assert.equal(/later|will|next/.test(FORMULA_LINE), false);
+});
+
+test("fix 6a: the formula note's earlier wording still counts as said, so it is never said twice", async () => {
+  const call = linked();
+  await call("syncTodos");
+  call.fake.primitives.appendObj_("Log", { id: 900, at: call.at.now, who: "Mo", via: "app", action: "note", kind: "planner", ref: "1", summary: "The planner computes this one’s Status, so it was left alone.", before: "", after: "", undoes: "", undone_by: "" });
+  withFormula(call);
+  await call("tickTodo", { id: "1" });
+  assert.equal((await history(call)).filter((e) => e.kind === "planner").length, 1);
 });
 
 test("wave A 6: no formula note for a tick undone before its planner check was recorded", async () => {

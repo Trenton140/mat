@@ -102,7 +102,8 @@ export function doneTodos(todos) {
 export function tickedLine(t) {
   const who = str(t && t.tickedBy);
   if (!who) return "Booked in the planner";
-  if (t.plannerComputes === true) return "Ticked by " + who + ". The planner works this one out itself.";
+  // True for as long as the row stays so, formula or not by now: nothing writes it later (ruling 6a).
+  if (t.plannerComputes === true) return "Ticked by " + who + ". The planner worked this one out itself, so the app left it as it was.";
   const day = localDay(Date.parse(t.tickedAt));
   if (!day) return "済 " + who;
   return "済 " + who + " · " + dayHead(day, []).en.split(" ").slice(1).join(" ");

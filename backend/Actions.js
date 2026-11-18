@@ -1258,13 +1258,16 @@ function settleTick_(id, item, by, out) {
   return rec.ok ? "written" : "pending";
 }
 
-// History's one note that the planner computes an item's Status, so the app
-// left the planner alone (the tick stays in the app). Said once per item,
-// however often a pull retries. Not undoable.
+// History's one note that the planner computed an item's Status when it was
+// ticked, so the app left the planner alone (the tick stays in the app, and
+// nothing writes it later, even if the formula is replaced by text: ruling
+// 6a). Said once per item, however often a pull retries (the note's earlier
+// wording counts too). Not undoable.
+var FORMULA_NOTES_ = ["The planner computes this one’s Status, so it was left alone."];
 function logFormulaLeft_(id, item, by) {
-  var said = "The planner computes this one’s Status, so it was left alone.";
+  var said = "The planner worked out this one’s Status itself when it was ticked, so the app left it alone.";
   withLock_(function () {
-    var seen = logRows_().some(function (r) { return cellText_(r.kind) === "planner" && cellText_(r.ref) === id && cellText_(r.summary) === said; });
+    var seen = logRows_().some(function (r) { return cellText_(r.kind) === "planner" && cellText_(r.ref) === id && (cellText_(r.summary) === said || FORMULA_NOTES_.indexOf(cellText_(r.summary)) !== -1); });
     if (!seen) {
       appendLog_({ actor: by, via: "app" }, "note", "planner", id, said, null, null);
       bumpRev_();
