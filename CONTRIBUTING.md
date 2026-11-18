@@ -13,7 +13,12 @@ The app is live and people use it. Two branches matter:
 2. Make the change with its tests. `npm test` runs the unit tests;
    `node tests/e2e/run.cjs <words>` runs the browser tests whose file names
    match the words (they need Google Chrome).
-3. Open a pull request into `dev`. The `check` run must be green.
+3. Open a pull request into `dev`. The `check` run must be green. It runs the
+   unit tests, the privacy scan and the whole browser suite on GitHub, in four
+   slices on a Mac runner; a browser test that fails once and passes on the
+   second try fails the run too. To run one slice on your own computer, use
+   `node tests/e2e/run.cjs --shard 2/4` (`--list` only prints which files it
+   would run).
 4. The owner reviews it. Anything that touches `backend/`, money, the planner
    sync or `js/store.js` also gets a second, independent review.
 5. Once approved it merges into `dev`. That does not change the live app.
