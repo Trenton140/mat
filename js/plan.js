@@ -173,6 +173,13 @@ export function nearStops(dayStops, here) {
   return out;
 }
 
+// "2.4 km from here" for the stay card, or "".
+export function stayDistance(stay, here) {
+  if (!here || !stay) return "";
+  const m = metres(here, stay);
+  return Number.isFinite(m) ? distanceText(m) + " from here" : "";
+}
+
 export function stayFor(stays, date) {
   let best = null;
   for (const s of stays) {

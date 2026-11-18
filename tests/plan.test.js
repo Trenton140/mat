@@ -208,7 +208,7 @@ test("R37: other days' tickets are unchanged", () => {
 });
 
 // ---- where you are (location build, items 5 to 8) ----
-import { hereLine, nearStops, NEAR_M } from "../js/plan.js";
+import { hereLine, nearStops, stayDistance, NEAR_M } from "../js/plan.js";
 import { metres, walkMinutes } from "../js/geo.js";
 
 const SKYAT = { lat: 35.6584421, lng: 139.7022205 };
@@ -267,3 +267,11 @@ test("nearest stop: distances on open stops to come, the nearest tagged, the ord
   assert.deepEqual(nearStops(stops.map((s) => ({ ...s, deleted: true })), here), {});
 });
 
+test("lodging distance", () => {
+  const here = SKYAT;
+  assert.equal(stayDistance({ lat: String(north(here, 2400).lat), lng: String(here.lng) }, here), "2.4 km from here");
+  assert.equal(stayDistance({ lat: String(north(here, 33360).lat), lng: String(here.lng) }, here), "33 km from here");
+  assert.equal(stayDistance({ lat: "", lng: "" }, here), "");
+  assert.equal(stayDistance({ lat: "35", lng: "139" }, null), "");
+  assert.equal(stayDistance(null, here), "");
+});
